@@ -1,0 +1,33 @@
+### Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+### IntelliJ
+.idea/
+*.iml
+*.iws
+out/
+
+### Eclipse / STS
+.classpath
+.project
+.settings/
+bin/
+
+### VS Code
+.vscode/
+
+### macOS
+.DS_Store
+
+### 로그
+*.log
+logs/
+
+### 로컬 설정 및 비밀값
+application-local.yml
+.env
+
+### 업로드 파일 저장소 (morak.storage.local-path)
+storage/
