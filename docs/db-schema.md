@@ -348,8 +348,8 @@ CREATE TABLE challenge_post (
     final_report_id     BIGINT       NOT NULL,
     author_alias        VARCHAR(30)  NOT NULL,   -- 게시 시점 생성 별칭(member.nickname과 분리)
     comment             VARCHAR(200) NULL,       -- 정규식 선차단 + AI 검열 통과분
-    category            VARCHAR(20)  NOT NULL,   -- 이하 5개는 서버가 final_report에서 복사
-    period_days         INT          NOT NULL,
+    category            VARCHAR(20)  NOT NULL,   -- challenge_group.category 복사(final_report에는 없는 값)
+    period_days         INT          NOT NULL,   -- 이하 4개는 서버가 final_report에서 복사(period_days ← final_report.total_days)
     proved_days         INT          NOT NULL,
     proof_rate          DECIMAL(5,4) NOT NULL,
     completed           TINYINT(1)   NOT NULL,
