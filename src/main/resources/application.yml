@@ -1,0 +1,70 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:morak;MODE=MySQL;LOCK_TIMEOUT=3000
+    username: sa
+  h2:
+    console:
+      enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+  web:
+    resources:
+      add-mappings: false
+
+# 미결값·정책값은 전부 여기로 격리한다 (API명세서 v1.0 §0-6)
+# 팀 확정이 오면 코드가 아니라 이 값만 바꾼다.
+morak:
+  timezone: Asia/Seoul
+
+  jwt:
+    # 운영은 환경변수 필수. dev 기본값은 로컬 전용이며 절대 운영에 쓰지 않는다.
+    secret: ${MORAK_JWT_SECRET:morak-local-dev-secret-key-please-change-me-32b}
+    expire-hours: 24
+
+  security:
+    media-token-secret: ${MORAK_MEDIA_TOKEN_SECRET:morak-local-media-token-secret}
+    social-hash-pepper: ${MORAK_SOCIAL_HASH_PEPPER:morak-local-social-hash-pepper}
+
+  dev:
+    enabled: true          # @Profile("dev")와 AND 조건. 운영 배포 시 false
+
+  match:
+    expire-hours: 24       # 매칭 대기 유효 시간
+
+  proof:
+    deadline-from: "06:00" # 인증 가능 시작
+    deadline-to: "23:59"   # 인증 마감
+    face-retry-limit: 10   # 얼굴 감지 재촬영 일 한도
+    screening-timeout-minutes: 10  # B7 회수 임계
+
+  ai:
+    boundary: 0.05                 # 완주 판정 경계 구간 폭
+    phash-hamming-threshold: 5     # 사진 재사용 판정
+    relevance-threshold: 0.30      # 목표 관련성 최소 점수
+    relevance-shadow: true         # true면 기록만, 기준선 확보 후 false로 전환해 차단 시작
+
+  completion:
+    personal-proof-rate: 0.7       # [팀 확정 대기] 개인 완주 기준
+    group-avg-proof-rate: 0.6      # [팀 확정 대기] 그룹 완주 기준
+
+  report:
+    sla-hours:
+      high: 24
+      normal: 72
+
+  media:
+    retention-days: 30             # 챌린지 종료 후 촬영물 보관
+
+  storage:
+    local-path: ./storage          # 11단계에 S3로 교체
+
+  withdrawal:
+    grace-days: 30
