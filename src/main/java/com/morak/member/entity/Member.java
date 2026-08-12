@@ -107,7 +107,10 @@ public class Member {
         return new Member(provider, providerUserId, nickname, snsNickname, snsProfileImageUrl, now);
     }
 
-    /** 생년월일을 확인해 연령 확인 상태를 확정한다. 14세 미만이면 가입을 유지하지 않는다. */
+    /**
+     * 생년월일을 확인해 연령 확인 상태를 확정한다. 14세 미만이면 계정을 지우는 게 아니라
+     * UNDER_AGE로 남겨 전역 게이트 ⑤가 이후 API를 차단한다.
+     */
     public void verifyAge(LocalDate birthDate, AgeVerification result) {
         this.birthDate = birthDate;
         this.ageVerification = result;
