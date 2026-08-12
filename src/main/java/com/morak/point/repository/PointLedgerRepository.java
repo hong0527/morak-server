@@ -2,6 +2,7 @@ package com.morak.point.repository;
 
 import com.morak.point.entity.PointLedger;
 import com.morak.point.type.PointReason;
+import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -19,6 +20,14 @@ public interface PointLedgerRepository extends JpaRepository<PointLedger, Long> 
      */
     boolean existsByMemberIdAndReasonAndRefTypeAndRefId(Long memberId, PointReason reason,
                                                         String refType, Long refId);
+
+    /**
+     * 근거 행 하나에 달린 원장 줄. SR-5가 주문의 {@code ORDER_SPEND} 행 번호를 응답에 싣는다.
+     * 멱등키와 같은 4튜플이라 결과는 0행 아니면 1행이다.
+     */
+    Optional<PointLedger> findByMemberIdAndReasonAndRefTypeAndRefId(Long memberId,
+                                                                    PointReason reason,
+                                                                    String refType, Long refId);
 
     /** PT-1 내역. 정렬은 호출부가 {@code Pageable}에 실어 준다 — {@code idx_pl_member}가 받는다. */
     Page<PointLedger> findByMemberId(Long memberId, Pageable pageable);

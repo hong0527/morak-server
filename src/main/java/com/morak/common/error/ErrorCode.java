@@ -55,7 +55,7 @@ public enum ErrorCode {
     INSUFFICIENT_POINT(HttpStatus.CONFLICT, "포인트가 부족합니다."),
     PRODUCT_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 상품입니다."),
     OUT_OF_STOCK(HttpStatus.CONFLICT, "재고가 부족합니다."),
-    DUPLICATE_ORDER(HttpStatus.CONFLICT, "이미 처리된 주문입니다."),
+    DUPLICATE_ORDER(HttpStatus.CONFLICT, "이미 접수된 주문입니다."),
     ORDER_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 주문입니다."),
 
     // ── 결제 ──

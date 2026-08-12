@@ -71,13 +71,57 @@ public class PointService {
                 // 데이터가 이미 깨진 것이라 조용히 넘기지 않는다.
                 .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 포인트 처리: " + memberId));
         // 패널티는 잔액 부족으로 회피할 수 없어야 하므로 음수를 허용한다(API명세서 SS-4 부수효과).
-        // 잔액이 모자라면 막아야 하는 차감(주문)은 7단계에서 조건부 UPDATE로 따로 만든다.
+        // 잔액이 모자라면 막아야 하는 차감(주문)은 이 메서드가 아니라 spend가 맡는다.
         int balanceAfter = member.applyPointDelta(delta);
         pointLedgerRepository.save(
                 PointLedger.record(memberId, delta, reason, refId, balanceAfter, now));
         log.info("포인트 {}: member={}, reason={}, ref={}, 잔액={}",
                 delta > 0 ? "지급" : "차감", memberId, reason, refId, balanceAfter);
         return true;
+    }
+
+    /**
+     * 잔액이 있을 때만 깎는다(SR-3 주문). {@link #award}와 나뉘어 있는 것은 실수가 아니라
+     * 용도의 차이다 — <b>award는 잔액을 넘겨 깎을 수 있고(패널티는 잔액 부족으로 피할 수 없어야
+     * 한다), 여기는 넘기면 거절한다</b>. 사용자가 쓰는 포인트를 award로 깎으면 잔액이 마이너스로
+     * 내려간 채 주문이 성사된다.
+     *
+     * <p>검사와 차감을 한 UPDATE에 담아 동시 주문이 같은 잔액을 두 번 쓰지 못하게 한다
+     * ({@link MemberRepository#deductPointIfEnough}). 여기서 예외를 던지면 호출부의
+     * 트랜잭션이 통째로 롤백되므로 재고 차감·주문 행도 함께 사라진다.
+     *
+     * @param amount 깎을 금액(양수). 원장에는 부호를 뒤집어 음수로 남는다
+     * @return 차감 후 잔액
+     */
+    public int spend(Long memberId, int amount, PointReason reason, Long refId,
+                     LocalDateTime now) {
+        if (amount <= 0) {
+            throw new IllegalArgumentException("차감액은 양수여야 한다: " + amount);
+        }
+        if (memberRepository.deductPointIfEnough(memberId, amount) == 0) {
+            throw new BusinessException(ErrorCode.INSUFFICIENT_POINT);
+        }
+        // 벌크 UPDATE가 영속성 컨텍스트를 비우고 갔으므로 여기서 읽는 잔액은 차감 후 값이다.
+        int balanceAfter = memberRepository.findById(memberId)
+                .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 포인트 차감: " + memberId))
+                .getPointBalance();
+        pointLedgerRepository.save(
+                PointLedger.record(memberId, -amount, reason, refId, balanceAfter, now));
+        log.info("포인트 사용: member={}, reason={}, ref={}, 금액={}, 잔액={}",
+                memberId, reason, refId, amount, balanceAfter);
+        return balanceAfter;
+    }
+
+    /**
+     * 근거 행에 달린 원장 줄 번호. SR-5가 주문 상세에 {@code pointLedgerId}를 싣는다.
+     * 원장 조회를 포인트 도메인 밖으로 내보내지 않기 위해 여기서 감싼다.
+     */
+    @Transactional(readOnly = true)
+    public Long findLedgerId(Long memberId, PointReason reason, Long refId) {
+        return pointLedgerRepository.findByMemberIdAndReasonAndRefTypeAndRefId(
+                        memberId, reason, PointLedger.refTypeOf(reason), refId)
+                .map(PointLedger::getId)
+                .orElse(null);
     }
 
     /**

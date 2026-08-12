@@ -1224,8 +1224,8 @@ UPDATE session_participant
 1. `idempotency_key` 중복 → 409 `DUPLICATE_ORDER`. 네트워크 재시도로 이중 주문이 생기는 것을 막는다. **응답 `details`에 기존 주문 번호를 담는다** — `{"error":{"code":"DUPLICATE_ORDER","message":"이미 접수된 주문입니다.","details":{"orderId":612}}}`. 클라이언트가 재시도 실패와 이미 성공한 주문을 구분해 주문 상세로 넘어갈 수 있어야 한다
 2. 상품 조회 — 없거나 `HIDDEN`이면 404 `PRODUCT_NOT_FOUND`, `SOLD_OUT`이면 409 `OUT_OF_STOCK`
 3. 재고 조건부 UPDATE — `UPDATE product SET stock = stock - :qty WHERE id = :pid AND stock >= :qty`. 영향 행 0이면 409 `OUT_OF_STOCK`. 차감 후 `stock=0`이면 `status=SOLD_OUT`
-4. 포인트 조건부 차감 — `UPDATE member SET point_balance = point_balance - :amt WHERE id = :mid AND point_balance >= :amt`. 영향 행 0이면 409 `INSUFFICIENT_POINT`(재고까지 롤백된다)
-5. `store_order` INSERT (`status=ORDERED`)
+4. `store_order` INSERT (`status=ORDERED`) — 원장의 `ref_id`가 주문 번호라 차감보다 먼저 확정한다
+5. 포인트 조건부 차감 — `UPDATE member SET point_balance = point_balance - :amt WHERE id = :mid AND point_balance >= :amt`. 영향 행 0이면 409 `INSUFFICIENT_POINT`(재고와 주문 행까지 롤백된다)
 6. `point_ledger` INSERT — `reason=ORDER_SPEND`, `delta=-{pointAmount}`, `ref_type=ORDER`, `ref_id={orderId}`
 
 응답 201
