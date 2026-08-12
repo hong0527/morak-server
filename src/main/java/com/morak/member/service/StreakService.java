@@ -102,6 +102,12 @@ public class StreakService {
             return null;
         }
         goal.achieve(now);
+        // 지급은 잔액 캐시를 벌크 UPDATE로 갱신하며 영속성 컨텍스트를 비운다. 여기까지 만든
+        // 변경(streak_day INSERT·Streak 캐시·목표 ACHIEVED)을 먼저 내보내지 않으면, 지급
+        // 시점의 clear가 그것들을 그대로 버려 원장만 남는다. 지금은 addPoint의
+        // flushAutomatically가 같은 일을 해 주지만, 정합성을 남의 도메인 애너테이션에
+        // 맡기지 않는다.
+        memberRepository.flush();
         pointService.award(member.getId(), goalAchievedPoint, PointReason.GOAL_ACHIEVED,
                 goal.getId(), now);
         log.info("목표 달성: member={}, goal={}, {}일 연속",

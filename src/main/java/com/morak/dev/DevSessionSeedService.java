@@ -46,15 +46,20 @@ public class DevSessionSeedService {
     private final SessionClosingService sessionClosingService;
 
     public DevSessionSeedResponse seed(DevSessionSeedRequest request) {
-        Member member = memberRepository.findById(request.memberId())
-                .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED));
+        Long memberId = memberRepository.findById(request.memberId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED))
+                .getId();
         List<Long> sessionIds = new ArrayList<>();
         // 오름차순으로 처리해야 연속 판정이 실제 시간 순서와 같아진다. 뒤섞인 날짜를 받으면
         // last_completed_on이 미래로 먼저 가 그 뒤의 과거 완주가 캐시를 흔들지 못한다.
         for (LocalDate date : request.dates().stream().distinct().sorted().toList()) {
-            sessionIds.add(seedOneDay(member.getId(), date, request.targetMinutesOrDefault()));
+            sessionIds.add(seedOneDay(memberId, date, request.targetMinutesOrDefault()));
         }
-        return new DevSessionSeedResponse(member.getId(), sessionIds, member.getCurrentStreak(),
+        // 시드가 부른 지급 경로가 영속성 컨텍스트를 비웠으므로 회원 행을 다시 읽는다.
+        // 처음 읽은 참조를 그대로 쓰면 Streak도 잔액도 시드 이전 값이 응답에 실린다.
+        Member member = memberRepository.findById(memberId)
+                .orElseThrow(() -> new IllegalStateException("시드 대상 회원이 사라졌다: " + memberId));
+        return new DevSessionSeedResponse(memberId, sessionIds, member.getCurrentStreak(),
                 member.getPointBalance());
     }
 
@@ -67,8 +72,12 @@ public class DevSessionSeedService {
         session.endNormally(endsAt);
         // 참가자 id가 완주 지급의 멱등키(ref)라 지급 전에 확정돼 있어야 한다.
         SessionParticipant participant = sessionParticipantRepository
-                .saveAndFlush(SessionParticipant.assign(session.getId(), memberId));
+                .save(SessionParticipant.assign(session.getId(), memberId));
         participant.complete(0);
+        // 지급 경로는 영속성 컨텍스트를 비우므로(SessionClosingService 주석) 여기서 만든
+        // 세션 종료·완주 마킹을 넘기기 전에 확정한다. 시드가 만드는 것은 "끝난 세션의
+        // 미지급 완주자"라는 미결 상태뿐이고, 지급은 B1과 같은 경로가 한다.
+        sessionParticipantRepository.flush();
         sessionClosingService.awardCompletion(participant.getId());
         return session.getId();
     }

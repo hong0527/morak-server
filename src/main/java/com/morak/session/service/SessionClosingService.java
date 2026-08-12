@@ -35,6 +35,11 @@ import org.springframework.transaction.annotation.Transactional;
  * ②가 없으면 3단계가 실시간으로 끝낸 세션(조기 종료·{@code room_finished})의 완주자가
  * 영구 미지급으로 남는다 — 그 경로는 완주 마킹까지만 하고 금액을 만들지 않는다.
  *
+ * <p><b>지급 호출은 영속성 컨텍스트를 비운다</b>({@link PointService#award}가 잔액 캐시를
+ * 벌크 UPDATE로 갱신한다). 그래서 이 클래스는 지급을 사이에 두고 엔티티 참조를 들고 있지
+ * 않는다 — 지급 뒤에 쓸 행은 지급 뒤에 다시 읽는다. 목록을 미리 읽어 루프를 돌면 첫 지급
+ * 이후의 참가자가 전부 준영속이 되어 완주 표시가 조용히 사라진다.
+ *
  * <p><b>재실행 안전이 이 클래스의 유일한 합격 기준이다.</b> 근거는 코드가 아니라 제약이다:
  * 지급은 {@code uk_pl_dedup}, 완주일은 {@code uk_streak_day}, 사후 정산 경고는
  * {@code uk_warning}이 막는다. 상태 검사(LIVE인가·이미 지급됐나)는 재실행이 제약에
@@ -111,13 +116,19 @@ public class SessionClosingService {
         if (session.isLive()) {
             session.endNormally(endedAt);
         }
-        List<SessionParticipant> completers =
-                sessionParticipantRepository.findBySessionIdAndStatusIn(sessionId, PRESENT);
-        for (SessionParticipant participant : completers) {
-            settleCompletion(session, participant, endedAt);
+        // 지급이 시작되면 여기서 읽은 엔티티는 전부 준영속이 된다(settleCompletion 주석).
+        // 그래서 목록이 아니라 id만 들고 루프를 돈다 — 참가자 행은 각자의 지급 뒤에 다시 읽는다.
+        List<Long> completerIds =
+                sessionParticipantRepository.findBySessionIdAndStatusIn(sessionId, PRESENT)
+                        .stream()
+                        .map(SessionParticipant::getId)
+                        .toList();
+        int targetMinutes = session.getTargetMinutes();
+        for (Long participantId : completerIds) {
+            settleCompletion(participantId, sessionId, targetMinutes, endedAt);
         }
         log.info("세션 종료 처리: session={}, reason={}, 완주 {}명",
-                sessionId, session.getEndReason(), completers.size());
+                sessionId, session.getEndReason(), completerIds.size());
         return 1;
     }
 
@@ -131,7 +142,8 @@ public class SessionClosingService {
         LiveSession session = liveSessionRepository.findById(participant.getSessionId())
                 .orElseThrow(() -> new IllegalStateException(
                         "참가자의 세션이 없다: participant=" + participantId));
-        settleCompletion(session, participant, session.getEndedAt());
+        settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
+                session.getEndedAt());
         return 1;
     }
 
@@ -153,18 +165,34 @@ public class SessionClosingService {
      * 완주 확정 — 지급·완주 금액 기록·완주일·목표 검사가 한 트랜잭션이다. 중간에 끊기면
      * 원장만 있고 Streak가 없는 회원이 남는다.
      *
+     * <p><b>참가자 행은 엔티티가 아니라 id로 받아 지급 뒤에 읽는다.</b>
+     * {@link PointService#award}는 잔액 캐시를 벌크 UPDATE로 갱신하면서 영속성 컨텍스트를
+     * 비우므로(그래야 원장의 {@code balance_after}가 증감 후 값이 된다), 지급 이전에 잡아 둔
+     * 참가자 참조는 그 뒤로 준영속이다. 그 객체에 {@code complete()}를 불러도 flush되지 않아
+     * <b>원장과 Streak만 남고 완주 표시가 통째로 사라진다</b> — 8단계에서 실제로 그렇게 됐고,
+     * 완주 표시가 없으면 흡수 지급 대상 조회에도 잡히지 않아 영구 미표시가 된다.
+     *
+     * <p>지급을 먼저 하고 표시를 나중에 하는 순서는 유지한다. 순서를 뒤집어도 지금은
+     * {@code flushAutomatically} 덕에 동작하지만, 그때는 정합성이 남의 도메인 리포지터리
+     * 애너테이션에 매달린다. 지급 뒤에 다시 읽은 행에 쓰는 방식은 그 설정과 무관하게 남는다.
+     *
      * <p>금액은 실제 재실 시간이 아니라 {@code target_minutes} 기준이다(D15 보충).
      * 조기 종료로 30분 만에 끝난 60분 세션도 남아 있던 사람에게는 +100이다 — 세션이 일찍
      * 끝난 것은 남은 사람의 책임이 아니다.
      */
-    private void settleCompletion(LiveSession session, SessionParticipant participant,
+    private void settleCompletion(Long participantId, Long sessionId, int targetMinutes,
                                   LocalDateTime endedAt) {
-        int amount = completePointPerHour * session.getTargetMinutes() / MINUTES_PER_HOUR;
-        pointService.award(participant.getMemberId(), amount, PointReason.SESSION_COMPLETE,
-                participant.getId(), endedAt);
-        participant.complete(amount);
-        streakService.recordCompletion(participant.getMemberId(), endedAt.toLocalDate(),
-                session.getId(), endedAt);
+        Long memberId = loadParticipant(participantId).getMemberId();
+        int amount = completePointPerHour * targetMinutes / MINUTES_PER_HOUR;
+        pointService.award(memberId, amount, PointReason.SESSION_COMPLETE, participantId, endedAt);
+        loadParticipant(participantId).complete(amount);
+        streakService.recordCompletion(memberId, endedAt.toLocalDate(), sessionId, endedAt);
+    }
+
+    private SessionParticipant loadParticipant(Long participantId) {
+        return sessionParticipantRepository.findById(participantId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "지급 대상 참가자가 사라졌다: " + participantId));
     }
 
     /**
