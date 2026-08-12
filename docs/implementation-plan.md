@@ -5,10 +5,10 @@
 > 진행 원칙: **한 단계 = 한 커밋. 게이트(curl 실측) 통과 없이 다음 단계 금지.** 게이트는 그 단계 산출물만으로 실행 가능해야 한다.
 > 강의 진행: ①왜 필요한가 → ②새 개념(비유) → ③전체 코드 → ④줄별 설명 → ⑤화수 타이핑 후 리뷰 → ⑥curl 게이트.
 
-## ⛔ 착수 전 팀 확정 (API 명세서 최상단 T1-1~T1-5)
+##  착수 전 팀 확정 (API 명세서 최상단 T1-1~T1-5)
 신고자 처리 / startDate / 시험날짜 방식 / 이중 기준 / 매칭 완화. **T1-2는 2단계, T1-1·T1-4는 8~9단계 전까지** 필요.
 
-## ⚠ Spring Boot 4.1 주의 (실측 — 인터넷의 3.x 자료와 다름)
+##  Spring Boot 4.1 주의 (실측 — 인터넷의 3.x 자료와 다름)
 1. **Jackson 3가 기본** — `com.fasterxml.jackson.*` 패키지 없음(`tools.jackson.*`). 3.x 강의의 ObjectMapper import는 컴파일 불가
 2. **JWT는 `jjwt-gson`** — `jjwt-jackson`은 Jackson 2를 끌고 와 충돌
 3. **`@MockBean` 삭제됨** → `@MockitoBean`
@@ -23,7 +23,7 @@ B1~B7 전부 `@Scheduled` + 수동 트리거 `POST /api/dev/batches/{name}` 쌍�
 
 ---
 
-## 0단계 ✅ 완료
+## 0단계  완료
 프로젝트 뼈대 · `GlobalExceptionHandler`+공통 에러 포맷 · enum 11종. **게이트 통과 실측 완료**(없는 URL → `{"error":{"code":"ENDPOINT_NOT_FOUND",...}}` 404).
 
 ## 0.5단계 — 정정 패치 (다음 작업, 약 30분)
@@ -46,7 +46,7 @@ B1~B7 전부 `@Scheduled` + 수동 트리거 `POST /api/dev/batches/{name}` 쌍�
 - **새 개념**: JWT(위조 불가 출입증) · 인터셉터(모든 요청의 검문소) · 만 나이(Period) · Clock 주입(시간을 코드로 조종)
 - **게이트**: dev-login 2명 → `/members/me` 200 + 닉네임이 "익명 ○○" + **`match_lock`에 member 행 2개** / 토큰 없이 401 / **참여자 토큰으로 `/api/admin/reports` → 403 `FORBIDDEN_ROLE`** / AU-3 2013년생 → UNDER_AGE, 재호출 409 `ALREADY_VERIFIED`
 
-## 2단계 — ★매칭 엔진 (F: v4 2-1~2-3) — 최고 난도
+## 2단계 — 매칭 엔진 (F: v4 2-1~2-3) — 최고 난도
 - **만들 것**: `match_request`·`challenge_group`·`group_member`·`match_event` 엔티티 / MT-1 · MT-2 · MT-3 / B2 만료 배치 / DEV-4(배치 트리거) / `match_lock` 조건 행 72개 `ApplicationRunner` 시드
 - **잠금 구현**(API §4 MT-1 절차 그대로): 회원 행 잠금 → 검증 → 조건 행 잠금 → INSERT → 선착순 6건 → **영향 행 수 = 6 검증** → 그룹 생성. 전체가 하나의 `@Transactional`, 해제는 커밋 시 자동
 - **함정**: ① 잠금 행을 런타임에 만들지 말 것(갭 락 없음 → INSERT 경합) ② 자기 포함 계산(5명 대기+나=6) ③ **MT-3·B2에서도 `active_member_id=NULL`**(누락 시 재요청 영구 차단) ④ 7건 이상일 때 정확히 6건만
@@ -57,7 +57,7 @@ B1~B7 전부 `@Scheduled` + 수동 트리거 `POST /api/dev/batches/{name}` 쌍�
 - 함정: GR-2의 `memberCount`는 **ACTIVE 수 단일 정의**. 진행 중/종료 그룹의 members 집합이 다름(API §4)
 - 게이트: 비멤버 403 / 퇴장 → GR-2 403 + **매칭은 다시 가능**(활성 멤버십 소멸) / 사유 없이 400
 
-## 4단계 — ★인증 제출 (F: v4 3-1) — AI는 스텁
+## 4단계 — 인증 제출 (F: v4 3-1) — AI는 스텁
 - 만들 것: `proof`(daily_slot 생성 컬럼)·`proof_media`·`ai_judgment`·`ai_review_queue` 엔티티 / PF-1 · PF-2 / `AiClient` 인터페이스 4메서드 + 전부 통과 스텁 / B7 회수 배치
 - **PF-2 실행 순서**(API §4 그대로): 검증 → **얼굴 선검사(파일·DB 쓰기 이전)** → tx1(proof SCREENING + flush + 파일 + media) → tx 밖 AI → tx2(조건부 UPDATE) → 응답 변환은 tx2 커밋 후
 - 함정: ① 마감 판정은 접수 시각 ② SCREENING은 슬롯 미점유(그래서 AI 장애가 그날을 잠그지 않음) ③ 재업로드는 **새 행 INSERT + `superseded_by_id`**(UPDATE 금지) ④ `daily_slot`은 H2에서도 생성 컬럼 사용, JPA는 `insertable=false, updatable=false`
@@ -73,13 +73,13 @@ B1~B7 전부 `@Scheduled` + 수동 트리거 `POST /api/dev/batches/{name}` 쌍�
 - 함정: 분모는 `periodDays` 고정(경과 일수 아님). 순위 필드 없음
 - 게이트: 시작 직후 0.0 / **DEV-3로 15일 시드한 30일 챌린지 → 0.5**
 
-## 7단계 — ★AI 실물 (F: v4 7-1·7-2)
+## 7단계 — AI 실물 (F: v4 7-1·7-2)
 - 만들 것: 얼굴 탐지 실물 / 이미지 검열 실물(클라우드 moderation) / 진위 실물(pHash + 동일 회원 대조, 관련성은 shadow) / 텍스트 검열 실물 / BLOCKED → CENSORSHIP 큐 적재
 - 새 개념: perceptual hash(사진의 지문) · 해밍 거리 · shadow 모드(차단 없이 데이터만 모으는 안전 운전)
 - 함정: **모든 AI 실패는 fail-closed**(502, 몰래 통과 금지) / 관련성은 로깅만
 - 게이트: 유해 샘플 → BLOCKED + **`ai_review_queue`에 CENSORSHIP·PENDING 행 생성** / 같은 사진 2일 연속 → 2번째 HOLD / **리사이즈한 같은 사진 → HOLD**(정확 일치만 잡으면 게이트는 녹색인데 기능은 무력) / 얼굴 사진 → 422 + 미저장 / 관련성 낮은 사진 → 통과 + 점수 로깅
 
-## 8단계 — ★종료·완주 판정 (F: v4 5-1·5-2·7-3)
+## 8단계 — 종료·완주 판정 (F: v4 5-1·5-2·7-3)
 - 만들 것: **B1**(매일 00:05, `end_date < 오늘` 대상 — 종료일 인증 06:00~23:59를 놓치지 않게. B7 선행) / FR-1 / AD-7 / B6 / `final_report`·`completion_stats`
 - B1 절차: ①대상 선정 ②ENDED ③잔류 ACTIVE→COMPLETED ④`participant_view_end_at` 기록 ⑤**그룹 평균 계산 → 경계면 그룹 단위 1건만 큐 적재하고 개인 판정 중단** ⑥개인 판정 ⑦`ai_judgment(COMPLETION)` INSERT 후 리포트 생성
 - 함정: **B1·B6 멱등** / COMPLETED 0명이면 `group_avg_rate=0.0000`·미충족 / HOLD·PENDING_REVIEW는 미인증 취급, 사후 승인 시 B6가 정정
@@ -106,7 +106,7 @@ B1~B7 전부 `@Scheduled` + 수동 트리거 `POST /api/dev/batches/{name}` 쌍�
 
 ---
 
-## 컷 라인 (일정 압박 시 — ⚠ 명세 위반 표기 필수)
+## 컷 라인 (일정 압박 시 —  명세 위반 표기 필수)
 1. AI 관련성 점수(shadow조차 제외 — v4 7-1 부분 미충족) → 2. 예상 대기 시간 → 3. AD-8 → 4. 소셜 카카오 외 3종(v4 1-1 부분 충족) → 5. 9.5단계 게시판 전체(v4 영역 8 미구현 — 팀장 요구라 승인 필수)
 **못 버리는 것**: 2단계 매칭 / 4·5·7단계 인증·AI / 8단계 완주 판정 / 9단계 신고·제재 / 10단계 B4·B5(법적) / 1단계 연령 검증(법적)
 

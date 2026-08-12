@@ -6,7 +6,7 @@
 
 ---
 
-## ⛔ 착수 차단 — 팀 확정이 필요한 항목 (T1)
+##  착수 차단 — 팀 확정이 필요한 항목 (T1)
 
 이 5건이 확정되기 전에는 해당 단계를 시작할 수 없다. 나머지 미결은 §9.
 
@@ -324,7 +324,7 @@ H2 URL에 `;LOCK_TIMEOUT=3000`. `PessimisticLockingFailureException` → 503 `LO
 ### PF-1 촬영물 동의
 `POST /api/members/me/media-consent` · `{"agreed":true}` → 204. false는 400.
 
-### PF-2 인증 제출 ★
+### PF-2 인증 제출 
 `POST /api/groups/{groupId}/proofs` · `multipart/form-data`: `file`(jpg/png/webp, ≤10MB, **매직바이트 검사**) + `method`(PHOTO|LIVE_CAM)
 
 **1. 검증** — 멤버십 ACTIVE / 그룹 ACTIVE(409 `GROUP_ENDED`) / 오늘이 기간 내(400 `OUT_OF_CHALLENGE_PERIOD`) / 마감 시간대(400 `PROOF_DEADLINE_PASSED`) / 동의(403 `CONSENT_REQUIRED`) / **당일 `SCREENING`·`APPROVED`·`PENDING_REVIEW` 행 존재 시 409 `DUPLICATE_DAILY_PROOF`** / 당일 `hidden_at` 있는 행 존재 시 409 `PROOF_HIDDEN_BY_ADMIN`
@@ -380,7 +380,7 @@ H2 URL에 `;LOCK_TIMEOUT=3000`. `PessimisticLockingFailureException` → 503 `LO
    - `target_nickname`: 대상 표시명 스냅샷 / `severity`: `INAPPROPRIATE_CONTENT·PRIVACY_VIOLATION·ABUSIVE_LANGUAGE` → HIGH, 그 외 NORMAL / `sla_due_at` 계산
    - **병합 시 더 높은 severity가 오면 케이스를 상향**하고 `sla_due_at`을 재계산한다
 3. **신고자 처리 (확정 8/12)**: `targetType=PROOF·MEMBER`이면 **신고자 본인**의 membership → `REPORT_EXIT`(그룹 접근 상실, `exit_case_id` 기록). `targetType=POST`는 아무 처리 없음(그룹과 무관)
-4. **⚠ 피신고자는 신고만으로 아무 조치도 받지 않는다.** 계속 그룹에 남아 인증·응원이 가능하다. **제재(그룹에서 내보내기·이용 제한)는 운영자가 AD-3에서 `SANCTIONED`로 확정한 뒤에만** 적용된다
+4. ** 피신고자는 신고만으로 아무 조치도 받지 않는다.** 계속 그룹에 남아 인증·응원이 가능하다. **제재(그룹에서 내보내기·이용 제한)는 운영자가 AD-3에서 `SANCTIONED`로 확정한 뒤에만** 적용된다
    - 이유: 신고 즉시 피신고자를 차단하면 **아무나 신고해서 남을 쫓아내는 악용**이 성립한다. 원문의 "즉시 차단"은 **신고자 본인**에 대한 것이며(본인이 관계를 끊는 안전장치), 상대에 대한 조치는 운영자 판단 사항이다
    - 그 대가로 **신고 처리 SLA(고위험 24h)가 실질적인 피해자 보호 장치**가 된다. 신고자는 이미 그룹을 떠난 상태이므로 그 사이 추가 노출은 없다
    - 프론트: 신고 버튼에 **"신고하면 이 그룹에서 나가게 됩니다"** 확인 다이얼로그 필수(되돌릴 수 없음)

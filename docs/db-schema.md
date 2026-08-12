@@ -68,29 +68,29 @@ CREATE TABLE match_lock (
 
 CREATE TABLE challenge_group (
     id                   BIGINT      NOT NULL AUTO_INCREMENT,
-    name                 VARCHAR(50) NOT NULL,
-    category             VARCHAR(20) NOT NULL,
-    daily_target_minutes INT         NOT NULL,
-    period_days          INT         NOT NULL,
-    start_date           DATE        NOT NULL,
-    end_date             DATE        NOT NULL,
-    status               VARCHAR(20) NOT NULL,
-    created_at           DATETIME(6) NOT NULL,
+    name                 VARCHAR(50) NOT NULL,          -- 챌린지 이름. "{분야} {기간}일 챌린지" 형태로 서버가 생성
+    category             VARCHAR(20) NOT NULL,          -- 목표 분야. 운동·공부·독서·식단·수면·기타
+    daily_target_minutes INT         NOT NULL,          -- 하루 목표 시간(분). 20·30·60·120
+    period_days          INT         NOT NULL,          -- 챌린지 기간(일). 30·60·100
+    start_date           DATE        NOT NULL,          -- 시작일. 매칭된 당일(인증 마감 이후 매칭이면 다음날)
+    end_date             DATE        NOT NULL,          -- 종료일. 시작일 + 기간 - 1
+    status               VARCHAR(20) NOT NULL,          -- 진행 상태. ACTIVE 진행 중 · ENDED 종료
+    created_at           DATETIME(6) NOT NULL,          -- 그룹이 만들어진 시각
     PRIMARY KEY (id),
     KEY idx_cg_batch (status, end_date)     -- B1
 );
 
 CREATE TABLE match_request (
     id                   BIGINT      NOT NULL AUTO_INCREMENT,
-    member_id            BIGINT      NOT NULL,
-    category             VARCHAR(20) NOT NULL,
-    daily_target_minutes INT         NOT NULL,
-    period_days          INT         NOT NULL,
-    status               VARCHAR(20) NOT NULL,
+    member_id            BIGINT      NOT NULL,          -- 요청한 회원
+    category             VARCHAR(20) NOT NULL,          -- 고른 목표 분야
+    daily_target_minutes INT         NOT NULL,          -- 고른 하루 목표 시간(분)
+    period_days          INT         NOT NULL,          -- 고른 기간(일)
+    status               VARCHAR(20) NOT NULL,          -- WAITING 대기 · MATCHED 성사 · CANCELLED 취소 · EXPIRED 만료
     active_member_id     BIGINT      NULL,      -- WAITING일 때만 member_id, 그 외 NULL
-    requested_at         DATETIME(6) NOT NULL,
-    expires_at           DATETIME(6) NOT NULL,
-    matched_group_id     BIGINT      NULL,
+    requested_at         DATETIME(6) NOT NULL,          -- 요청한 시각
+    expires_at           DATETIME(6) NOT NULL,          -- 이 시각까지 6명이 안 모이면 만료
+    matched_group_id     BIGINT      NULL,              -- 성사됐을 때 배정된 그룹
     PRIMARY KEY (id),
     UNIQUE KEY uk_mr_active (active_member_id),  -- 회원당 활성 요청 1건 (이중 배정 DB 방어선)
     KEY idx_mr_queue (status, category, daily_target_minutes, period_days, requested_at),
@@ -106,11 +106,11 @@ ALTER TABLE match_request
 
 CREATE TABLE group_member (
     id           BIGINT      NOT NULL AUTO_INCREMENT,
-    group_id     BIGINT      NOT NULL,
-    member_id    BIGINT      NOT NULL,
+    group_id     BIGINT      NOT NULL,                  -- 어느 챌린지인지
+    member_id    BIGINT      NOT NULL,                  -- 누구인지
     status       VARCHAR(20) NOT NULL,   -- GroupMemberStatus
-    joined_at    DATETIME(6) NOT NULL,
-    left_at      DATETIME(6) NULL,
+    joined_at    DATETIME(6) NOT NULL,                  -- 참여한 시각
+    left_at      DATETIME(6) NULL,                      -- 나간 시각. 참여 중이면 비어 있음
     left_reason  VARCHAR(30) NULL,       -- LeftReason (SANCTION·WITHDRAWAL은 서버 전용)
     exit_case_id BIGINT      NULL,       -- REPORT_EXIT의 근거 케이스
     PRIMARY KEY (id),
@@ -138,12 +138,12 @@ CREATE TABLE match_event (
 ```sql
 CREATE TABLE proof (
     id                  BIGINT      NOT NULL AUTO_INCREMENT,
-    group_id            BIGINT      NOT NULL,
-    member_id           BIGINT      NOT NULL,
-    proof_date          DATE        NOT NULL,
-    method              VARCHAR(20) NOT NULL,
+    group_id            BIGINT      NOT NULL,           -- 어느 챌린지의 인증인지
+    member_id           BIGINT      NOT NULL,           -- 누가 올렸는지
+    proof_date          DATE        NOT NULL,           -- 어느 날짜의 인증인지
+    method              VARCHAR(20) NOT NULL,           -- 촬영 방식. PHOTO 사진 · LIVE_CAM 실시간 촬영
     ai_status           VARCHAR(20) NOT NULL,   -- ProofAiStatus
-    image_phash         BIGINT      NULL,
+    image_phash         BIGINT      NULL,               -- 같은 사진 재사용을 잡기 위한 이미지 지문
     superseded_by_id    BIGINT      NULL,       -- 재업로드로 대체된 구 HOLD/BLOCKED → 새 행
     hidden_by_case_id   BIGINT      NULL,       -- AD-6 hide 근거
     hidden_by_admin_id  BIGINT      NULL,
@@ -224,10 +224,10 @@ CREATE TABLE ai_review_queue (
 ```sql
 CREATE TABLE sticker_reaction (
     id           BIGINT      NOT NULL AUTO_INCREMENT,
-    proof_id     BIGINT      NOT NULL,
-    member_id    BIGINT      NOT NULL,
-    sticker_type VARCHAR(20) NOT NULL,
-    reacted_at   DATETIME(6) NOT NULL,
+    proof_id     BIGINT      NOT NULL,                  -- 어느 인증에 남긴 스티커인지
+    member_id    BIGINT      NOT NULL,                  -- 누가 남겼는지
+    sticker_type VARCHAR(20) NOT NULL,                  -- 박수·근육·불꽃 중 하나
+    reacted_at   DATETIME(6) NOT NULL,                  -- 남긴 시각
     PRIMARY KEY (id),
     UNIQUE KEY uk_sr (proof_id, member_id, sticker_type),   -- 토글: 취소는 행 삭제
     CONSTRAINT fk_sr_proof FOREIGN KEY (proof_id) REFERENCES proof(id)
@@ -255,11 +255,11 @@ CREATE TABLE report_case (
 
 CREATE TABLE report (
     id          BIGINT       NOT NULL AUTO_INCREMENT,
-    case_id     BIGINT       NOT NULL,
-    reporter_id BIGINT       NOT NULL,
-    reason_code VARCHAR(30)  NOT NULL,
+    case_id     BIGINT       NOT NULL,                  -- 묶여 있는 신고 건
+    reporter_id BIGINT       NOT NULL,                  -- 신고한 사람
+    reason_code VARCHAR(30)  NOT NULL,                  -- 신고 사유
     detail      VARCHAR(500) NULL,       -- 텍스트 검열 통과분만 저장(위험 판정 시 제거하고 접수는 진행)
-    received_at DATETIME(6)  NOT NULL,
+    received_at DATETIME(6)  NOT NULL,                  -- 접수 시각
     PRIMARY KEY (id),
     UNIQUE KEY uk_report (case_id, reporter_id),
     CONSTRAINT fk_rp_case     FOREIGN KEY (case_id) REFERENCES report_case(id),
@@ -281,13 +281,13 @@ CREATE TABLE report_history (
 
 CREATE TABLE sanction (
     id         BIGINT      NOT NULL AUTO_INCREMENT,
-    member_id  BIGINT      NOT NULL,
-    case_id    BIGINT      NULL,
-    type       VARCHAR(20) NOT NULL,
-    starts_at  DATETIME(6) NOT NULL,
+    member_id  BIGINT      NOT NULL,                    -- 제재 대상 회원
+    case_id    BIGINT      NULL,                        -- 근거가 된 신고 건. 신고 없이 내린 제재면 비어 있음
+    type       VARCHAR(20) NOT NULL,                    -- TEMP 기간 제한 · PERMANENT 영구
+    starts_at  DATETIME(6) NOT NULL,                    -- 제재 시작 시각
     ends_at    DATETIME(6) NULL,        -- TEMP만
-    admin_id   BIGINT      NOT NULL,
-    created_at DATETIME(6) NOT NULL,
+    admin_id   BIGINT      NOT NULL,                    -- 제재를 확정한 운영자
+    created_at DATETIME(6) NOT NULL,                    -- 등록 시각
     PRIMARY KEY (id),
     KEY idx_sanction_member (member_id, starts_at, ends_at)
 );
@@ -311,19 +311,19 @@ CREATE TABLE media_access_log (
 ```sql
 CREATE TABLE final_report (
     id                    BIGINT       NOT NULL AUTO_INCREMENT,
-    group_id              BIGINT       NOT NULL,
-    member_id             BIGINT       NOT NULL,
-    proved_days           INT          NOT NULL,
+    group_id              BIGINT       NOT NULL,        -- 어느 챌린지의 리포트인지
+    member_id             BIGINT       NOT NULL,        -- 누구의 리포트인지
+    proved_days           INT          NOT NULL,        -- 인증에 성공한 날 수
     total_days            INT          NOT NULL,   -- period_days 스냅샷(분모)
-    proof_rate            DECIMAL(5,4) NOT NULL,
-    personal_met          TINYINT(1)   NOT NULL,
+    proof_rate            DECIMAL(5,4) NOT NULL,        -- 개인 인증률. 인증한 날 ÷ 전체 기간
+    personal_met          TINYINT(1)   NOT NULL,        -- 개인 기준을 넘었는지
     group_avg_rate        DECIMAL(5,4) NOT NULL,   -- COMPLETED 0명이면 0.0000
-    group_met             TINYINT(1)   NOT NULL,
-    completed             TINYINT(1)   NOT NULL,
+    group_met             TINYINT(1)   NOT NULL,        -- 그룹 기준을 넘었는지
+    completed             TINYINT(1)   NOT NULL,        -- 정식 완주로 인정됐는지
     criteria_personal_rate DECIMAL(5,4) NOT NULL,  -- 판정 당시 기준 스냅샷
     criteria_group_rate    DECIMAL(5,4) NOT NULL,
     decided_by            VARCHAR(20)  NOT NULL,   -- AI | ADMIN
-    calculated_at         DATETIME(6)  NOT NULL,
+    calculated_at         DATETIME(6)  NOT NULL,        -- 판정을 계산한 시각
     PRIMARY KEY (id),
     UNIQUE KEY uk_fr (group_id, member_id),
     CONSTRAINT fk_fr_group  FOREIGN KEY (group_id) REFERENCES challenge_group(id),
@@ -343,20 +343,20 @@ CREATE TABLE completion_stats (
 
 CREATE TABLE challenge_post (
     id                  BIGINT       NOT NULL AUTO_INCREMENT,
-    member_id           BIGINT       NOT NULL,
-    group_id            BIGINT       NOT NULL,
-    final_report_id     BIGINT       NOT NULL,
+    member_id           BIGINT       NOT NULL,          -- 글쓴이
+    group_id            BIGINT       NOT NULL,          -- 어느 챌린지의 완주 기록인지
+    final_report_id     BIGINT       NOT NULL,          -- 근거가 되는 완주 리포트
     author_alias        VARCHAR(30)  NOT NULL,   -- 게시 시점 생성 별칭(member.nickname과 분리)
     comment             VARCHAR(200) NULL,       -- 정규식 선차단 + AI 검열 통과분
     category            VARCHAR(20)  NOT NULL,   -- challenge_group.category 복사(final_report에는 없는 값)
     period_days         INT          NOT NULL,   -- 이하 4개는 서버가 final_report에서 복사(period_days ← final_report.total_days)
-    proved_days         INT          NOT NULL,
-    proof_rate          DECIMAL(5,4) NOT NULL,
-    completed           TINYINT(1)   NOT NULL,
+    proved_days         INT          NOT NULL,          -- 인증에 성공한 날 수
+    proof_rate          DECIMAL(5,4) NOT NULL,          -- 개인 인증률
+    completed           TINYINT(1)   NOT NULL,          -- 정식 완주 여부
     status              VARCHAR(20)  NOT NULL,   -- PostStatus
     hidden_by_case_id   BIGINT       NULL,
     hidden_at           DATETIME(6)  NULL,
-    created_at          DATETIME(6)  NOT NULL,
+    created_at          DATETIME(6)  NOT NULL,          -- 작성 시각
     PRIMARY KEY (id),
     UNIQUE KEY uk_post_member_group (member_id, group_id),   -- 그룹당 1건(삭제 후 재작성 불가)
     KEY idx_post_list (status, created_at),
@@ -371,9 +371,9 @@ CREATE TABLE challenge_post (
 
 CREATE TABLE post_like (
     id        BIGINT      NOT NULL AUTO_INCREMENT,
-    post_id   BIGINT      NOT NULL,
-    member_id BIGINT      NOT NULL,
-    liked_at  DATETIME(6) NOT NULL,
+    post_id   BIGINT      NOT NULL,                     -- 어느 게시글인지
+    member_id BIGINT      NOT NULL,                     -- 누가 눌렀는지
+    liked_at  DATETIME(6) NOT NULL,                     -- 누른 시각
     PRIMARY KEY (id),
     UNIQUE KEY uk_post_like (post_id, member_id),
     CONSTRAINT fk_pl_post FOREIGN KEY (post_id) REFERENCES challenge_post(id)
