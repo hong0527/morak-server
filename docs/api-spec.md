@@ -248,7 +248,7 @@ morak:
 ### AU-1 소셜 로그인
 `POST /api/auth/login` · `{"provider","authorizationCode"}`
 1. 소셜 검증 실패 → 401 `INVALID_SOCIAL_TOKEN`
-2. `sha256(provider+providerUserId)`가 `blocked_social_hash`에 있으면 → 403 `REJOIN_BLOCKED`
+2. `HMAC-SHA256(provider+providerUserId, pepper)`가 `blocked_social_hash`에 있으면 → 403 `REJOIN_BLOCKED`
 3. 기존 회원: WITHDRAW_PENDING이면 **철회·복구**(시각 컬럼 NULL, ACTIVE) 후 `loginResult="RESTORED"`
 4. 신규 회원: **SNS 프로필 이미지·닉네임을 받아 저장**(`sns_profile_image_url`·`sns_nickname` — 별도 가입 폼 없이 정보를 가져오는 것이 SNS 로그인의 목적) **+ 서버가 표시용 `익명 {동물명}{2자리}`를 함께 생성**(`nickname`, 중복 시 재생성). **타인에게 보이는 모든 화면은 `nickname`만 쓰고 SNS 값은 본인 확인용으로만 쓴다.** `match_lock('member:{id}')` 동반 INSERT
 5. 생년월일 수신 시 즉시 검증 → VERIFIED, 미수신 → REQUIRED
