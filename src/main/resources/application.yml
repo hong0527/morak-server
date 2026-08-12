@@ -69,3 +69,6 @@ morak:
   pg:
     provider: toss-test              # [팀 확정 대기] D16 잠정값
     secret-key: ${MORAK_PG_SECRET_KEY}
+    point-per-krw: 1                 # [팀 확정 대기] D-6 잠정값. 1원 = 1포인트
+    min-amount-krw: 1000             # [팀 확정 대기] 1회 충전 하한. 미만이면 400
+    max-amount-krw: 1000000          # [팀 확정 대기] 1회 충전 상한. 초과면 400

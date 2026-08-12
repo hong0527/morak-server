@@ -589,6 +589,7 @@ CREATE TABLE point_ledger (
 - `member.point_balance`는 이 테이블의 `delta` 합과 같다. 어긋나면 원장이 옳다.
 - **정정은 UPDATE·DELETE가 아니라 역분개다.** 기록된 행은 수정하지 않는다.
 - 차감은 조건부 UPDATE(`UPDATE member SET point_balance = point_balance - ? WHERE id = ? AND point_balance >= ?`)가 0행이면 중단한다(`INSUFFICIENT_POINT`). 잔액 확인 후 차감하는 2단계는 동시성에서 깨진다.
+- **지급도 같은 이유로 상대 UPDATE(`SET point_balance = point_balance + ?`)여야 한다.** 회원 행을 읽어 더한 절대값을 쓰면 같은 회원에게 지급 두 건이 동시에 들어올 때 둘 다 같은 잔액을 읽고 한쪽이 사라진다 — 원장에는 두 줄이 다 남으므로 위의 "잔액 = 원장 합"이 조용히 깨진다. 실측(8단계): PY-2·PY-3 20쌍 동시 도달 시 원장은 20줄인데 캐시는 12건을 잃었다. 지급은 잔액 부족을 막지 않으므로 조건절만 없다.
 - 통화는 하나뿐이다. "스파크 포인트"는 별도 잔액이 아니라 `reason='GOAL_ACHIEVED'` 라벨일 뿐이다(★D5). 통화가 둘이 되면 이 테이블에 currency 컬럼과 잔액 캐시 분리가 필요해진다.
 - 잠정 정책값(D15): WELCOME +1,000 / SESSION_COMPLETE +100×(target_minutes÷60) / EVICTION_PENALTY -300 / GOAL_ACHIEVED +1,000.
 
@@ -680,7 +681,7 @@ CREATE TABLE point_charge (
 
 | 컬럼 | 설명 |
 |---|---|
-| pg_order_id | PY-1이 만들어 클라이언트에 내려준다. PG 요청의 우리 쪽 키 |
+| pg_order_id | PY-1이 만들어 클라이언트에 내려준다. PG 요청의 우리 쪽 키. 형식은 `molock-chg-{yyyyMMdd}-{충전 건 id 6자리}` — PG 콘솔에 찍힌 주문번호 하나로 우리 행을 되짚을 수 있어야 대사가 된다. id가 INSERT 후에 정해지므로 임시 유일값으로 넣고 같은 트랜잭션에서 덮는다(`live_session.livekit_room_name`과 같은 방식) |
 | pg_tid | PG가 발급하는 거래 식별자. 승인 응답·웹훅 양쪽에 들어온다 |
 | created_at | PY-1 생성 시각. PG 대사 기준이자 READY 방치 건 정리 기준 |
 | status | READY 생성 · APPROVED 승인 · FAILED 실패 |

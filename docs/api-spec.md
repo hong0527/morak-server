@@ -1304,7 +1304,9 @@ UPDATE session_participant
 }
 ```
 
-환산 비율은 1원 = 1포인트다(잠정 — 값 확정 대기, open-decisions).
+환산 비율은 1원 = 1포인트다(잠정 — 값 확정 대기, open-decisions D-6). `morak.pg.point-per-krw` 설정값이다.
+
+1회 충전 금액은 **1,000원 이상 1,000,000원 이하**다(잠정 — 팀 확정 대기). 범위를 벗어나면 400 `VALIDATION_FAILED`이고 `details.amountKrw`에 허용 범위를 담는다. 설정값은 `morak.pg.min-amount-krw`·`max-amount-krw`다.
 
 발생 에러: 400 `VALIDATION_FAILED`(금액 형식·범위)
 
@@ -1329,8 +1331,13 @@ UPDATE session_participant
 3. 이미 `APPROVED`면 아래 200 응답을 그대로 반환한다(멱등)
 4. `status=FAILED`이면 409 `PAYMENT_NOT_APPROVED`
 5. PG 승인 API 호출 — 미승인 응답이면 `status=FAILED` 기록 후 409 `PAYMENT_NOT_APPROVED`
-6. 승인 확인 → `status=APPROVED`, `pg_tid` 기록(UNIQUE), `approved_at`
-7. `point_ledger` INSERT — `reason=CHARGE`, `delta=+{pointAmount}`, `ref_type=CHARGE`, `ref_id={chargeId}`
+6. **PG가 알려준 승인 금액이 `amount_krw`와 다르면** `status=FAILED` 기록 후 400 `PAYMENT_AMOUNT_MISMATCH`. 2번(클라이언트 요청값 대조)과 달리 여기는 실제 결제 금액이 어긋난 것이라 되돌릴 수 없어 충전 건을 닫는다
+7. 승인 확인 → `status=APPROVED`, `pg_tid` 기록(UNIQUE), `approved_at`
+8. `point_ledger` INSERT — `reason=CHARGE`, `delta=+{pointAmount}`, `ref_type=CHARGE`, `ref_id={chargeId}`
+
+2번은 충전 건의 상태를 바꾸지 않는다. 클라이언트의 오타 한 번으로 정상 결제 건이 `FAILED`로 닫히면 되돌릴 길이 없다.
+
+다른 충전 건이 이미 쓴 `pgTid`를 보내면 `uk_pc_tid`에 걸려 이 건은 승인되지 않은 채 409 `PAYMENT_NOT_APPROVED`가 나간다. 적립은 일어나지 않고 충전 건은 `READY`로 남는다.
 
 응답 200
 
@@ -1357,7 +1364,11 @@ UPDATE session_participant
 
 목적: 클라이언트가 결제창에서 이탈해 PY-2를 호출하지 못한 경우에도 승인 결과를 반영한다.
 
-헤더: PG 서명 헤더. **JWT 게이트 ①~⑤ 전부 skip.**
+헤더: `X-Morak-Signature: {본문 서명}`. **JWT 게이트 ①~⑤ 전부 skip.** 서명 검증이 유일한 인증 수단이다.
+
+서명은 **본문 바이트의 HMAC-SHA256을 소문자 hex로 인코딩한 값**이고 키는 `morak.pg.secret-key`다. 본문을 역직렬화한 뒤 다시 직렬화하면 공백·필드 순서가 달라져 해시가 어긋나므로 받은 바이트 그대로 검증한다.
+
+> 이 규약은 우리가 정했다. 토스페이먼츠 테스트 모드가 웹훅에 서명을 붙여 주지 않아 검증할 재료가 없기 때문이다. 실 키 연동(12단계)에서 PG의 실제 서명 규약이 정해지면 이 절과 `PaymentWebhookService`를 함께 고친다.
 
 요청 (PG 표준 페이로드)
 

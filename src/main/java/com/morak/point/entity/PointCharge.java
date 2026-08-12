@@ -11,7 +11,10 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -40,6 +43,9 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class PointCharge {
+
+    private static final String PG_ORDER_ID_PREFIX = "molock-chg-";
+    private static final DateTimeFormatter PG_ORDER_ID_DATE = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -73,19 +79,38 @@ public class PointCharge {
     @Column(name = "approved_at")
     private LocalDateTime approvedAt;
 
-    private PointCharge(Long memberId, int amountKrw, int pointAmount, String pgOrderId,
-                        LocalDateTime createdAt) {
+    private PointCharge(Long memberId, int amountKrw, int pointAmount, LocalDateTime createdAt) {
         this.memberId = memberId;
         this.amountKrw = amountKrw;
         this.pointAmount = pointAmount;
         this.status = ChargeStatus.READY;
-        this.pgOrderId = pgOrderId;
+        // 주문번호에 충전 건 번호를 넣는데 id는 INSERT가 끝나야 정해진다. 컬럼이 NOT NULL·
+        // UNIQUE라 빈 값으로 넣을 수 없어 임시 유일값을 넣고 같은 트랜잭션에서
+        // assignPgOrderId()가 덮는다(LiveSession의 방 이름과 같은 방식).
+        this.pgOrderId = UUID.randomUUID().toString();
         this.createdAt = createdAt;
     }
 
     public static PointCharge ready(Long memberId, int amountKrw, int pointAmount,
-                                    String pgOrderId, LocalDateTime createdAt) {
-        return new PointCharge(memberId, amountKrw, pointAmount, pgOrderId, createdAt);
+                                    LocalDateTime createdAt) {
+        return new PointCharge(memberId, amountKrw, pointAmount, createdAt);
+    }
+
+    /** 저장 직후 같은 트랜잭션에서 호출한다. 주문번호 규칙은 이 클래스에만 둔다. */
+    public void assignPgOrderId() {
+        if (this.id == null) {
+            throw new IllegalStateException("id가 정해진 뒤에 주문번호를 붙여야 한다");
+        }
+        this.pgOrderId = pgOrderIdOf(this.createdAt.toLocalDate(), this.id);
+    }
+
+    /**
+     * PG 대사의 기준 키다. 생성일과 충전 건 번호를 그대로 담아, PG 콘솔에 찍힌 주문번호
+     * 하나만으로 우리 쪽 행을 되짚을 수 있게 한다.
+     */
+    public static String pgOrderIdOf(LocalDate createdOn, Long chargeId) {
+        return PG_ORDER_ID_PREFIX + createdOn.format(PG_ORDER_ID_DATE) + "-"
+                + "%06d".formatted(chargeId);
     }
 
     /**

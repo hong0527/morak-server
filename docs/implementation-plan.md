@@ -716,13 +716,15 @@ Q7·상품 목록 확정 시 재실측: 상품 데이터, 커머스 범위.
 - **엔드포인트**: PY-1 충전 생성 · PY-2 승인 확인 · PY-3 PG 웹훅
 - **테이블**: `point_charge`
 - **enum**: `ChargeStatus`, `PointReason.CHARGE`
-- **설정**: `morak.pg.provider(toss-test)`, `secret-key`
+- **설정**: `morak.pg.provider(toss-test)`, `secret-key`, `point-per-krw(1)`, `min-amount-krw(1,000)`, `max-amount-krw(1,000,000)`
+- **PG 클라이언트**: `PgClient` 인터페이스 + `DevPgClient`(1단계 `SocialClient` 패턴). 실 키 연동은 12단계
 - `AuthInterceptor.SKIP_RULES`에 `POST /api/webhooks/payment` 행(M-2, 3단계에서 함께 추가했으면 확인만)
 
 ### 이 단계의 함정
 - **금액 검증은 서버가 한다.** PY-2에서 PG가 알려준 승인 금액과 `point_charge.amount_krw`가 다르면 400 `PAYMENT_AMOUNT_MISMATCH`. 클라이언트가 보낸 금액을 믿으면 1원 결제로 10만 포인트가 들어온다.
 - **PY-2와 PY-3은 같은 결과를 만들어야 하고 둘 다 와도 한 번만 적립된다.** 원장 UNIQUE `(memberId, CHARGE, CHARGE, chargeId)`와 `pg_tid` UNIQUE가 이중 방어선이다.
-- **웹훅 서명 검증 필수.** JWT skip과 무인증은 다르다(3단계와 같은 규칙) → 401 `INVALID_WEBHOOK_SIGNATURE`.
+- **웹훅 서명 검증 필수.** JWT skip과 무인증은 다르다(3단계와 같은 규칙) → 401 `INVALID_WEBHOOK_SIGNATURE`. 테스트 모드 PG가 서명을 붙여 주지 않아 규약을 우리가 정했다 — `X-Morak-Signature`에 본문 바이트의 HMAC-SHA256(hex), 키는 `pg.secret-key`.
+- **지급 경로의 잔액 캐시가 상대 UPDATE인지 확인한다.** 여기서 처음으로 같은 회원에게 지급 두 건(PY-2·PY-3)이 동시에 들어온다. 엔티티를 읽어 더하면 한쪽이 사라져 "잔액 = 원장 합"이 깨진다 — 원장 UNIQUE는 서로 다른 충전 건을 막지 않으므로 이 결함을 가려 주지 않는다.
 - **`pg_tid`는 NULL 허용 UNIQUE.** READY 상태에서는 아직 없다.
 - **승인되지 않은 충전에 적립 요청** → 409 `PAYMENT_NOT_APPROVED`.
 - **IAP는 보류**(v2). 웹 PG 테스트 모드 1종만 구현한다. FR-505의 "실물+인앱결제 혼합"은 스토어 정책 위반이라 구현하지 않는다(팀 전달 사항).

@@ -1,6 +1,6 @@
 package com.morak.session.controller;
 
-import com.morak.session.dto.response.WebhookAckResponse;
+import com.morak.common.dto.WebhookAckResponse;
 import com.morak.session.service.LiveKitWebhookService;
 import livekit.LivekitWebhook.WebhookEvent;
 import lombok.RequiredArgsConstructor;
