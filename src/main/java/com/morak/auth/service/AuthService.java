@@ -22,6 +22,8 @@ import com.morak.member.type.AgeVerification;
 import com.morak.member.type.AgreementType;
 import com.morak.member.type.MemberStatus;
 import com.morak.member.type.SocialProvider;
+import com.morak.point.service.PointService;
+import com.morak.point.type.PointReason;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -29,6 +31,7 @@ import java.time.Period;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -58,8 +61,10 @@ public class AuthService {
     private final MatchLockRepository matchLockRepository;
     private final MemberAccountPurger memberAccountPurger;
     private final NicknameGenerator nicknameGenerator;
+    private final PointService pointService;
     private final JwtProvider jwtProvider;
     private final Clock clock;
+    private final int welcomePoint;
     private final TransactionTemplate transactionTemplate;
 
     public AuthService(SocialClient socialClient,
@@ -70,8 +75,10 @@ public class AuthService {
                        MatchLockRepository matchLockRepository,
                        MemberAccountPurger memberAccountPurger,
                        NicknameGenerator nicknameGenerator,
+                       PointService pointService,
                        JwtProvider jwtProvider,
                        Clock clock,
+                       @Value("${morak.point.welcome}") int welcomePoint,
                        PlatformTransactionManager transactionManager) {
         this.socialClient = socialClient;
         this.socialHasher = socialHasher;
@@ -81,8 +88,10 @@ public class AuthService {
         this.matchLockRepository = matchLockRepository;
         this.memberAccountPurger = memberAccountPurger;
         this.nicknameGenerator = nicknameGenerator;
+        this.pointService = pointService;
         this.jwtProvider = jwtProvider;
         this.clock = clock;
+        this.welcomePoint = welcomePoint;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -171,6 +180,10 @@ public class AuthService {
         for (AgreementType type : agreed) {
             memberAgreementRepository.save(MemberAgreement.agree(member.getId(), type, now));
         }
+        // 웰컴 포인트(FR-103). 가입과 같은 트랜잭션이라 계정만 생기고 포인트가 빠지는 상태가
+        // 없다. 재로그인은 이 경로로 오지 않지만, 와도 멱등키 (member, WELCOME, MEMBER,
+        // member.id)가 두 번째 지급을 막는다 — 지급 여부를 회원 행에 플래그로 두지 않는 이유다.
+        pointService.award(member.getId(), welcomePoint, PointReason.WELCOME, member.getId(), now);
         return member;
     }
 

@@ -1135,7 +1135,20 @@ UPDATE session_participant
 }
 ```
 
-`reasonLabel`은 서버가 `PointReason`에서 파생하는 표시용 문자열이며 저장하지 않는다.
+`reasonLabel`은 서버가 `PointReason`에서 파생하는 표시용 문자열이며 저장하지 않는다. 사유별 문구는 아래가 전부다 — 화면이 사유별로 분기할 때는 이 문자열이 아니라 `reason`을 본다(문구는 바뀔 수 있고 그때마다 클라이언트가 깨지면 안 된다).
+
+| reason | reasonLabel |
+|---|---|
+| WELCOME | 웰컴 포인트 |
+| SESSION_COMPLETE | 세션 완주 |
+| GOAL_ACHIEVED | 스파크 포인트(목표 달성) |
+| EVICTION_PENALTY | 퇴출 패널티 |
+| ORDER_SPEND | 상품 구매 |
+| ORDER_CANCEL | 주문 취소 환급 |
+| CHARGE | 포인트 충전 |
+| APPEAL_REFUND | 이의 인용 환급 |
+
+내역은 `created_at` 최신순이고, 같은 시각이 여러 줄이면(B1이 한 트랜잭션에서 완주 지급과 목표 달성을 함께 기록하는 경우) `ledgerId` 큰 쪽이 앞이다. 동률을 깨지 않으면 페이지마다 순서가 달라져 같은 행이 두 번 보이거나 빠진다.
 
 발생 에러: 400 `VALIDATION_FAILED`
 

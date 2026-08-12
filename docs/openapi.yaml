@@ -3612,7 +3612,11 @@ paths:
       summary: PT-1 포인트 잔액·원장 조회
       operationId: getMyPoints
       description: "잔액과 적립·차감 내역을 보여줍니다. **잔액의 진실은 원장입니다.**\n\n- `reasonLabel`은 서버가\
-        \ `reason`에서 파생하는 표시용 문자열이며 저장하지 않습니다.\n- 정정은 기존 행 수정이 아니라 반대 부호의 새 행(역분개)으로\
+        \ `reason`에서 파생하는 표시용 문자열이며 저장하지 않습니다. 사유별 분기는 문구가 아니라 `reason`으로 하세요.\n\
+        \  WELCOME=웰컴 포인트 / SESSION_COMPLETE=세션 완주 / GOAL_ACHIEVED=스파크 포인트(목표 달성) /\
+        \ EVICTION_PENALTY=퇴출 패널티 / ORDER_SPEND=상품 구매 / ORDER_CANCEL=주문 취소 환급 /\
+        \ CHARGE=포인트 충전 / APPEAL_REFUND=이의 인용 환급\n- 정렬은 `createdAt` 최신순이고, 같은 시각이면\
+        \ `ledgerId` 큰 쪽이 앞입니다.\n- 정정은 기존 행 수정이 아니라 반대 부호의 새 행(역분개)으로\
         \ 들어옵니다.\n"
       parameters:
       - $ref: '#/components/parameters/Page'

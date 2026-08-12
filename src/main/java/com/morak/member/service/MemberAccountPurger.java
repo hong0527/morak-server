@@ -6,6 +6,7 @@ import com.morak.member.repository.MediaConsentRepository;
 import com.morak.member.repository.MemberAgreementRepository;
 import com.morak.member.repository.MemberRepository;
 import com.morak.member.repository.StreakDayRepository;
+import com.morak.point.repository.PointLedgerRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -33,6 +34,7 @@ public class MemberAccountPurger {
     private final MediaConsentRepository mediaConsentRepository;
     private final StreakDayRepository streakDayRepository;
     private final MatchLockRepository matchLockRepository;
+    private final PointLedgerRepository pointLedgerRepository;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void purge(Long memberId) {
@@ -43,8 +45,11 @@ public class MemberAccountPurger {
         mediaConsentRepository.deleteById(memberId);
         // 가입 트랜잭션이 함께 만든 잠금 행. 남으면 회원 없는 고아 행이 쌓인다.
         matchLockRepository.deleteById(MatchLock.memberKey(memberId));
+        // 웰컴 포인트 원장(api-spec AU-3 부수효과). 원장을 지우는 것은 여기뿐이고, 정정을
+        // 역분개로 하는 원칙의 예외인 이유는 가입이 성립하지 않아 그 행이 거래 기록이 아니기
+        // 때문이다. B4 탈퇴 파기가 커머스 원장을 남기는 것과 기준이 다르다 — 이 계정은
+        // 세션도 주문도 겪을 수 없으므로 지울 대상이 웰컴 1행뿐이다.
+        pointLedgerRepository.deleteByMemberId(memberId);
         memberRepository.deleteById(memberId);
-        // TODO: 웰컴 포인트 원장은 6단계에서 여기에 함께 붙인다. 지금은 point_ledger에
-        //       행을 만드는 경로 자체가 없어 지울 대상이 없다.
     }
 }
