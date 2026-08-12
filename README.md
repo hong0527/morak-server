@@ -1,16 +1,19 @@
 # morak-server
 
-6인 랜덤 매칭 목표 챌린지 서비스 '모락'의 백엔드 서버입니다.
+시간 단일 조건 6인 자동 매칭 실시간 캠스터디 서비스 'MoLock'의 백엔드 서버입니다.
 
-분야·목표시간·기간 세 가지 조건만 고르면 같은 조건의 6명이 자동으로 묶이고,
-매일 사진 한 장으로 인증하며 기간을 완주하는 서비스입니다.
-채팅은 없고 스티커로만 서로 응원합니다.
+하루 목표 시간 하나만 고르면 같은 시간을 고른 6명이 자동으로 묶이고,
+실시간 캠 세션에서 함께 공부합니다. 자리를 비우면 경고가 쌓이고 3회면 퇴출됩니다.
+완주하면 포인트와 Streak가 쌓이고, 포인트는 스토어에서 씁니다.
+
+패키지와 레포 이름은 `morak`을 유지합니다. 서비스 표기만 MoLock입니다.
 
 ## 기술 스택
 
 - Java 21, Spring Boot 4.1
 - Spring Data JPA
 - H2 (개발) / MySQL (운영)
+- LiveKit (실시간 캠 세션)
 - Gradle
 
 ## 실행 방법
@@ -19,8 +22,9 @@
 ./gradlew bootRun
 ```
 
-기본 포트는 8080입니다. H2 콘솔은 http://localhost:8080/h2-console 에서 접속할 수 있고,
-JDBC URL은 `jdbc:h2:mem:morak` 입니다.
+기본 포트는 8080입니다. 프로필을 지정하지 않으면 `dev`로 뜹니다.
+H2 콘솔은 http://localhost:8080/h2-console 에서 열리고,
+JDBC URL은 `jdbc:h2:mem:morak;MODE=MySQL;LOCK_TIMEOUT=3000` 입니다.
 
 정상 실행됐는지는 없는 경로를 호출해 보면 확인됩니다.
 
@@ -29,18 +33,34 @@ curl http://localhost:8080/api/ping
 # {"error":{"code":"ENDPOINT_NOT_FOUND","message":"존재하지 않는 경로입니다.","details":{}}}
 ```
 
+## 설정 파일
+
+프로필별로 셋으로 나눠 뒀습니다.
+
+| 파일 | 담는 것 |
+| --- | --- |
+| `application.yml` | 프로필 무관 공통값과 정책값. 비밀값은 환경변수 참조만 |
+| `application-dev.yml` | H2 접속·콘솔·개발용 소셜 로그인·로컬 전용 비밀값 |
+| `application-prod.yml` | 운영 DB·`ddl-auto: validate`·콘솔 끄기. 값은 전부 환경변수 |
+
+공통 파일에는 비밀값의 기본값을 두지 않습니다. 공개 저장소에 커밋되는 파일이라
+폴백이 있으면 운영에서 환경변수를 빠뜨려도 누구나 아는 키로 조용히 기동합니다.
+
 ## 환경 변수
 
-개발 환경에서는 기본값이 들어 있어 설정하지 않아도 실행됩니다.
-운영 배포 시에는 아래 값을 반드시 주입해야 합니다.
+개발은 `application-dev.yml`에 로컬 값이 있어 설정하지 않아도 실행됩니다.
+운영 배포에는 아래 값을 주입해야 하고, 없으면 기동에 실패합니다.
 
-| 변수 | 용도 |
-| --- | --- |
-| `MORAK_JWT_SECRET` | JWT 서명 키 |
-| `MORAK_MEDIA_TOKEN_SECRET` | 인증 사진 열람 토큰 서명 키 |
-| `MORAK_SOCIAL_HASH_PEPPER` | 소셜 식별자 해시용 pepper |
-| `MORAK_GEMINI_API_KEY` | 이미지 판정 (7단계부터) |
-| `MORAK_OPENAI_API_KEY` | 텍스트 검열 (7단계부터) |
+| 변수 | 용도 | 필요 시점 |
+| --- | --- | --- |
+| `MORAK_DB_URL`·`MORAK_DB_USERNAME`·`MORAK_DB_PASSWORD` | 운영 MySQL 접속 | 운영 배포 |
+| `MORAK_JWT_SECRET` | JWT 서명 키 | 현재 |
+| `MORAK_SOCIAL_HASH_PEPPER` | 소셜 식별자 해시용 pepper | 현재 |
+| `MORAK_LIVEKIT_HOST`·`MORAK_LIVEKIT_API_KEY`·`MORAK_LIVEKIT_API_SECRET` | LiveKit 토큰 발급·웹훅 서명 검증 | 라이브 세션 단계 |
+| `MORAK_PG_SECRET_KEY` | 포인트 충전 PG(테스트 모드) | 결제 단계 |
+
+`MORAK_MEDIA_TOKEN_SECRET`는 사진 인증 열람 토큰용이라 사진 인증 폐기와 함께
+제거 예정입니다. 현재 코드에는 아직 남아 있습니다.
 
 ## 프로젝트 구조
 
@@ -48,55 +68,65 @@ curl http://localhost:8080/api/ping
 
 ```
 com.morak
-├── common          공통 설정, 예외 처리, 공통 타입
-├── auth            로그인, JWT, 소셜 연동
-├── member          회원, 연령 확인, 탈퇴
-├── match           매칭 요청, 그룹 편성
-├── group           챌린지 그룹, 참여자
-├── proof           일일 인증 제출·조회
-├── reaction        응원 스티커
+├── common          공통 설정, 예외 처리, 인증 인터셉터
+├── auth            로그인, JWT 발급, 소셜 연동
+├── member          회원, 약관, 연령 확인, 목표, Streak, 탈퇴
+├── match           매칭 요청, 매칭 엔진, 재매칭 차단
+├── session         라이브 세션, 참가자, 자리비움·경고·퇴출, 퇴출 이의, 스티커
+├── point           포인트 원장, 충전, PG 웹훅
+├── store           상품, 주문
 ├── report          신고, 제재
-├── post            완주 자랑 게시판
-├── ai              이미지·텍스트 판정
-├── media           파일 저장, 열람 토큰
-├── batch           스케줄러
-└── admin           운영자 API
+└── dev             개발 전용 API (시각 조작, 배치 트리거, 세션 시드)
 ```
 
 각 도메인 패키지는 `controller`, `service`, `repository`, `entity`, `dto`, `type` 으로 구성합니다.
 `dto`는 `request`와 `response`로 다시 나눕니다.
 
+`batch`, `admin`, `media`, `payment`, `appeal`은 도메인이 아니라 별도 패키지를 만들지
+않습니다. 배치가 하는 일은 세션 종료, 매칭 만료, 탈퇴 파기라서 각 도메인
+안에 둡니다. 관리자 API도 결국 report·member·session을 조작하므로
+`report/controller/ReportAdminController.java` 처럼 도메인 안에 둡니다.
+포인트 충전·PG 웹훅은 point 소속, 퇴출 이의신청은 session 소속입니다.
+
 ## 문서
 
 | 문서 | 내용 |
 | --- | --- |
-| [docs/api-spec.md](docs/api-spec.md) | API 명세. 엔드포인트, 요청·응답, 에러 코드 |
+| [docs/project-overview.md](docs/project-overview.md) | 프로젝트 입구. 범위, 문서 지도, 진행 상태 |
+| [docs/api-spec.md](docs/api-spec.md) | 계약 정본. 엔드포인트, 요청·응답, 에러 코드 |
 | [docs/db-schema.md](docs/db-schema.md) | 테이블 DDL, 인덱스, 제약 조건 |
-| [docs/functional-spec.md](docs/functional-spec.md) | 기능 명세 |
-| [docs/git-convention.md](docs/git-convention.md) | 브랜치, 커밋, PR 규칙 |
+| [docs/functional-spec.md](docs/functional-spec.md) | 요구 정본 |
+| [docs/implementation-plan.md](docs/implementation-plan.md) | 구현 순서와 단계별 게이트 |
 | [docs/open-decisions.md](docs/open-decisions.md) | 아직 확정되지 않은 정책 |
-| [docs/implementation-plan.md](docs/implementation-plan.md) | 구현 순서 |
+| [docs/git-convention.md](docs/git-convention.md) | 브랜치, 커밋, PR 규칙 |
 | [docs/screen-api-map.md](docs/screen-api-map.md) | 화면별 호출 API |
 | [docs/frontend-change-requests.md](docs/frontend-change-requests.md) | 프론트 전달 사항 |
 
 프론트엔드는 API 명세와 화면-API 매핑 두 개를 보시면 됩니다.
+`docs/openapi.yaml`은 `api-spec.md` v2.0 기준으로 재생성되어(2026-08-12) 같이 보셔도 됩니다.
+두 문서가 어긋나면 `api-spec.md`가 정본입니다.
 
 ## 진행 상황
 
 | 범위 | 상태 |
 | --- | --- |
-| 프로젝트 설정, 전역 예외 처리, 공통 타입 | 완료 |
-| 회원·인증 | 진행 예정 |
+| 프로젝트 골격, 전역 예외 처리, 공통 타입 | 완료 |
+| 회원·인증·연령 검증·탈퇴 | 완료 (MoLock 수정 대상 있음) |
+| enum·에러 코드 교체, 엔티티 재편 | 진행 예정 |
+| 약관·목표·Streak | |
 | 매칭 | |
-| 그룹·인증 제출 | |
-| AI 판정 | |
-| 리포트·게시판 | |
-| 신고·운영 | |
-| 배치 | |
+| 라이브 세션, 경고·퇴출 | |
+| 완주 판정, 포인트 | |
+| 스토어, 결제 | |
+| 신고·운영, 관리자 콘솔 | |
+
+2026-08-12 기획이 MoLock으로 전환됐습니다. 0·1단계 코드는 유효하지만
+1단계는 만 14세 미만 가입 차단과 웰컴 포인트 지급이 수정 대상입니다.
+경위와 범위는 [docs/project-overview.md](docs/project-overview.md)에 있습니다.
 
 ## 참고
 
 - 에러 응답은 전부 `{"error": {"code": ..., "message": ..., "details": {...}}}` 형태입니다.
   code 값은 [api-spec.md](docs/api-spec.md)의 에러 코드 표를 참고하세요.
-- 완주 기준 비율, 인증 마감 시각 같은 정책 값은 코드에 넣지 않고
+- 경고 임계 시간, 포인트 값, 매칭 만료 같은 정책 값은 코드에 넣지 않고
   `application.yml`의 `morak.*` 아래에 모아 뒀습니다. 정책이 바뀌면 이 값만 고치면 됩니다.
