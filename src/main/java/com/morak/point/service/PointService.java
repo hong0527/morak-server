@@ -66,13 +66,15 @@ public class PointService {
                 memberId, reason, PointLedger.refTypeOf(reason), refId)) {
             return false;
         }
-        Member member = memberRepository.findById(memberId)
-                // 원장은 회원 행을 FK로 참조한다. 없는 회원에게 지급이 시도됐다면 호출부의
-                // 데이터가 이미 깨진 것이라 조용히 넘기지 않는다.
-                .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 포인트 처리: " + memberId));
         // 패널티는 잔액 부족으로 회피할 수 없어야 하므로 음수를 허용한다(API명세서 SS-4 부수효과).
         // 잔액이 모자라면 막아야 하는 차감(주문)은 이 메서드가 아니라 spend가 맡는다.
-        int balanceAfter = member.applyPointDelta(delta);
+        if (memberRepository.addPoint(memberId, delta) == 0) {
+            // 원장은 회원 행을 FK로 참조한다. 없는 회원에게 지급이 시도됐다면 호출부의
+            // 데이터가 이미 깨진 것이라 조용히 넘기지 않는다.
+            throw new IllegalStateException("존재하지 않는 회원의 포인트 처리: " + memberId);
+        }
+        // 벌크 UPDATE가 영속성 컨텍스트를 비우고 갔으므로 여기서 읽는 잔액은 증감 후 값이다.
+        int balanceAfter = getBalance(memberId);
         pointLedgerRepository.save(
                 PointLedger.record(memberId, delta, reason, refId, balanceAfter, now));
         log.info("포인트 {}: member={}, reason={}, ref={}, 잔액={}",
@@ -122,6 +124,19 @@ public class PointService {
                         memberId, reason, PointLedger.refTypeOf(reason), refId)
                 .map(PointLedger::getId)
                 .orElse(null);
+    }
+
+    /**
+     * 잔액 캐시. 충전 승인(PY-2·PY-3)이 응답에 실을 값을 여기서 읽는다.
+     *
+     * <p>회원 행을 포인트 도메인 밖으로 내보내지 않기 위해 감싼다 — 잔액이 캐시라는 사실과
+     * 어긋났을 때 원장이 옳다는 규칙을 아는 쪽이 하나여야 한다.
+     */
+    @Transactional(readOnly = true)
+    public int getBalance(Long memberId) {
+        return memberRepository.findById(memberId)
+                .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 잔액 조회: " + memberId))
+                .getPointBalance();
     }
 
     /**

@@ -131,17 +131,6 @@ public class Member {
     }
 
     /**
-     * 포인트 증감 반영(B1·주문·충전). <b>원장 INSERT와 같은 트랜잭션에서만 부른다</b> —
-     * 이 값은 캐시일 뿐이라 원장 없이 움직이면 다음 지급의 {@code balance_after}까지 틀어진다.
-     *
-     * <p>음수 잔액을 막지 않는다. 퇴출 패널티는 잔액이 모자란다고 회피할 수 있으면 안 된다.
-     */
-    public int applyPointDelta(int delta) {
-        this.pointBalance += delta;
-        return this.pointBalance;
-    }
-
-    /**
      * 완주일 반영(B1). 어제 완주했으면 +1, 아니면 1부터 다시 센다 — 미완주일에 0으로 미리
      * 써 두는 배치를 두지 않고 <b>다음 완주 시점에 연속이 끊겼는지 판정</b>한다. 회원 수만큼
      * 매일 UPDATE를 도는 대신 마지막 완주일과의 거리를 보는 쪽이 같은 답을 준다(★D2·D3).

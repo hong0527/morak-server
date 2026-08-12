@@ -38,4 +38,22 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
                AND m.pointBalance >= :amount
             """)
     int deductPointIfEnough(@Param("memberId") Long memberId, @Param("amount") int amount);
+
+    /**
+     * 잔액을 조건 없이 증감한다(지급·패널티). 잔액 부족을 막지 않는 것이
+     * {@link #deductPointIfEnough}와의 차이다 — 퇴출 패널티는 잔액이 모자란다고 회피할 수
+     * 있으면 안 된다.
+     *
+     * <p><b>엔티티를 읽어 더한 뒤 저장하면 안 된다.</b> 같은 회원에게 두 지급이 동시에 들어오면
+     * 둘 다 같은 잔액을 읽고 각자 절대값을 써서 한쪽이 사라진다(원장은 두 줄 다 남으므로
+     * "잔액 = 원장 합"이 깨진다). 실측: PY-2와 PY-3 20쌍을 동시에 쏘면 원장은 20줄인데 캐시는
+     * 12건을 잃었다. 증감을 SQL 한 문장에 담아야 DB가 행을 잠근 상태로 더한다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Member m
+               SET m.pointBalance = m.pointBalance + :delta
+             WHERE m.id = :memberId
+            """)
+    int addPoint(@Param("memberId") Long memberId, @Param("delta") int delta);
 }
