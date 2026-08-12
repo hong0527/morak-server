@@ -1,0 +1,4502 @@
+openapi: 3.0.3
+info:
+  title: 모락(Morak) API
+  version: 1.0.0
+  description: '6인 랜덤 매칭 목표 챌린지 서비스 ''모락''의 백엔드 API입니다.
+
+    분야·하루 목표시간·기간 세 가지 조건을 고르면 같은 조건의 6명이 자동으로 묶이고,
+
+    매일 사진 한 장으로 인증하며 기간을 완주합니다. 채팅은 없고 스티커로만 응원합니다.
+
+    ## 인증
+
+    로그인으로 받은 토큰을 `Authorization: Bearer {accessToken}` 헤더에 넣어 보냅니다.
+
+    토큰은 24시간 유효하며 갱신(refresh) 토큰은 없습니다. 만료되면 다시 로그인해야 합니다.
+
+    ## 오류 응답
+
+    모든 실패 응답은 아래 형태로 통일되어 있습니다.
+
+    ```json
+
+    { "error": { "code": "DUPLICATE_DAILY_PROOF", "message": "오늘 인증을 이미 제출했습니다.", "details": {} } }
+
+    ```
+
+    화면 분기는 `message`가 아니라 **`code`** 로 하세요. 문구는 다듬어질 수 있지만 코드는 바뀌지 않습니다.
+
+    ## 어느 API에서나 날 수 있는 오류
+
+    아래 두 가지는 모든 경로에 해당하므로 개별 API 설명에서는 생략했습니다.
+
+    | 상태 | 코드 | 언제 | 화면 처리 |
+
+    | --- | --- | --- | --- |
+
+    | 404 | `ENDPOINT_NOT_FOUND` | 없는 주소를 호출했을 때 | 개발 중 오류. 경로를 확인하세요 |
+
+    | 500 | `INTERNAL_SERVER_ERROR` | 서버 오류 | 잠시 후 다시 시도하도록 안내 |
+
+    인증·제재·연령 관련 401·403은 각 API의 응답 설명에 적혀 있습니다.
+
+    '
+servers:
+- url: http://localhost:8080/api
+  description: 개발
+- url: https://api.morak.example.com/api
+  description: 운영 (배포 시 확정)
+tags:
+- name: 로그인과 회원
+  description: 소셜 로그인, 내 정보, 연령 확인, 탈퇴
+- name: 매칭
+  description: 조건을 골라 6인 그룹에 배정받기
+- name: 챌린지 그룹
+  description: 참여 중인 챌린지 조회와 퇴장
+- name: 일일 인증
+  description: 하루 한 번 사진으로 인증하기
+- name: 응원 스티커
+  description: 같은 그룹 멤버의 인증에 스티커 남기기
+- name: 대시보드
+  description: 그룹의 오늘 현황
+- name: 완주 리포트
+  description: 챌린지 종료 후 완주 판정 결과
+- name: 신고
+  description: 부적절한 인증·사용자·게시글 신고
+- name: 완주 게시판
+  description: 완주 기록 자랑하기
+- name: 관리자
+  description: 운영자 전용. 일반 사용자 앱에서는 호출하지 않습니다
+security:
+- bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 로그인 응답의 `accessToken`을 넣습니다. 24시간 유효합니다.
+  schemas:
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: object
+          required:
+          - code
+          - message
+          properties:
+            code:
+              type: string
+              description: 화면 분기에 쓰는 값
+              example: DUPLICATE_DAILY_PROOF
+            message:
+              type: string
+              description: 사용자에게 그대로 보여줘도 되는 문구
+              example: 오늘 인증을 이미 제출했습니다.
+            details:
+              type: object
+              additionalProperties: true
+              description: 추가 정보. 없으면 빈 객체
+    GoalCategory:
+      type: string
+      description: '목표 분야.
+
+        EXERCISE 운동 · STUDY 공부 · READING 독서 · DIET 식단 · SLEEP 수면 · ETC 기타
+
+        '
+      enum:
+      - EXERCISE
+      - STUDY
+      - READING
+      - DIET
+      - SLEEP
+      - ETC
+      example: EXERCISE
+    PeriodDays:
+      type: integer
+      description: 챌린지 기간(일)
+      enum:
+      - 30
+      - 60
+      - 100
+      example: 30
+    DailyTargetMinutes:
+      type: integer
+      description: 하루 목표 시간(분)
+      enum:
+      - 20
+      - 30
+      - 60
+      - 120
+      example: 60
+    SocialProvider:
+      type: string
+      description: 소셜 로그인 제공자. 이번 버전의 실제 연동 범위는 팀 확정 후 결정됩니다.
+      enum:
+      - KAKAO
+      - NAVER
+      - GOOGLE
+      - APPLE
+      example: KAKAO
+    MemberStatus:
+      type: string
+      description: '회원 상태.
+
+        ACTIVE 정상 · WITHDRAW_PENDING 탈퇴 신청함(철회 가능) · DELETED 탈퇴 완료
+
+        '
+      enum:
+      - ACTIVE
+      - WITHDRAW_PENDING
+      - DELETED
+    AgeVerification:
+      type: string
+      description: '연령 확인 상태.
+
+        REQUIRED 생년월일 미입력(입력 화면으로 보내야 함) · VERIFIED 확인 완료 · UNDER_AGE 만 14세 미만
+
+        '
+      enum:
+      - REQUIRED
+      - VERIFIED
+      - UNDER_AGE
+    MatchRequestStatus:
+      type: string
+      description: '매칭 요청 상태.
+
+        WAITING 대기 중 · MATCHED 그룹 생성됨 · CANCELLED 사용자가 취소 · EXPIRED 24시간 초과로 만료
+
+        '
+      enum:
+      - WAITING
+      - MATCHED
+      - CANCELLED
+      - EXPIRED
+    GroupStatus:
+      type: string
+      description: 챌린지 상태. ACTIVE 진행 중 · ENDED 종료됨
+      enum:
+      - ACTIVE
+      - ENDED
+    GroupMemberStatus:
+      type: string
+      description: '내 참여 상태.
+
+        ACTIVE 참여 중 · COMPLETED 끝까지 참여 · LEFT 중간에 나감 · REPORT_EXIT 신고하면서 나감
+
+        '
+      enum:
+      - ACTIVE
+      - LEFT
+      - REPORT_EXIT
+      - COMPLETED
+    LeftReason:
+      type: string
+      description: '자율 퇴장 사유.
+
+        PERSONAL 개인 사정 · SCHEDULE 일정이 안 맞음 · HEALTH 건강 문제 · ETC 기타
+
+        '
+      enum:
+      - PERSONAL
+      - SCHEDULE
+      - HEALTH
+      - ETC
+    ProofAiStatus:
+      type: string
+      description: '인증 처리 상태.
+
+        SCREENING 검사 중 · APPROVED 인증 완료 · PENDING_REVIEW 확인 중이지만 인증으로 인정 ·
+
+        HOLD 다시 올려야 함 · BLOCKED 차단됨
+
+        '
+      enum:
+      - SCREENING
+      - APPROVED
+      - PENDING_REVIEW
+      - HOLD
+      - BLOCKED
+    StickerType:
+      type: string
+      description: 응원 스티커. CLAP 박수 · MUSCLE 근육 · FIRE 불꽃
+      enum:
+      - CLAP
+      - MUSCLE
+      - FIRE
+    ReportTargetType:
+      type: string
+      description: 신고 대상. PROOF 인증 사진 · MEMBER 사용자 · POST 게시글
+      enum:
+      - PROOF
+      - MEMBER
+      - POST
+    ReportReasonCode:
+      type: string
+      description: '신고 사유.
+
+        INAPPROPRIATE_CONTENT 부적절한 사진 · ABUSIVE_LANGUAGE 욕설·비방 · SPAM_PROOF 도배·광고 ·
+
+        FAKE_PROOF 가짜 인증 · PRIVACY_VIOLATION 개인정보 노출 · ETC 기타
+
+        '
+      enum:
+      - INAPPROPRIATE_CONTENT
+      - ABUSIVE_LANGUAGE
+      - SPAM_PROOF
+      - FAKE_PROOF
+      - PRIVACY_VIOLATION
+      - ETC
+    ReportStatus:
+      type: string
+      description: 신고 처리 상태
+      enum:
+      - PENDING
+      - RESOLVED
+      - REJECTED
+      - SANCTIONED
+    ReportSeverity:
+      type: string
+      description: 신고 심각도
+      enum:
+      - HIGH
+      - NORMAL
+    SanctionType:
+      type: string
+      description: 제재 종류. TEMP 기간 제한 · PERMANENT 영구
+      enum:
+      - TEMP
+      - PERMANENT
+    PostStatus:
+      type: string
+      description: 게시글 상태. VISIBLE 공개 · HIDDEN 운영자가 가림 · DELETED 삭제됨
+      enum:
+      - VISIBLE
+      - HIDDEN
+      - DELETED
+    BadgeCode:
+      type: string
+      description: 완주 배지. 완주 여부와 인증률로 서버가 계산합니다
+      enum:
+      - GOLD
+      - SILVER
+      - BRONZE
+      - NONE
+    PageMeta:
+      type: object
+      description: 목록 응답의 공통 페이지 정보
+      required:
+      - page
+      - size
+      - totalElements
+      - totalPages
+      properties:
+        page:
+          type: integer
+          description: 현재 페이지. 0부터 시작
+          example: 0
+        size:
+          type: integer
+          description: 한 페이지 항목 수
+          example: 20
+        totalElements:
+          type: integer
+          description: 전체 항목 수
+          example: 137
+        totalPages:
+          type: integer
+          description: 전체 페이지 수
+          example: 7
+    MemberRole:
+      type: string
+      description: 회원 역할. PARTICIPANT 일반 참가자 · ADMIN 운영자(관리 탭 노출)
+      enum:
+      - PARTICIPANT
+      - ADMIN
+      example: PARTICIPANT
+    LoginResult:
+      type: string
+      description: '로그인 처리 결과.
+
+        NORMAL 일반 로그인 · RESTORED 탈퇴 대기 중이던 계정이 자동으로 되살아남
+
+        '
+      enum:
+      - NORMAL
+      - RESTORED
+      example: NORMAL
+    LoginRequest:
+      type: object
+      required:
+      - provider
+      - authorizationCode
+      properties:
+        provider:
+          $ref: '#/components/schemas/SocialProvider'
+        authorizationCode:
+          type: string
+          description: 소셜 로그인 후 받은 인가 코드
+          example: 0987poiuLKJH
+      example:
+        provider: KAKAO
+        authorizationCode: 0987poiuLKJH
+    LoginResponse:
+      type: object
+      required:
+      - accessToken
+      - isNewMember
+      - ageVerification
+      - loginResult
+      properties:
+        accessToken:
+          type: string
+          description: 이후 요청에 쓰는 인증 토큰. 24시간 유효하고 재발급(refresh)은 없습니다
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMDI0IiwiZXhwIjoxNzg2NTQzMjAwfQ.9sQ0mQx3Yb1nJ2kTfVQ7hZa5cR8dLpEwUu4Ns6MgKvI
+        isNewMember:
+          type: boolean
+          description: 이번 요청으로 새로 가입했는지
+          example: false
+        ageVerification:
+          $ref: '#/components/schemas/AgeVerification'
+        loginResult:
+          $ref: '#/components/schemas/LoginResult'
+      example:
+        accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMDI0IiwiZXhwIjoxNzg2NTQzMjAwfQ.9sQ0mQx3Yb1nJ2kTfVQ7hZa5cR8dLpEwUu4Ns6MgKvI
+        isNewMember: false
+        ageVerification: VERIFIED
+        loginResult: NORMAL
+    Sanction:
+      type: object
+      description: 제재 정보. 제재가 없으면 `sanction` 자체가 `null`입니다
+      required:
+      - active
+      - endsAt
+      properties:
+        active:
+          type: boolean
+          description: 지금 유효한 제재인지
+          example: true
+        endsAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 제재가 풀리는 시각. 영구 제재면 `null`
+          example: '2026-08-19T14:30:00+09:00'
+      example:
+        active: true
+        endsAt: '2026-08-19T14:30:00+09:00'
+    MemberMeResponse:
+      type: object
+      required:
+      - memberId
+      - nickname
+      - role
+      - ageVerification
+      - memberStatus
+      - mediaConsented
+      - sanction
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 회원 식별자
+          example: 1024
+        nickname:
+          type: string
+          description: 표시용 닉네임. 다른 사람에게 보이는 이름입니다
+          example: 익명 토끼47
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        ageVerification:
+          $ref: '#/components/schemas/AgeVerification'
+        memberStatus:
+          allOf:
+          - $ref: '#/components/schemas/MemberStatus'
+          description: 이 API에서는 `ACTIVE` 또는 `WITHDRAW_PENDING`만 내려옵니다
+        mediaConsented:
+          type: boolean
+          description: 촬영물 처리에 동의했는지
+          example: true
+        sanction:
+          type: object
+          allOf:
+          - $ref: '#/components/schemas/Sanction'
+          nullable: true
+          description: 제재 정보. 제재가 없으면 `null`
+      example:
+        memberId: 1024
+        nickname: 익명 토끼47
+        role: PARTICIPANT
+        ageVerification: VERIFIED
+        memberStatus: ACTIVE
+        mediaConsented: true
+        sanction: null
+    BirthDateRequest:
+      type: object
+      required:
+      - birthDate
+      properties:
+        birthDate:
+          type: string
+          format: date
+          description: 생년월일. `YYYY-MM-DD` 형식
+          example: '2005-03-01'
+      example:
+        birthDate: '2005-03-01'
+    AgeVerificationResponse:
+      type: object
+      required:
+      - ageVerification
+      properties:
+        ageVerification:
+          allOf:
+          - $ref: '#/components/schemas/AgeVerification'
+          description: 검증 결과. 이 응답에서는 `VERIFIED` 또는 `UNDER_AGE`만 내려옵니다
+      example:
+        ageVerification: VERIFIED
+    WithdrawalResponse:
+      type: object
+      required:
+      - deleteScheduledAt
+      properties:
+        deleteScheduledAt:
+          type: string
+          format: date-time
+          description: 계정이 실제로 삭제되는 시각. 신청 시점부터 30일 뒤입니다
+          example: '2026-09-11T14:30:00+09:00'
+      example:
+        deleteScheduledAt: '2026-09-11T14:30:00+09:00'
+    MatchRequestCreateRequest:
+      type: object
+      required:
+      - category
+      - dailyTargetMinutes
+      - periodDays
+      properties:
+        category:
+          $ref: '#/components/schemas/GoalCategory'
+        dailyTargetMinutes:
+          $ref: '#/components/schemas/DailyTargetMinutes'
+        periodDays:
+          $ref: '#/components/schemas/PeriodDays'
+        rejoinFromGroupId:
+          type: integer
+          format: int64
+          description: 이전 그룹에 이어서 다시 참여하는 경우 그 그룹의 식별자. 선택 항목
+          example: 12
+      example:
+        category: EXERCISE
+        dailyTargetMinutes: 60
+        periodDays: 30
+        rejoinFromGroupId: 12
+    MatchRequestCreateResponse:
+      type: object
+      required:
+      - matchRequestId
+      - status
+      - requestedAt
+      - expiresAt
+      properties:
+        matchRequestId:
+          type: integer
+          format: int64
+          description: 매칭 요청 식별자. 취소할 때 씁니다
+          example: 5821
+        status:
+          allOf:
+          - $ref: '#/components/schemas/MatchRequestStatus'
+          description: '이 응답에서는 `WAITING`(대기 중) 또는 `MATCHED`(그 자리에서 6명이 채워져 성사됨)만 내려옵니다
+
+            '
+        requestedAt:
+          type: string
+          format: date-time
+          description: 요청한 시각
+          example: '2026-08-12T14:30:00+09:00'
+        expiresAt:
+          type: string
+          format: date-time
+          description: 요청이 만료되는 시각. 요청 시각으로부터 24시간 뒤
+          example: '2026-08-13T14:30:00+09:00'
+        groupId:
+          type: integer
+          format: int64
+          description: 성사됐을 때만 옵니다. 만들어진 그룹의 식별자
+          example: 12
+      example:
+        matchRequestId: 5821
+        status: WAITING
+        requestedAt: '2026-08-12T14:30:00+09:00'
+        expiresAt: '2026-08-13T14:30:00+09:00'
+    MatchConditions:
+      type: object
+      description: 매칭 요청할 때 고른 조건
+      required:
+      - category
+      - dailyTargetMinutes
+      - periodDays
+      properties:
+        category:
+          $ref: '#/components/schemas/GoalCategory'
+        dailyTargetMinutes:
+          $ref: '#/components/schemas/DailyTargetMinutes'
+        periodDays:
+          $ref: '#/components/schemas/PeriodDays'
+      example:
+        category: EXERCISE
+        dailyTargetMinutes: 60
+        periodDays: 30
+    MyMatchRequestResponse:
+      type: object
+      required:
+      - matchRequestId
+      - status
+      - requestedAt
+      - expiresAt
+      - groupId
+      - conditions
+      - waitingCount
+      - requiredCount
+      properties:
+        matchRequestId:
+          type: integer
+          format: int64
+          description: 매칭 요청 식별자
+          example: 5821
+        status:
+          allOf:
+          - $ref: '#/components/schemas/MatchRequestStatus'
+          description: 이 응답에서는 `WAITING` 또는 `MATCHED`만 내려옵니다
+        requestedAt:
+          type: string
+          format: date-time
+          description: 요청한 시각
+          example: '2026-08-12T14:30:00+09:00'
+        expiresAt:
+          type: string
+          format: date-time
+          description: 요청이 만료되는 시각
+          example: '2026-08-13T14:30:00+09:00'
+        groupId:
+          type: integer
+          format: int64
+          nullable: true
+          description: 성사됐으면 만들어진 그룹의 식별자, 대기 중이면 `null`
+          example: null
+        conditions:
+          $ref: '#/components/schemas/MatchConditions'
+        waitingCount:
+          type: integer
+          description: 같은 조건으로 지금 기다리고 있는 사람 수
+          example: 4
+        requiredCount:
+          type: integer
+          description: 그룹이 만들어지는 데 필요한 인원. 항상 `6`
+          example: 6
+      example:
+        matchRequestId: 5821
+        status: WAITING
+        requestedAt: '2026-08-12T14:30:00+09:00'
+        expiresAt: '2026-08-13T14:30:00+09:00'
+        groupId: null
+        conditions:
+          category: EXERCISE
+          dailyTargetMinutes: 60
+          periodDays: 30
+        waitingCount: 4
+        requiredCount: 6
+    GroupStatusFilter:
+      type: string
+      description: 내 그룹 목록을 거르는 챌린지 상태. ACTIVE 진행 중 · ENDED 종료됨
+      enum:
+      - ACTIVE
+      - ENDED
+      example: ACTIVE
+    ProofMethod:
+      type: string
+      description: 인증 방식. PHOTO 사진 업로드 · LIVE_CAM 즉석 촬영
+      enum:
+      - PHOTO
+      - LIVE_CAM
+      example: PHOTO
+    ProofStatus:
+      type: string
+      description: '화면에 표시하는 인증 상태.
+
+        본인 행은 `SCREENING` `APPROVED` `PENDING_REVIEW` `HOLD` `BLOCKED` 중 하나이고,
+
+        다른 멤버 행은 `APPROVED`(승인된 인증) 또는 `NONE`(그 외 전부)만 내려옵니다.
+
+        '
+      enum:
+      - SCREENING
+      - APPROVED
+      - PENDING_REVIEW
+      - HOLD
+      - BLOCKED
+      - NONE
+      example: APPROVED
+    StickerCounts:
+      type: object
+      description: 스티커 종류별 개수. 키는 `CLAP` `MUSCLE` `FIRE`
+      properties:
+        CLAP:
+          type: integer
+          description: 박수 개수
+          example: 3
+        MUSCLE:
+          type: integer
+          description: 근육 개수
+          example: 1
+        FIRE:
+          type: integer
+          description: 불꽃 개수
+          example: 2
+      example:
+        CLAP: 3
+        MUSCLE: 1
+        FIRE: 2
+    MyReactions:
+      type: array
+      description: 내가 누른 스티커 종류
+      items:
+        $ref: '#/components/schemas/StickerType'
+      example:
+      - CLAP
+      - FIRE
+    GroupSummary:
+      type: object
+      description: 내 그룹 목록의 한 항목
+      required:
+      - groupId
+      - name
+      - category
+      - dailyTargetMinutes
+      - periodDays
+      - startDate
+      - endDate
+      - status
+      - memberCount
+      - membershipStatus
+      - remainingDays
+      properties:
+        groupId:
+          type: integer
+          format: int64
+          description: 그룹 ID
+          example: 12
+        name:
+          type: string
+          description: 그룹명. `"공부 30일 챌린지"` 형태
+          example: 공부 30일 챌린지
+        category:
+          $ref: '#/components/schemas/GoalCategory'
+        dailyTargetMinutes:
+          $ref: '#/components/schemas/DailyTargetMinutes'
+        periodDays:
+          $ref: '#/components/schemas/PeriodDays'
+        startDate:
+          type: string
+          format: date
+          description: 시작일
+          example: '2026-08-01'
+        endDate:
+          type: string
+          format: date
+          description: 종료일. `시작일 + periodDays - 1`
+          example: '2026-08-30'
+        status:
+          $ref: '#/components/schemas/GroupStatus'
+        memberCount:
+          type: integer
+          description: 현재 참여 중인 인원 수. 현재 참여 중(ACTIVE)인 인원이라 종료된 챌린지에서는 0으로 옵니다
+          example: 5
+        membershipStatus:
+          $ref: '#/components/schemas/GroupMemberStatus'
+        remainingDays:
+          type: integer
+          description: 남은 일수
+          example: 19
+      example:
+        groupId: 12
+        name: 공부 30일 챌린지
+        category: STUDY
+        dailyTargetMinutes: 60
+        periodDays: 30
+        startDate: '2026-08-01'
+        endDate: '2026-08-30'
+        status: ACTIVE
+        memberCount: 5
+        membershipStatus: ACTIVE
+        remainingDays: 19
+    MyGroupsResponse:
+      type: object
+      description: 내 그룹 목록 응답
+      required:
+      - groups
+      properties:
+        groups:
+          type: array
+          description: 그룹 목록. 참여했던 모든 챌린지
+          items:
+            $ref: '#/components/schemas/GroupSummary'
+      example:
+        groups:
+        - groupId: 12
+          name: 공부 30일 챌린지
+          category: STUDY
+          dailyTargetMinutes: 60
+          periodDays: 30
+          startDate: '2026-08-01'
+          endDate: '2026-08-30'
+          status: ACTIVE
+          memberCount: 5
+          membershipStatus: ACTIVE
+          remainingDays: 19
+        - groupId: 7
+          name: 운동 30일 챌린지
+          category: EXERCISE
+          dailyTargetMinutes: 30
+          periodDays: 30
+          startDate: '2026-06-01'
+          endDate: '2026-06-30'
+          status: ENDED
+          memberCount: 0
+          membershipStatus: COMPLETED
+          remainingDays: 0
+    GroupDetailMember:
+      type: object
+      description: 그룹 상세의 멤버 한 명
+      required:
+      - memberId
+      - nickname
+      - isMe
+      - membershipStatus
+      - proofStatus
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 회원 ID
+          example: 501
+        nickname:
+          type: string
+          description: 표시용 익명 닉네임
+          example: 익명 토끼47
+        isMe:
+          type: boolean
+          description: 본인 여부
+          example: true
+        membershipStatus:
+          $ref: '#/components/schemas/GroupMemberStatus'
+        proofStatus:
+          allOf:
+          - $ref: '#/components/schemas/ProofStatus'
+          description: '오늘 인증 상태. 본인은 `SCREENING` `APPROVED` `PENDING_REVIEW` `HOLD` `BLOCKED`,
+
+            다른 멤버는 `APPROVED` `NONE`만 내려옵니다
+
+            '
+      example:
+        memberId: 501
+        nickname: 익명 토끼47
+        isMe: true
+        membershipStatus: ACTIVE
+        proofStatus: APPROVED
+    GroupDetailResponse:
+      type: object
+      description: 그룹 상세 응답
+      required:
+      - groupId
+      - name
+      - category
+      - dailyTargetMinutes
+      - periodDays
+      - startDate
+      - endDate
+      - remainingDays
+      - status
+      - memberCount
+      - members
+      properties:
+        groupId:
+          type: integer
+          format: int64
+          description: 그룹 ID
+          example: 12
+        name:
+          type: string
+          description: 그룹명
+          example: 공부 30일 챌린지
+        category:
+          $ref: '#/components/schemas/GoalCategory'
+        dailyTargetMinutes:
+          $ref: '#/components/schemas/DailyTargetMinutes'
+        periodDays:
+          $ref: '#/components/schemas/PeriodDays'
+        startDate:
+          type: string
+          format: date
+          description: 시작일
+          example: '2026-08-01'
+        endDate:
+          type: string
+          format: date
+          description: 종료일
+          example: '2026-08-30'
+        remainingDays:
+          type: integer
+          description: 남은 일수
+          example: 19
+        status:
+          $ref: '#/components/schemas/GroupStatus'
+        memberCount:
+          type: integer
+          description: 참여 중(`ACTIVE`)인 인원 수. 퇴장자·완주자는 세지 않습니다. 현재 참여 중(ACTIVE)인 인원이라 종료된 챌린지에서는 0으로 옵니다
+          example: 5
+        members:
+          type: array
+          description: '멤버 목록. 진행 중인 그룹은 `ACTIVE` 멤버만,
+
+            종료된 그룹은 `COMPLETED` `LEFT` `REPORT_EXIT` 전원이 담깁니다
+
+            '
+          items:
+            $ref: '#/components/schemas/GroupDetailMember'
+      example:
+        groupId: 12
+        name: 공부 30일 챌린지
+        category: STUDY
+        dailyTargetMinutes: 60
+        periodDays: 30
+        startDate: '2026-08-01'
+        endDate: '2026-08-30'
+        remainingDays: 19
+        status: ACTIVE
+        memberCount: 5
+        members:
+        - memberId: 501
+          nickname: 익명 토끼47
+          isMe: true
+          membershipStatus: ACTIVE
+          proofStatus: APPROVED
+        - memberId: 502
+          nickname: 익명 여우12
+          isMe: false
+          membershipStatus: ACTIVE
+          proofStatus: NONE
+    LeaveGroupRequest:
+      type: object
+      description: 자율 퇴장 요청
+      required:
+      - reason
+      properties:
+        reason:
+          allOf:
+          - $ref: '#/components/schemas/LeftReason'
+          description: 퇴장 사유. 사용자가 고른 값. `WITHDRAWAL` `SANCTION`은 서버 내부 사유라 보낼 수 없습니다
+      example:
+        reason: SCHEDULE
+    MediaConsentRequest:
+      type: object
+      description: 촬영물 처리 동의 요청
+      required:
+      - agreed
+      properties:
+        agreed:
+          type: boolean
+          description: '`true`만 허용합니다. `false`를 보내면 400 `VALIDATION_FAILED`'
+          enum:
+          - true
+          example: true
+      example:
+        agreed: true
+    ProofSubmitApprovedResponse:
+      type: object
+      description: 인증이 접수되고 판정까지 끝난 경우(201)의 응답
+      required:
+      - proofId
+      - proofDate
+      - aiStatus
+      properties:
+        proofId:
+          type: integer
+          format: int64
+          description: 등록된 인증 ID
+          example: 3401
+        proofDate:
+          type: string
+          format: date
+          description: 인증 일자
+          example: '2026-08-12'
+        aiStatus:
+          allOf:
+          - $ref: '#/components/schemas/ProofAiStatus'
+          description: '`APPROVED`(인증 완료) 또는 `PENDING_REVIEW`(검토 중이지만 인증으로 인정)'
+      example:
+        proofId: 3401
+        proofDate: '2026-08-12'
+        aiStatus: APPROVED
+    ProofSubmitHoldResponse:
+      type: object
+      description: 인증이 접수됐지만 인정되지 않은 경우(200)의 응답. 오늘 다시 제출할 수 있습니다
+      required:
+      - proofId
+      - aiStatus
+      - guide
+      properties:
+        proofId:
+          type: integer
+          format: int64
+          description: 등록된 인증 ID
+          example: 3402
+        aiStatus:
+          allOf:
+          - $ref: '#/components/schemas/ProofAiStatus'
+          description: '`HOLD` 고정'
+        guide:
+          type: string
+          description: 재촬영 안내 문구. 그대로 화면에 띄우면 됩니다
+          example: 목표를 확인할 수 있게 밝은 곳에서 다시 촬영해 주세요.
+      example:
+        proofId: 3402
+        aiStatus: HOLD
+        guide: 목표를 확인할 수 있게 밝은 곳에서 다시 촬영해 주세요.
+    DailyProof:
+      type: object
+      description: 해당 일자의 인증 정보
+      required:
+      - proofId
+      - method
+      - submittedAt
+      - mediaViewable
+      - stickerCounts
+      - myReactions
+      properties:
+        proofId:
+          type: integer
+          format: int64
+          description: 인증 ID
+          example: 3401
+        method:
+          $ref: '#/components/schemas/ProofMethod'
+        submittedAt:
+          type: string
+          format: date-time
+          description: 제출 시각
+          example: '2026-08-12T14:30:00+09:00'
+        mediaViewable:
+          type: boolean
+          description: 사진을 열람할 수 있는지 여부. `true`일 때만 `getProofMedia`를 호출하세요
+          example: true
+        stickerCounts:
+          $ref: '#/components/schemas/StickerCounts'
+        myReactions:
+          $ref: '#/components/schemas/MyReactions'
+      example:
+        proofId: 3401
+        method: PHOTO
+        submittedAt: '2026-08-12T14:30:00+09:00'
+        mediaViewable: true
+        stickerCounts:
+          CLAP: 3
+          MUSCLE: 1
+          FIRE: 2
+        myReactions:
+        - CLAP
+        - FIRE
+    DailyProofMember:
+      type: object
+      description: 일자별 인증 조회의 멤버 한 명
+      required:
+      - memberId
+      - nickname
+      - membershipStatus
+      - proofStatus
+      - proof
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 회원 ID
+          example: 501
+        nickname:
+          type: string
+          description: 표시용 익명 닉네임
+          example: 익명 토끼47
+        membershipStatus:
+          $ref: '#/components/schemas/GroupMemberStatus'
+        proofStatus:
+          allOf:
+          - $ref: '#/components/schemas/ProofStatus'
+          description: 해당 일자 인증 상태. 다른 멤버는 승인된 것만 보이고 그 외에는 `NONE`
+        proof:
+          type: object
+          allOf:
+          - $ref: '#/components/schemas/DailyProof'
+          nullable: true
+          description: 인증 정보. 없으면 `null`
+      example:
+        memberId: 501
+        nickname: 익명 토끼47
+        membershipStatus: ACTIVE
+        proofStatus: APPROVED
+        proof:
+          proofId: 3401
+          method: PHOTO
+          submittedAt: '2026-08-12T14:30:00+09:00'
+          mediaViewable: true
+          stickerCounts:
+            CLAP: 3
+            MUSCLE: 1
+            FIRE: 2
+          myReactions:
+          - CLAP
+          - FIRE
+    ProofsByDateResponse:
+      type: object
+      description: 일자별 인증 조회 응답
+      required:
+      - date
+      - members
+      properties:
+        date:
+          type: string
+          format: date
+          description: 조회한 일자
+          example: '2026-08-12'
+        members:
+          type: array
+          description: 멤버별 인증 현황. 퇴장자와 완주자도 포함됩니다
+          items:
+            $ref: '#/components/schemas/DailyProofMember'
+      example:
+        date: '2026-08-12'
+        members:
+        - memberId: 501
+          nickname: 익명 토끼47
+          membershipStatus: ACTIVE
+          proofStatus: APPROVED
+          proof:
+            proofId: 3401
+            method: PHOTO
+            submittedAt: '2026-08-12T14:30:00+09:00'
+            mediaViewable: true
+            stickerCounts:
+              CLAP: 3
+              MUSCLE: 1
+              FIRE: 2
+            myReactions:
+            - CLAP
+            - FIRE
+        - memberId: 502
+          nickname: 익명 여우12
+          membershipStatus: ACTIVE
+          proofStatus: NONE
+          proof: null
+        - memberId: 503
+          nickname: 익명 곰03
+          membershipStatus: LEFT
+          proofStatus: NONE
+          proof: null
+    ProofMediaUrlResponse:
+      type: object
+      description: 촬영물 열람 URL 발급 응답
+      required:
+      - url
+      - expiresInSeconds
+      properties:
+        url:
+          type: string
+          description: '이미지 스트리밍 경로. `/api/proofs/{proofId}/media/raw?t={token}` 형태입니다.
+
+            **그대로 `<img src>`에 넣으세요.** 직접 조립하지 마세요
+
+            '
+          example: /api/proofs/3401/media/raw?t=eyJhbGciOiJIUzI1NiJ9.bWVkaWEtMzQwMQ.9xQe1sVbKk
+        expiresInSeconds:
+          type: integer
+          description: URL 유효 시간(초). 300
+          example: 300
+      example:
+        url: /api/proofs/3401/media/raw?t=eyJhbGciOiJIUzI1NiJ9.bWVkaWEtMzQwMQ.9xQe1sVbKk
+        expiresInSeconds: 300
+    StickerToggleRequest:
+      type: object
+      description: 스티커 토글 요청
+      required:
+      - stickerType
+      properties:
+        stickerType:
+          allOf:
+          - $ref: '#/components/schemas/StickerType'
+          description: 붙이거나 뗄 스티커 종류. 같은 종류를 다시 보내면 떼집니다
+      example:
+        stickerType: CLAP
+    StickerSummaryResponse:
+      type: object
+      description: 스티커 집계 응답
+      required:
+      - total
+      - byType
+      - myReactions
+      properties:
+        total:
+          type: integer
+          description: 전체 스티커 개수
+          example: 6
+        byType:
+          $ref: '#/components/schemas/StickerCounts'
+        myReactions:
+          $ref: '#/components/schemas/MyReactions'
+      example:
+        total: 6
+        byType:
+          CLAP: 3
+          MUSCLE: 1
+          FIRE: 2
+        myReactions:
+        - CLAP
+        - FIRE
+    DashboardMy:
+      type: object
+      description: 내 인증 집계
+      required:
+      - provedDays
+      - totalDays
+      - proofRate
+      properties:
+        provedDays:
+          type: integer
+          description: 인증에 성공한 일수
+          example: 12
+        totalDays:
+          type: integer
+          description: 챌린지 전체 일수. `periodDays`와 같습니다
+          example: 14
+        proofRate:
+          type: number
+          format: double
+          description: 인증률. `provedDays ÷ totalDays`. 분모는 항상 챌린지 전체 일수입니다(경과 일수가 아님)
+          example: 0.8571
+      example:
+        provedDays: 12
+        totalDays: 30
+        proofRate: 0.4
+    DashboardDailyStatus:
+      type: object
+      description: 멤버의 하루치 인증 상태
+      required:
+      - date
+      - proofStatus
+      properties:
+        date:
+          type: string
+          format: date
+          description: 일자
+          example: '2026-08-12'
+        proofStatus:
+          allOf:
+          - $ref: '#/components/schemas/ProofStatus'
+          description: 해당 일자 인증 상태. 타인 행은 승인된 것만 노출되고 나머지는 `NONE`
+      example:
+        date: '2026-08-12'
+        proofStatus: APPROVED
+    DashboardMember:
+      type: object
+      description: 멤버별 현황
+      required:
+      - memberId
+      - nickname
+      - membershipStatus
+      - dailyStatuses
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 회원 ID
+          example: 501
+        nickname:
+          type: string
+          description: 표시용 익명 닉네임
+          example: 익명 토끼47
+        membershipStatus:
+          $ref: '#/components/schemas/GroupMemberStatus'
+        dailyStatuses:
+          type: array
+          description: 일자별 인증 상태
+          items:
+            $ref: '#/components/schemas/DashboardDailyStatus'
+      example:
+        memberId: 501
+        nickname: 익명 토끼47
+        membershipStatus: ACTIVE
+        dailyStatuses:
+        - date: '2026-08-10'
+          proofStatus: APPROVED
+        - date: '2026-08-11'
+          proofStatus: NONE
+        - date: '2026-08-12'
+          proofStatus: APPROVED
+    DashboardGroupDaily:
+      type: object
+      description: 날짜별 그룹 집계
+      required:
+      - date
+      - provedCount
+      properties:
+        date:
+          type: string
+          format: date
+          description: 일자
+          example: '2026-08-12'
+        provedCount:
+          type: integer
+          description: 그날 인증한 인원 수
+          example: 4
+      example:
+        date: '2026-08-12'
+        provedCount: 4
+    DashboardResponse:
+      type: object
+      description: 그룹 대시보드 응답. 순위·등수 필드는 없습니다
+      required:
+      - my
+      - members
+      - groupDaily
+      properties:
+        my:
+          $ref: '#/components/schemas/DashboardMy'
+        members:
+          type: array
+          description: 멤버별 현황
+          items:
+            $ref: '#/components/schemas/DashboardMember'
+        groupDaily:
+          type: array
+          description: 날짜별 그룹 집계
+          items:
+            $ref: '#/components/schemas/DashboardGroupDaily'
+      example:
+        my:
+          provedDays: 12
+          totalDays: 30
+          proofRate: 0.4
+        members:
+        - memberId: 501
+          nickname: 익명 토끼47
+          membershipStatus: ACTIVE
+          dailyStatuses:
+          - date: '2026-08-10'
+            proofStatus: APPROVED
+          - date: '2026-08-11'
+            proofStatus: NONE
+          - date: '2026-08-12'
+            proofStatus: APPROVED
+        - memberId: 502
+          nickname: 익명 여우12
+          membershipStatus: ACTIVE
+          dailyStatuses:
+          - date: '2026-08-10'
+            proofStatus: APPROVED
+          - date: '2026-08-11'
+            proofStatus: APPROVED
+          - date: '2026-08-12'
+            proofStatus: NONE
+        groupDaily:
+        - date: '2026-08-10'
+          provedCount: 5
+        - date: '2026-08-11'
+          provedCount: 3
+        - date: '2026-08-12'
+          provedCount: 4
+    ReportProofStatus:
+      type: string
+      description: '리포트 격자에 표시되는 일자별 인증 상태.
+
+        `NONE`은 그 날 인정된 인증이 없다는 뜻입니다. 본인 행에는 처리 중 상태도 나올 수 있습니다.
+
+        (공통 `ProofAiStatus`에 `NONE`이 없어 리포트 전용으로 따로 둡니다.)
+
+        '
+      enum:
+      - APPROVED
+      - NONE
+      - SCREENING
+      - PENDING_REVIEW
+      - HOLD
+      - BLOCKED
+      example: APPROVED
+    ReportPersonal:
+      type: object
+      description: 내 완주 집계
+      required:
+      - provedDays
+      - totalDays
+      - proofRate
+      - criteriaMet
+      properties:
+        provedDays:
+          type: integer
+          description: 내가 인증한 날 수
+          example: 86
+        totalDays:
+          type: integer
+          description: 챌린지 전체 일수
+          example: 100
+        proofRate:
+          type: number
+          format: double
+          description: 내 인증률. `provedDays ÷ totalDays`. 0.0 ~ 1.0
+          example: 0.86
+        criteriaMet:
+          type: boolean
+          description: 개인 기준(`criteria.personalProofRate`) 충족 여부
+          example: true
+      example:
+        provedDays: 86
+        totalDays: 100
+        proofRate: 0.86
+        criteriaMet: true
+    ReportGroup:
+      type: object
+      description: 그룹 완주 집계
+      required:
+      - avgProofRate
+      - criteriaMet
+      - avgDenominator
+      properties:
+        avgProofRate:
+          type: number
+          format: double
+          description: 그룹 평균 인증률. 0.0 ~ 1.0
+          example: 0.8571
+        criteriaMet:
+          type: boolean
+          description: 그룹 기준(`criteria.groupAvgProofRate`) 충족 여부
+          example: true
+        avgDenominator:
+          type: integer
+          description: 그룹 평균을 낸 인원 수. **그룹 상세의 `memberCount`와 다른 값입니다.**
+          example: 5
+      example:
+        avgProofRate: 0.8571
+        criteriaMet: true
+        avgDenominator: 5
+    ReportCriteria:
+      type: object
+      description: 완주 판정 기준선. 서버가 정하며 프론트는 표시만 합니다.
+      required:
+      - personalProofRate
+      - groupAvgProofRate
+      properties:
+        personalProofRate:
+          type: number
+          format: double
+          description: 개인 기준선. 이 값 이상이어야 개인 기준 충족
+          example: 0.8
+        groupAvgProofRate:
+          type: number
+          format: double
+          description: 그룹 기준선. 이 값 이상이어야 그룹 기준 충족
+          example: 0.7
+      example:
+        personalProofRate: 0.7
+        groupAvgProofRate: 0.6
+    ReportDailyMember:
+      type: object
+      description: 특정 날짜의 한 멤버 인증 상태
+      required:
+      - memberId
+      - proofStatus
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 멤버 ID
+          example: 2481
+        proofStatus:
+          $ref: '#/components/schemas/ReportProofStatus'
+      example:
+        memberId: 2481
+        proofStatus: APPROVED
+    ReportDailyGridEntry:
+      type: object
+      description: 날짜 하나에 대한 전원 인증 현황
+      required:
+      - date
+      - members
+      properties:
+        date:
+          type: string
+          format: date
+          description: 일자
+          example: '2026-08-12'
+        members:
+          type: array
+          description: 그 날짜의 멤버별 인증 상태
+          items:
+            $ref: '#/components/schemas/ReportDailyMember'
+      example:
+        date: '2026-08-12'
+        members:
+        - memberId: 2481
+          proofStatus: APPROVED
+        - memberId: 2482
+          proofStatus: NONE
+        - memberId: 2483
+          proofStatus: APPROVED
+    ReportMemberSummary:
+      type: object
+      description: 멤버별 최종 요약
+      required:
+      - memberId
+      - nickname
+      - provedDays
+      - proofRate
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 멤버 ID
+          example: 2481
+        nickname:
+          type: string
+          description: 표시용 닉네임
+          example: 익명 토끼47
+        provedDays:
+          type: integer
+          description: 그 멤버가 인증한 날 수
+          example: 86
+        proofRate:
+          type: number
+          format: double
+          description: 그 멤버의 인증률. 0.0 ~ 1.0
+          example: 0.86
+      example:
+        memberId: 2481
+        nickname: 익명 토끼47
+        provedDays: 86
+        proofRate: 0.86
+    FinalReportResponse:
+      type: object
+      description: 완주 리포트 전체
+      required:
+      - personal
+      - group
+      - completed
+      - badgeCode
+      - criteria
+      - dailyGrid
+      - memberSummary
+      properties:
+        personal:
+          $ref: '#/components/schemas/ReportPersonal'
+        group:
+          $ref: '#/components/schemas/ReportGroup'
+        completed:
+          type: boolean
+          description: 완주 여부. **개인 기준과 그룹 기준을 모두 충족해야 `true`**
+          example: true
+        badgeCode:
+          $ref: '#/components/schemas/BadgeCode'
+        criteria:
+          $ref: '#/components/schemas/ReportCriteria'
+        dailyGrid:
+          type: array
+          description: 날짜별 전원 인증 현황. 챌린지 시작일부터 종료일까지 하루도 빠짐없이 들어옵니다.
+          items:
+            $ref: '#/components/schemas/ReportDailyGridEntry'
+        memberSummary:
+          type: array
+          description: 멤버별 최종 요약
+          items:
+            $ref: '#/components/schemas/ReportMemberSummary'
+      example:
+        personal:
+          provedDays: 86
+          totalDays: 100
+          proofRate: 0.86
+          criteriaMet: true
+        group:
+          avgProofRate: 0.8571
+          criteriaMet: true
+          avgDenominator: 5
+        completed: true
+        badgeCode: SILVER
+        criteria:
+          personalProofRate: 0.7
+          groupAvgProofRate: 0.6
+        dailyGrid:
+        - date: '2026-08-11'
+          members:
+          - memberId: 2481
+            proofStatus: APPROVED
+          - memberId: 2482
+            proofStatus: APPROVED
+        - date: '2026-08-12'
+          members:
+          - memberId: 2481
+            proofStatus: APPROVED
+          - memberId: 2482
+            proofStatus: NONE
+        memberSummary:
+        - memberId: 2481
+          nickname: 익명 토끼47
+          provedDays: 86
+          proofRate: 0.86
+        - memberId: 2482
+          nickname: 익명 여우12
+          provedDays: 85
+          proofRate: 0.85
+    CreateReportRequest:
+      type: object
+      description: 신고 접수 요청
+      required:
+      - targetType
+      - targetId
+      - reasonCode
+      properties:
+        targetType:
+          $ref: '#/components/schemas/ReportTargetType'
+        targetId:
+          type: integer
+          format: int64
+          description: '신고 대상 ID. `targetType`에 맞는 ID를 넣습니다.
+
+            `PROOF`면 `proofId`, `MEMBER`면 `memberId`, `POST`면 `postId`입니다.
+
+            '
+          example: 3401
+        reasonCode:
+          $ref: '#/components/schemas/ReportReasonCode'
+        detail:
+          type: string
+          description: 신고 상세 내용. 위험한 표현이 들어 있으면 그 내용만 제거되고 접수는 그대로 진행됩니다.
+          maxLength: 500
+          example: 인증 사진이 목표와 전혀 관계없는 사진입니다.
+      example:
+        targetType: PROOF
+        targetId: 3401
+        reasonCode: FAKE_PROOF
+        detail: 인증 사진이 목표와 전혀 관계없는 사진입니다.
+    CreateReportResponse:
+      type: object
+      description: 접수된 신고 케이스
+      required:
+      - caseId
+      - severity
+      - receivedAt
+      properties:
+        caseId:
+          type: integer
+          format: int64
+          description: 접수된 신고 케이스 ID. 같은 대상에 여러 명이 신고하면 같은 케이스로 묶입니다.
+          example: 907
+        severity:
+          $ref: '#/components/schemas/ReportSeverity'
+        receivedAt:
+          type: string
+          format: date-time
+          description: 접수 시각
+          example: '2026-08-12T14:30:00+09:00'
+      example:
+        caseId: 907
+        severity: HIGH
+        receivedAt: '2026-08-12T14:30:00+09:00'
+    CreatePostRequest:
+      type: object
+      description: 게시글 작성 요청
+      required:
+      - groupId
+      properties:
+        groupId:
+          type: integer
+          format: int64
+          description: 후기를 쓸 챌린지 ID. 완주 리포트가 만들어진 챌린지여야 합니다.
+          example: 12
+        comment:
+          type: string
+          description: 한 줄 후기. 200자 이하. 연락처·계정·링크가 들어가면 422 `CONTENT_BLOCKED`가 납니다.
+          maxLength: 200
+          example: 100일 동안 하루도 안 빠지고 달렸습니다
+      example:
+        groupId: 12
+        comment: 100일 동안 하루도 안 빠지고 달렸습니다
+    CreatePostResponse:
+      type: object
+      description: 생성된 게시글
+      required:
+      - postId
+      - createdAt
+      properties:
+        postId:
+          type: integer
+          format: int64
+          description: 생성된 게시글 ID
+          example: 512
+        createdAt:
+          type: string
+          format: date-time
+          description: 작성 시각
+          example: '2026-08-12T14:30:00+09:00'
+      example:
+        postId: 512
+        createdAt: '2026-08-12T14:30:00+09:00'
+    PostSummary:
+      type: object
+      description: 게시판 목록에 나오는 게시글 한 건
+      required:
+      - postId
+      - authorAlias
+      - category
+      - periodDays
+      - provedDays
+      - proofRate
+      - completed
+      - badgeCode
+      - likeCount
+      - myLiked
+      - createdDate
+      properties:
+        postId:
+          type: integer
+          format: int64
+          description: 게시글 ID
+          example: 512
+        authorAlias:
+          type: string
+          description: 작성자 별칭. **그룹 화면에서 쓰던 닉네임과 다른 값입니다.**
+          example: 익명 토끼47
+        category:
+          $ref: '#/components/schemas/GoalCategory'
+        periodDays:
+          type: integer
+          description: 챌린지 기간(일). 30 / 60 / 100
+          enum:
+          - 30
+          - 60
+          - 100
+          example: 100
+        provedDays:
+          type: integer
+          description: 인증한 날 수
+          example: 86
+        proofRate:
+          type: number
+          format: double
+          description: 인증률. 0.0 ~ 1.0
+          example: 0.86
+        completed:
+          type: boolean
+          description: 완주 여부
+          example: true
+        badgeCode:
+          $ref: '#/components/schemas/BadgeCode'
+        comment:
+          type: string
+          description: 한 줄 후기. 작성 시 비웠으면 빈 문자열로 옵니다.
+          example: 100일 동안 하루도 안 빠지고 달렸습니다
+        likeCount:
+          type: integer
+          description: 좋아요 수
+          example: 23
+        myLiked:
+          type: boolean
+          description: 내가 좋아요를 눌렀는지
+          example: false
+        createdDate:
+          type: string
+          format: date
+          description: 작성 일자. **시·분은 내려오지 않습니다.**
+          example: '2026-08-12'
+      example:
+        postId: 512
+        authorAlias: 익명 토끼47
+        category: EXERCISE
+        periodDays: 100
+        provedDays: 86
+        proofRate: 0.86
+        completed: true
+        badgeCode: SILVER
+        comment: 100일 동안 하루도 안 빠지고 달렸습니다
+        likeCount: 23
+        myLiked: false
+        createdDate: '2026-08-12'
+    PostListResponse:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        required:
+        - content
+        properties:
+          content:
+            type: array
+            description: 게시글 목록. 삭제·비노출된 글은 들어오지 않습니다.
+            items:
+              $ref: '#/components/schemas/PostSummary'
+    PostDetail:
+      allOf:
+      - $ref: '#/components/schemas/PostSummary'
+      - type: object
+        description: 목록 항목에 공유 카드용 표시 문구가 더해진 형태
+        required:
+        - shareTitle
+        - categoryLabel
+        - periodLabel
+        properties:
+          shareTitle:
+            type: string
+            description: 공유 카드 제목. 서버가 만든 문구이므로 **프론트에서 다시 조립하지 마세요.**
+            example: 운동 100일 챌린지 완주!
+          categoryLabel:
+            type: string
+            description: 분야 한글 표기
+            example: 운동
+          periodLabel:
+            type: string
+            description: 기간 한글 표기
+            example: 100일
+    AdminReportCase:
+      type: object
+      description: 관리자 화면의 신고 케이스 요약
+      required:
+      - caseId
+      - targetType
+      - targetNickname
+      - reasonCode
+      - severity
+      - status
+      - overdue
+      - receivedAt
+      - slaDueAt
+      - reportCount
+      properties:
+        caseId:
+          type: integer
+          format: int64
+          description: 신고 케이스 ID
+          example: 907
+        targetType:
+          $ref: '#/components/schemas/ReportTargetType'
+        targetNickname:
+          type: string
+          description: 대상 표시명
+          example: 익명 여우12
+        reasonCode:
+          $ref: '#/components/schemas/ReportReasonCode'
+        severity:
+          $ref: '#/components/schemas/ReportSeverity'
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        overdue:
+          type: boolean
+          description: 처리 기한(`slaDueAt`) 초과 여부
+          example: false
+        receivedAt:
+          type: string
+          format: date-time
+          description: 접수 시각
+          example: '2026-08-12T14:30:00+09:00'
+        slaDueAt:
+          type: string
+          format: date-time
+          description: 처리 기한
+          example: '2026-08-13T14:30:00+09:00'
+        reportCount:
+          type: integer
+          description: 이 케이스에 모인 신고 건수
+          example: 3
+      example:
+        caseId: 907
+        targetType: PROOF
+        targetNickname: 익명 여우12
+        reasonCode: FAKE_PROOF
+        severity: HIGH
+        status: PENDING
+        overdue: false
+        receivedAt: '2026-08-12T14:30:00+09:00'
+        slaDueAt: '2026-08-13T14:30:00+09:00'
+        reportCount: 3
+    AdminReportListResponse:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        required:
+        - content
+        properties:
+          content:
+            type: array
+            description: 신고 케이스 목록
+            items:
+              $ref: '#/components/schemas/AdminReportCase'
+    AdminReportTarget:
+      type: object
+      description: 신고 대상 정보. `targetType`에 따라 채워지는 필드가 다릅니다.
+      required:
+      - memberId
+      - nickname
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 대상 회원 ID
+          example: 2482
+        nickname:
+          type: string
+          description: 대상 닉네임
+          example: 익명 여우12
+        groupId:
+          type: integer
+          format: int64
+          description: 대상이 속한 챌린지 ID
+          example: 12
+        groupName:
+          type: string
+          description: 챌린지 이름
+          example: 운동 100일 챌린지
+        proofId:
+          type: integer
+          format: int64
+          description: 인증물 신고일 때만 옵니다.
+          example: 3401
+        postId:
+          type: integer
+          format: int64
+          description: 게시글 신고일 때만 옵니다.
+          example: 512
+        proofDate:
+          type: string
+          format: date
+          description: 인증물 신고일 때만 옵니다.
+          example: '2026-08-12'
+      example:
+        memberId: 2482
+        nickname: 익명 여우12
+        groupId: 12
+        groupName: 운동 100일 챌린지
+        proofId: 3401
+        proofDate: '2026-08-12'
+    AdminReporterEntry:
+      type: object
+      description: 신고자 한 명이 접수한 내용
+      required:
+      - reasonCode
+      - receivedAt
+      properties:
+        reasonCode:
+          $ref: '#/components/schemas/ReportReasonCode'
+        detail:
+          type: string
+          description: 신고 상세. 위험 표현이 제거된 뒤의 문구입니다.
+          example: 인증 사진이 목표와 전혀 관계없는 사진입니다.
+        receivedAt:
+          type: string
+          format: date-time
+          description: 접수 시각
+          example: '2026-08-12T14:30:00+09:00'
+      example:
+        reasonCode: FAKE_PROOF
+        detail: 인증 사진이 목표와 전혀 관계없는 사진입니다.
+        receivedAt: '2026-08-12T14:30:00+09:00'
+    AdminReportHistoryEntry:
+      type: object
+      description: 처리 이력 한 건
+      required:
+      - adminId
+      - status
+      - processedAt
+      properties:
+        adminId:
+          type: integer
+          format: int64
+          description: 처리한 관리자 ID
+          example: 1
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        reviewNote:
+          type: string
+          description: 처리 메모
+          example: 동일 사진 반복 업로드 확인. 7일 제재 적용.
+        processedAt:
+          type: string
+          format: date-time
+          description: 처리 시각
+          example: '2026-08-12T16:00:00+09:00'
+      example:
+        adminId: 1
+        status: SANCTIONED
+        reviewNote: 동일 사진 반복 업로드 확인. 7일 제재 적용.
+        processedAt: '2026-08-12T16:00:00+09:00'
+    AiJudgmentType:
+      type: string
+      description: '자동 판정 종류.
+
+        FACE 얼굴 검출 · CENSORSHIP 검열 · AUTHENTICITY 인증 진위 · COMPLETION 완주 판정
+
+        '
+      enum:
+      - FACE
+      - CENSORSHIP
+      - AUTHENTICITY
+      - COMPLETION
+      example: AUTHENTICITY
+    AdminAiJudgment:
+      type: object
+      description: 자동 판정 결과 한 건
+      required:
+      - type
+      - verdict
+      - confidence
+      - judgedAt
+      properties:
+        type:
+          $ref: '#/components/schemas/AiJudgmentType'
+        verdict:
+          allOf:
+          - $ref: '#/components/schemas/AiVerdict'
+          description: 판정 값
+        confidence:
+          type: number
+          format: double
+          description: 신뢰도. 0.0 ~ 1.0
+          example: 0.732
+        reason:
+          type: string
+          description: 판정 근거
+          example: 최근 7일 인증 사진과 유사도가 매우 높습니다.
+        judgedAt:
+          type: string
+          format: date-time
+          description: 판정 시각
+          example: '2026-08-12T14:31:00+09:00'
+      example:
+        type: AUTHENTICITY
+        verdict: ESCALATE
+        confidence: 0.732
+        reason: 최근 7일 인증 사진과 유사도가 매우 높습니다.
+        judgedAt: '2026-08-12T14:31:00+09:00'
+    AdminReportDetail:
+      allOf:
+      - $ref: '#/components/schemas/AdminReportCase'
+      - type: object
+        description: 케이스 요약에 대상·신고자·이력·자동 판정이 더해진 형태
+        required:
+        - target
+        - reporters
+        - history
+        - aiJudgments
+        properties:
+          target:
+            $ref: '#/components/schemas/AdminReportTarget'
+          reporters:
+            type: array
+            description: 신고자별 접수 내용
+            items:
+              $ref: '#/components/schemas/AdminReporterEntry'
+          history:
+            type: array
+            description: 처리 이력. 아직 처리 전이면 빈 배열입니다.
+            items:
+              $ref: '#/components/schemas/AdminReportHistoryEntry'
+          aiJudgments:
+            type: array
+            description: 자동 판정 결과
+            items:
+              $ref: '#/components/schemas/AdminAiJudgment'
+    SanctionInput:
+      type: object
+      description: 신고 처리와 함께 적용할 제재
+      required:
+      - type
+      properties:
+        type:
+          $ref: '#/components/schemas/SanctionType'
+        days:
+          type: integer
+          description: '`TEMP`일 때 제재 일수. `PERMANENT`이면 넣지 않습니다.'
+          minimum: 1
+          example: 7
+      example:
+        type: TEMP
+        days: 7
+    ProcessReportRequest:
+      type: object
+      description: '신고 처리 요청.
+
+        `status`가 `SANCTIONED`이면 `sanction`이 필수입니다.
+
+        '
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          description: '처리 결과.
+
+            RESOLVED 조치 없이 종결 · REJECTED 신고 반려 · SANCTIONED 제재와 함께 종결
+
+            '
+          enum:
+          - RESOLVED
+          - REJECTED
+          - SANCTIONED
+          example: SANCTIONED
+        reviewNote:
+          type: string
+          description: 처리 메모
+          example: 동일 사진 반복 업로드 확인. 7일 제재 적용.
+        sanction:
+          $ref: '#/components/schemas/SanctionInput'
+      example:
+        status: SANCTIONED
+        reviewNote: 동일 사진 반복 업로드 확인. 7일 제재 적용.
+        sanction:
+          type: TEMP
+          days: 7
+    CreateSanctionRequest:
+      type: object
+      description: 회원 직접 제재 요청
+      required:
+      - type
+      properties:
+        type:
+          $ref: '#/components/schemas/SanctionType'
+        days:
+          type: integer
+          description: '`TEMP`일 때 제재 일수'
+          minimum: 1
+          example: 7
+        caseId:
+          type: integer
+          format: int64
+          description: 연결할 신고 케이스 ID
+          example: 907
+      example:
+        type: TEMP
+        days: 7
+        caseId: 907
+    SanctionResponse:
+      type: object
+      description: 적용된 제재
+      required:
+      - sanctionId
+      - memberId
+      - type
+      - active
+      - startsAt
+      properties:
+        sanctionId:
+          type: integer
+          format: int64
+          description: 제재 ID
+          example: 331
+        memberId:
+          type: integer
+          format: int64
+          description: 제재 대상 회원 ID
+          example: 2482
+        type:
+          $ref: '#/components/schemas/SanctionType'
+        days:
+          type: integer
+          description: '`TEMP`일 때 제재 일수. `PERMANENT`이면 `null`'
+          nullable: true
+          example: 7
+        active:
+          type: boolean
+          description: 지금 유효한 제재인지
+          example: true
+        startsAt:
+          type: string
+          format: date-time
+          description: 제재 시작 시각
+          example: '2026-08-12T16:00:00+09:00'
+        endsAt:
+          type: string
+          format: date-time
+          description: 제재가 풀리는 시각. **영구 제재면 `null`**
+          nullable: true
+          example: '2026-08-19T16:00:00+09:00'
+        caseId:
+          type: integer
+          format: int64
+          description: 연결된 신고 케이스 ID. 없으면 `null`
+          nullable: true
+          example: 907
+      example:
+        sanctionId: 331
+        memberId: 2482
+        type: TEMP
+        days: 7
+        active: true
+        startsAt: '2026-08-12T16:00:00+09:00'
+        endsAt: '2026-08-19T16:00:00+09:00'
+        caseId: 907
+    AdminProofMediaResponse:
+      type: object
+      description: 관리자용 임시 열람 URL
+      required:
+      - url
+      - expiresInSeconds
+      properties:
+        url:
+          type: string
+          description: 이미지 스트리밍 경로. 그대로 `<img src>`에 넣습니다. **직접 조립하지 마세요.**
+          example: /api/proofs/3401/media/raw?t=eyJhbGciOiJIUzI1NiJ9.adm
+        expiresInSeconds:
+          type: integer
+          description: URL 유효 시간(초)
+          example: 300
+      example:
+        url: /api/proofs/3401/media/raw?t=eyJhbGciOiJIUzI1NiJ9.adm
+        expiresInSeconds: 300
+    ProofVisibilityResponse:
+      type: object
+      description: 비노출·복구 처리 후의 인증물 상태
+      required:
+      - proofId
+      - hidden
+      - updatedAt
+      properties:
+        proofId:
+          type: integer
+          format: int64
+          description: 인증물 ID
+          example: 3401
+        hidden:
+          type: boolean
+          description: 지금 비노출 상태인지
+          example: true
+        aiStatus:
+          $ref: '#/components/schemas/ProofAiStatus'
+        updatedAt:
+          type: string
+          format: date-time
+          description: 처리 시각
+          example: '2026-08-12T14:30:00+09:00'
+    PostVisibilityResponse:
+      type: object
+      description: 비노출·복구 처리 후의 게시글 상태
+      required:
+      - postId
+      - status
+      - updatedAt
+      properties:
+        postId:
+          type: integer
+          format: int64
+          description: 게시글 ID
+          example: 512
+        status:
+          $ref: '#/components/schemas/PostStatus'
+        updatedAt:
+          type: string
+          format: date-time
+          description: 처리 시각
+          example: '2026-08-12T14:30:00+09:00'
+    AiReviewType:
+      type: string
+      description: '검토 종류.
+
+        AUTHENTICITY 인증 진위 · CENSORSHIP 검열 · COMPLETION 완주 판정
+
+        '
+      enum:
+      - AUTHENTICITY
+      - CENSORSHIP
+      - COMPLETION
+      example: COMPLETION
+    AiReviewStatus:
+      type: string
+      description: '검토 상태.
+
+        PENDING 확정 대기 · CONFIRMED 자동 판정 유지 · OVERRIDDEN 관리자가 뒤집음
+
+        '
+      enum:
+      - PENDING
+      - CONFIRMED
+      - OVERRIDDEN
+      example: PENDING
+    AiReviewDecision:
+      type: string
+      description: 확정 결정. CONFIRM 판정 유지 · OVERRIDE 판정 뒤집기
+      enum:
+      - CONFIRM
+      - OVERRIDE
+      example: OVERRIDE
+    AiReviewItem:
+      type: object
+      description: AI 검토 큐 항목
+      required:
+      - reviewId
+      - type
+      - status
+      - createdAt
+      properties:
+        reviewId:
+          type: integer
+          format: int64
+          description: 검토 항목 ID
+          example: 77
+        type:
+          $ref: '#/components/schemas/AiReviewType'
+        status:
+          $ref: '#/components/schemas/AiReviewStatus'
+        groupId:
+          type: integer
+          format: int64
+          description: 대상 챌린지 ID. `COMPLETION` 건에서 특히 중요합니다.
+          nullable: true
+          example: 12
+        groupName:
+          type: string
+          description: 챌린지 이름
+          nullable: true
+          example: 운동 100일 챌린지
+        proofId:
+          type: integer
+          format: int64
+          description: 대상 인증물 ID. `AUTHENTICITY`·`CENSORSHIP` 건에만 옵니다.
+          nullable: true
+          example: 3401
+        verdict:
+          allOf:
+          - $ref: '#/components/schemas/AiVerdict'
+          description: 자동 판정 값
+        confidence:
+          type: number
+          format: double
+          description: 자동 판정 신뢰도. 0.0 ~ 1.0
+          example: 0.732
+        reason:
+          type: string
+          description: 자동 판정 근거
+          example: 그룹 평균 인증률이 기준선에 근접해 확정이 필요합니다.
+        createdAt:
+          type: string
+          format: date-time
+          description: 큐에 올라온 시각
+          example: '2026-08-12T14:31:00+09:00'
+      example:
+        reviewId: 77
+        type: COMPLETION
+        status: PENDING
+        groupId: 12
+        groupName: 운동 100일 챌린지
+        proofId: null
+        verdict: ESCALATE
+        confidence: 0.51
+        reason: 그룹 평균 인증률이 기준선에 근접해 확정이 필요합니다.
+        createdAt: '2026-08-12T14:31:00+09:00'
+    AiReviewListResponse:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        required:
+        - content
+        properties:
+          content:
+            type: array
+            description: 검토 대기 항목 목록
+            items:
+              $ref: '#/components/schemas/AiReviewItem'
+    DecideAiReviewRequest:
+      type: object
+      description: '검토 확정 요청.
+
+        `groupAvgRate`와 `groupMet`은 `COMPLETION` 건을 `OVERRIDE`할 때만 씁니다.
+
+        '
+      required:
+      - decision
+      properties:
+        decision:
+          $ref: '#/components/schemas/AiReviewDecision'
+        groupAvgRate:
+          type: number
+          format: double
+          description: '`COMPLETION` 건을 `OVERRIDE`할 때 관리자가 지정하는 그룹 평균 인증률. 0.0 ~ 1.0'
+          example: 0.8571
+        groupMet:
+          type: boolean
+          description: '`COMPLETION` 건을 `OVERRIDE`할 때 관리자가 지정하는 그룹 기준 충족 여부'
+          example: true
+      example:
+        decision: OVERRIDE
+        groupAvgRate: 0.8571
+        groupMet: true
+    AiReviewDecisionResponse:
+      type: object
+      description: 확정 후의 검토 항목
+      required:
+      - reviewId
+      - type
+      - status
+      - decision
+      - decidedBy
+      - decidedAt
+      - reportGenerated
+      properties:
+        reviewId:
+          type: integer
+          format: int64
+          description: 검토 항목 ID
+          example: 77
+        type:
+          $ref: '#/components/schemas/AiReviewType'
+        status:
+          $ref: '#/components/schemas/AiReviewStatus'
+        decision:
+          $ref: '#/components/schemas/AiReviewDecision'
+        groupId:
+          type: integer
+          format: int64
+          description: 대상 챌린지 ID. `COMPLETION` 건에만 옵니다.
+          nullable: true
+          example: 12
+        groupAvgRate:
+          type: number
+          format: double
+          description: 확정된 그룹 평균 인증률. `COMPLETION` 건에만 옵니다.
+          nullable: true
+          example: 0.8571
+        groupMet:
+          type: boolean
+          description: 확정된 그룹 기준 충족 여부. `COMPLETION` 건에만 옵니다.
+          nullable: true
+          example: true
+        reportGenerated:
+          type: boolean
+          description: '이 확정으로 완주 리포트가 만들어졌는지.
+
+            `true`가 되는 순간부터 참가자의 완주 리포트 조회가 202 대신 200을 받습니다.
+
+            '
+          example: true
+        decidedBy:
+          type: integer
+          format: int64
+          description: 확정한 관리자 ID
+          example: 1
+        decidedAt:
+          type: string
+          format: date-time
+          description: 확정 시각
+          example: '2026-08-12T16:00:00+09:00'
+      example:
+        reviewId: 77
+        type: COMPLETION
+        status: OVERRIDDEN
+        decision: OVERRIDE
+        groupId: 12
+        groupAvgRate: 0.8571
+        groupMet: true
+        reportGenerated: true
+        decidedBy: 1
+        decidedAt: '2026-08-12T16:00:00+09:00'
+    WithdrawalRecord:
+      type: object
+      description: 탈퇴 신청·삭제 처리 한 건
+      required:
+      - memberId
+      - requestedAt
+      - deleteScheduledAt
+      - status
+      properties:
+        memberId:
+          type: integer
+          format: int64
+          description: 회원 ID
+          example: 2482
+        requestedAt:
+          type: string
+          format: date-time
+          description: 탈퇴 신청 시각
+          example: '2026-07-13T14:30:00+09:00'
+        deleteScheduledAt:
+          type: string
+          format: date-time
+          description: 삭제 예정 시각. 신청 시점부터 30일 뒤입니다.
+          example: '2026-08-12T14:30:00+09:00'
+        deletedAt:
+          type: string
+          format: date-time
+          description: 실제 삭제 시각. **아직 유예 기간 중이거나 철회했으면 `null`**
+          nullable: true
+          example: '2026-08-12T15:00:00+09:00'
+        status:
+          $ref: '#/components/schemas/MemberStatus'
+      example:
+        memberId: 2482
+        requestedAt: '2026-07-13T14:30:00+09:00'
+        deleteScheduledAt: '2026-08-12T14:30:00+09:00'
+        deletedAt: '2026-08-12T15:00:00+09:00'
+        status: DELETED
+    WithdrawalListResponse:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        required:
+        - content
+        properties:
+          content:
+            type: array
+            description: 탈퇴 처리 목록
+            items:
+              $ref: '#/components/schemas/WithdrawalRecord'
+    AiVerdict:
+      type: string
+      description: 'AI 판정 결과.
+
+        PASS 통과 · FACE_REJECT 얼굴 감지로 거부 · BLOCK 차단 · HOLD 보류(재제출 필요) · ESCALATE 관리자 검토로 넘김 · ERROR 판정 실패'
+      enum:
+      - PASS
+      - FACE_REJECT
+      - BLOCK
+      - HOLD
+      - ESCALATE
+      - ERROR
+      example: ESCALATE
+  responses:
+    Unauthorized:
+      description: '인증 실패
+
+        · `UNAUTHORIZED` 토큰이 없거나 잘못됨 → 로그인 화면으로
+
+        · `TOKEN_EXPIRED` 토큰이 24시간을 넘김 → 로그인 화면으로
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: '접근 거부
+
+        · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details.endsAt`에 해제 시각)
+
+        · `AGE_NOT_VERIFIED` 생년월일 미입력 또는 만 14세 미만 → 생년월일 입력 화면으로
+
+        · `WITHDRAWAL_PENDING` 탈퇴 신청 중인 계정 → 탈퇴 철회 안내
+
+        '
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationFailed:
+      description: '`VALIDATION_FAILED` 요청 값이 형식에 맞지 않음 → 입력 오류 표시'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: 대상을 찾을 수 없음
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: 현재 상태에서 할 수 없는 요청
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    AdminForbidden:
+      description: "관리자 권한 없음\n· `FORBIDDEN_ROLE` 관리자가 아닌 계정이 호출함 → **관리 탭 자체를 숨깁니다.**\n  일반 사용자 앱에서는 이 응답을 받을 일이 없어야 합니다.\n"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: FORBIDDEN_ROLE
+              message: 관리자 권한이 필요합니다.
+              details: {}
+  parameters:
+    GroupId:
+      name: groupId
+      in: path
+      required: true
+      description: 챌린지 그룹 ID
+      schema:
+        type: integer
+        format: int64
+      example: 12
+    ProofId:
+      name: proofId
+      in: path
+      required: true
+      description: 인증 ID
+      schema:
+        type: integer
+        format: int64
+      example: 3401
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 조회할 페이지. 0부터 시작
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 한 페이지 항목 수
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    PostId:
+      name: postId
+      in: path
+      required: true
+      description: 게시글 ID
+      schema:
+        type: integer
+        format: int64
+      example: 512
+    CaseId:
+      name: caseId
+      in: path
+      required: true
+      description: 신고 케이스 ID
+      schema:
+        type: integer
+        format: int64
+      example: 907
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      description: 회원 ID
+      schema:
+        type: integer
+        format: int64
+      example: 2481
+    ReviewId:
+      name: reviewId
+      in: path
+      required: true
+      description: AI 검토 항목 ID
+      schema:
+        type: integer
+        format: int64
+      example: 77
+paths:
+  /auth/login:
+    post:
+      tags:
+      - 로그인과 회원
+      summary: 소셜 로그인
+      operationId: login
+      description: "소셜 계정으로 로그인합니다. 가입한 적 없으면 이 요청으로 자동 가입됩니다.\n\n- 응답의 `accessToken`은 이후 요청에 `Authorization: Bearer {accessToken}`\
+        \ 형식으로 담습니다.\n  **24시간 유효하고 갱신(refresh) 토큰은 없습니다.** 만료되면 다시 로그인해야 합니다.\n- `ageVerification`이 `REQUIRED`로 오면 **생년월일\
+        \ 입력 화면으로 보내야 합니다.**\n  소셜 계정에서 생년월일을 받아오면 그 자리에서 검증돼 `VERIFIED`로 옵니다.\n- 탈퇴 처리 대기 중인 계정이 로그인하면 탈퇴가 자동으로 철회되고 계정이\
+        \ 되살아납니다.\n  이때 `loginResult`가 `RESTORED`로 옵니다.\n- 새로 가입하면 서버가 표시용 닉네임(`익명 {동물명}{2자리}` 형태)을 자동으로 만듭니다.\n  다른 사람에게\
+        \ 보이는 화면에는 이 닉네임만 나옵니다. 소셜 프로필 이미지와 소셜 닉네임도\n  함께 저장되지만 본인 확인용이라 타인에게는 보이지 않습니다.\n"
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 로그인 성공
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          description: '`INVALID_SOCIAL_TOKEN` 소셜 인증에 실패했을 때 → 로그인 실패 안내 후 재시도'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: '`REJOIN_BLOCKED` 제재 이력 때문에 재가입이 막힌 계정일 때 → 재가입 불가 안내'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /members/me:
+    get:
+      tags:
+      - 로그인과 회원
+      summary: 내 정보
+      operationId: getMe
+      description: "로그인한 본인의 정보를 가져옵니다.\n\n- 이 API는 **제재 중이거나 탈퇴 대기 중인 계정도 호출할 수 있습니다.**\n  제재·탈퇴 상태를 화면에 안내하려면 이 API를 씁니다.\
+        \ (403으로 막지 않습니다)\n- `memberStatus`가 `WITHDRAW_PENDING`이면 참여성 API가 403 `WITHDRAWAL_PENDING`으로 막힙니다.\n  탈퇴 철회 안내를 띄워야\
+        \ 합니다.\n- `role`이 `ADMIN`일 때만 관리 탭을 노출합니다.\n- 이미 삭제된 계정이 호출하면 401 `UNAUTHORIZED`가 옵니다.\n"
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberMeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /members/me/birthdate:
+    post:
+      tags:
+      - 로그인과 회원
+      summary: 생년월일 등록과 연령 검증
+      operationId: verifyAge
+      description: "생년월일을 등록하고 만 나이로 연령 검증을 합니다.\n\n- **한 번만 보낼 수 있습니다.** `UNDER_AGE`로 판정된 뒤에 다시 입력해서 결과를 뒤집을 수 없습니다.\n  입력\
+        \ 화면에 이 점을 미리 안내해야 합니다.\n- `ageVerification`이 `VERIFIED`가 아니면 대부분의 API가 403 `AGE_NOT_VERIFIED`로 막힙니다.\n  다만 내 그룹 목록,\
+        \ 신고, 게시글 목록·상세는 막지 않습니다.\n"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BirthDateRequest'
+      responses:
+        '200':
+          description: 검증 완료
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgeVerificationResponse'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details.endsAt`에 해제 시각)
+
+            · `WITHDRAWAL_PENDING` 탈퇴 신청 중인 계정 → 탈퇴 철회 안내
+
+            이 API는 연령 확인 게이트에서 제외됩니다. `AGE_NOT_VERIFIED` 상태인 사용자가 호출하는 API이기 때문입니다.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: '`ALREADY_VERIFIED` 이미 연령 검증을 마친 계정이 다시 보냈을 때 → 재입력 불가 안내'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /members/me/withdrawal:
+    post:
+      tags:
+      - 로그인과 회원
+      summary: 탈퇴 신청
+      operationId: withdraw
+      description: "탈퇴를 신청합니다. 바로 삭제되지 않고 유예 기간(30일)을 둡니다. 요청 본문은 없습니다.\n\n- 신청하면 **곧바로 대기 중인 매칭 요청이 취소되고, 진행 중인 그룹에서도 나가집니다.**\n\
+        \  되돌려도 그룹에는 다시 들어갈 수 없으니 신청 전에 확인 다이얼로그가 필요합니다.\n- **제재 중인 계정도 탈퇴를 신청할 수 있습니다.**\n- `deleteScheduledAt` 전까지는 탈퇴 철회\
+        \ API를 부르거나 다시 로그인하면 계정이 되살아납니다.\n"
+      responses:
+        '202':
+          description: 탈퇴 신청 접수
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawalResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`WITHDRAWAL_PENDING` 이미 탈퇴를 신청한 계정일 때 → 탈퇴 철회 안내 화면으로'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+      - 로그인과 회원
+      summary: 탈퇴 철회
+      operationId: cancelWithdrawal
+      description: '탈퇴 신청을 취소하고 계정을 되살립니다. 요청 본문은 없고 응답 본문도 없습니다.
+
+        - **탈퇴 대기 중이거나 제재 중이어도 이 API는 호출할 수 있습니다.** (403으로 막지 않습니다)
+
+        - 계정은 되살아나지만 탈퇴 신청 때 나간 그룹에는 돌아갈 수 없습니다.
+
+        - 소셜 로그인으로도 같은 효과가 납니다. 로그인 응답의 `loginResult`가 `RESTORED`면 철회된 것입니다.
+
+        '
+      responses:
+        '204':
+          description: 철회 완료. 본문이 없습니다
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: '`NOT_WITHDRAWING` 탈퇴 대기 상태가 아닌 계정이 호출했을 때 → 내 정보를 다시 불러오기'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /match-requests:
+    post:
+      tags:
+      - 매칭
+      summary: 매칭 요청
+      operationId: createMatchRequest
+      description: "같은 조건을 고른 사람 6명이 모이면 자동으로 그룹이 만들어집니다. 6명이 안 되면 대기 상태가 됩니다.\n\n- **24시간 안에 6명이 모이지 않으면 요청이 만료됩니다.** 만료되면\
+        \ 다시 요청해야 합니다.\n  `expiresAt`은 요청 시각으로부터 24시간 뒤입니다.\n- `status`가 `WAITING`이면 대기 화면으로, `MATCHED`면 `groupId`를 받아 그룹\
+        \ 화면으로 보냅니다.\n  `groupId`는 성사됐을 때만 옵니다.\n- 그룹 이름은 서버가 `{분야 한글} {periodDays}일 챌린지` 형식으로 만듭니다.\n- **챌린지 시작일은 매칭된 당일입니다.**\
+        \ 다만 그날 인증 마감(23:59)을 넘겨 매칭되면 다음날부터\n  시작합니다. 종료일은 `시작일 + periodDays - 1`입니다.\n"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchRequestCreateRequest'
+      responses:
+        '201':
+          description: 매칭 요청 생성
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchRequestCreateResponse'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: '`DUPLICATE_MATCH_REQUEST` 이미 대기 중인 매칭 요청이 있을 때 → 기존 대기 화면으로 이동
+
+            `ALREADY_IN_ACTIVE_GROUP` 이미 진행 중인 그룹에 속해 있을 때 → 내 챌린지 화면으로 이동
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: '`LOCK_ACQUISITION_FAILED` 같은 조건에 요청이 몰려 처리가 지연됐을 때 → 잠시 뒤 다시 시도 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /match-requests/me:
+    get:
+      tags:
+      - 매칭
+      summary: 매칭 상태 조회
+      operationId: getMyMatchRequest
+      description: "내 매칭 요청이 지금 어떤 상태인지 확인합니다.\n\n- **매칭이 성사되는 순간을 알려주는 푸시 알림은 없습니다.** 대기 화면에서 이 API를 주기적으로\n  조회(폴링)해 `status`가\
+        \ `MATCHED`로 바뀌는지 확인하고, 앱에 다시 들어왔을 때도 배너로 알려줘야 합니다.\n- `waitingCount`와 `requiredCount`로 \"6명 중 N명\" 형태의 진행 표시를 만들\
+        \ 수 있습니다.\n- `expiresAt`까지 남은 시간을 대기 화면에 보여주면 됩니다.\n"
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyMatchRequestResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: '`NO_ACTIVE_MATCH_REQUEST` 진행 중인 매칭 요청이 없을 때 → 조건 선택 화면으로'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /match-requests/{matchRequestId}:
+    delete:
+      tags:
+      - 매칭
+      summary: 매칭 취소
+      operationId: cancelMatchRequest
+      description: "대기 중인 매칭 요청을 취소합니다. 응답 본문이 없습니다.\n\n- 취소하면 곧바로 다시 매칭을 요청할 수 있습니다. **조건을 바꾸고 싶을 때는 취소하고 새로\n  요청하는 흐름을\
+        \ 씁니다.**\n- `ALREADY_MATCHED`가 오면 취소가 아니라 **그룹 화면으로 넘겨야 합니다.**\n"
+      parameters:
+      - name: matchRequestId
+        in: path
+        required: true
+        description: 취소할 매칭 요청의 식별자
+        schema:
+          type: integer
+          format: int64
+        example: 5821
+      responses:
+        '204':
+          description: 취소 완료. 본문이 없습니다
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`FORBIDDEN` 내 요청이 아닌 매칭 요청을 취소하려 할 때 → 대기 화면을 다시 불러오기
+
+            `WITHDRAWAL_PENDING` 탈퇴 대기 중인 계정일 때 → 탈퇴 철회 안내 화면으로
+
+            `MEMBER_SANCTIONED` 유효한 제재를 받고 있을 때 → 제한 안내 (`details.endsAt`에 해제 시각)
+
+            `AGE_NOT_VERIFIED` 연령 검증을 안 했거나 미성년으로 판정됐을 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: '`ALREADY_MATCHED` 취소하려는 사이에 이미 매칭이 성사됐을 때 → 그룹 화면으로 이동'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: '`LOCK_ACQUISITION_FAILED` 같은 조건에 요청이 몰려 처리가 지연됐을 때 → 잠시 뒤 다시 시도 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /members/me/groups:
+    get:
+      tags:
+      - 챌린지 그룹
+      summary: 내 그룹 목록
+      operationId: getMyGroups
+      description: '내가 참여했던 모든 챌린지를 반환합니다. 진행 중인 그룹뿐 아니라 퇴장·완주한 그룹도 함께 나옵니다.
+
+        - 이 API는 연령 확인을 요구하지 않습니다. 연령 확인 전에도 목록은 볼 수 있습니다.
+
+        - 목록에는 나오지만 들어갈 수 없는 그룹이 있습니다. 진입 가능 여부는 그룹 상세 조회(`getGroup`)로 판단합니다.
+
+        - 토큰이 만료되면(24시간) 401 `TOKEN_EXPIRED`가 내려오므로 로그인 화면으로 보내야 합니다. 갱신(refresh) 토큰은 없습니다.
+
+        '
+      parameters:
+      - name: status
+        in: query
+        required: false
+        description: 상태로 걸러서 받습니다. 생략하면 전체를 반환합니다
+        schema:
+          $ref: '#/components/schemas/GroupStatusFilter'
+        example: ACTIVE
+      responses:
+        '200':
+          description: 내 그룹 목록
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyGroupsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부. 이 API는 연령 확인을 요구하지 않으므로 `AGE_NOT_VERIFIED`는 발생하지 않습니다.
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내. `details.endsAt`에 종료 시각
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /groups/{groupId}:
+    get:
+      tags:
+      - 챌린지 그룹
+      summary: 그룹 상세
+      operationId: getGroup
+      description: "그룹 정보와 멤버별 오늘 인증 상태를 반환합니다.\n\n- `memberCount`는 `ACTIVE` 인원만 셉니다. 퇴장자와 완주자는 포함하지 않습니다.\n- 진행 중인 그룹의 `members`에는\
+        \ `ACTIVE` 멤버만 담깁니다. 종료된 그룹은 `COMPLETED` `LEFT` `REPORT_EXIT` 전원이 담기므로 `membershipStatus`로 구분해 그립니다.\n- `members[].proofStatus`는\
+        \ 보는 대상에 따라 값 범위가 다릅니다.\n  - 본인: `SCREENING` `APPROVED` `PENDING_REVIEW` `HOLD` `BLOCKED`\n  - 다른 멤버: `APPROVED` `NONE`\
+        \ 두 가지만\n- 퇴장하거나 신고로 그룹을 떠난 뒤에는 이 화면에 들어올 수 없습니다(403 `NOT_GROUP_MEMBER`).\n"
+      parameters:
+      - $ref: '#/components/parameters/GroupId'
+      responses:
+        '200':
+          description: 그룹 상세
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `NOT_GROUP_MEMBER` 참여 이력이 없거나, 퇴장·신고 퇴장으로 접근을 잃었을 때 → 그룹 목록으로. 진입 불가 안내
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내
+
+            · `AGE_NOT_VERIFIED` 연령 확인이 안 됐거나 미성년일 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '· `GROUP_NOT_FOUND` 없는 그룹일 때 → 목록으로 되돌리고 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /groups/{groupId}/membership:
+    delete:
+      tags:
+      - 챌린지 그룹
+      summary: 자율 퇴장
+      operationId: leaveGroup
+      description: '진행 중인 챌린지에서 스스로 나갑니다. 되돌릴 수 없습니다.
+
+        - 퇴장하면 다시 들어올 수 없고 빈 자리는 채워지지 않습니다. 실행 전에 확인 다이얼로그를 띄우세요.
+
+        - `WITHDRAWAL`과 `SANCTION`은 서버가 내부적으로 쓰는 사유입니다. 요청으로 보낼 수 없습니다.
+
+        - 퇴장 후에는 그룹 상세 조회가 403으로 막힙니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/GroupId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaveGroupRequest'
+      responses:
+        '204':
+          description: 퇴장 완료. 본문이 없습니다
+        '400':
+          description: '· `REASON_REQUIRED` 사유를 보내지 않았을 때 → 사유 선택을 요구
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: '· `ALREADY_LEFT` 이미 퇴장한 그룹일 때 → 그룹 목록을 다시 불러오기
+
+            · `GROUP_ENDED` 이미 종료된 그룹일 때 → 종료 그룹 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /members/me/media-consent:
+    post:
+      tags:
+      - 일일 인증
+      summary: 촬영물 처리 동의
+      operationId: agreeMediaConsent
+      description: '인증 사진 처리에 동의합니다. 동의하지 않으면 인증을 제출할 수 없습니다(제출 시 403 `CONSENT_REQUIRED`).
+
+        - 동의는 계정 단위입니다. 그룹마다 다시 받지 않습니다.
+
+        - 인증 화면에 처음 들어올 때 이 동의를 먼저 받으세요.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaConsentRequest'
+      responses:
+        '204':
+          description: 동의 완료. 본문이 없습니다
+        '400':
+          description: '· `VALIDATION_FAILED` `agreed`가 `false`이거나 빠졌을 때 → 동의 체크를 요구
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /groups/{groupId}/proofs:
+    post:
+      tags:
+      - 일일 인증
+      summary: 오늘 인증 제출
+      operationId: submitProof
+      description: "오늘의 인증 사진을 올립니다. 하루에 한 번만 제출할 수 있습니다.\n\n- 인증 가능 시간은 06:00부터 23:59까지입니다(KST). 기준은 업로드가 접수된 시각입니다. 시간대\
+        \ 밖이면 400 `PROOF_DEADLINE_PASSED`.\n- `FACE_DETECTED_RETRY`로 거부된 사진은 **서버에 저장되지 않습니다.** 그대로 다시 찍어 올리면 됩니다.\n- 얼굴 재촬영에는\
+        \ 하루 한도가 있습니다. 한도를 넘기면 429 `FACE_RETRY_EXCEEDED`가 나옵니다.\n- 성공 응답은 두 갈래입니다. 상태 코드로 구분하세요.\n  - **201**: 접수되고 판정까지 끝난\
+        \ 경우. `aiStatus`가 `APPROVED`(인증 완료로 표시) 또는 `PENDING_REVIEW`(검토 중으로 표시). `PENDING_REVIEW` 상태에서는 오늘 다시 제출할 수 없고, 재시도하면\
+        \ 409 `DUPLICATE_DAILY_PROOF`가 나옵니다.\n  - **200**: 접수됐지만 인정되지 않은 경우. `aiStatus`는 `HOLD` 고정이며, 오늘 다시 제출할 수 있습니다. `guide`\
+        \ 문구를 띄우고 재제출을 유도하세요.\n- 촬영 가이드에 \"얼굴이 나오지 않게\" 문구를 넣어 두면 `FACE_DETECTED_RETRY` 발생을 줄일 수 있습니다.\n"
+      parameters:
+      - $ref: '#/components/parameters/GroupId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              - method
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: JPG, PNG, WEBP. 최대 10MB
+                method:
+                  allOf:
+                  - $ref: '#/components/schemas/ProofMethod'
+                  description: 인증 방식. `PHOTO` 또는 `LIVE_CAM`
+      responses:
+        '201':
+          description: 인증 접수·판정 완료
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofSubmitApprovedResponse'
+        '200':
+          description: 인증 접수됐으나 인정되지 않음. 오늘 다시 제출할 수 있습니다
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofSubmitHoldResponse'
+        '400':
+          description: '· `INVALID_FILE` 형식·크기가 맞지 않거나 확장자와 실제 파일이 다를 때 → 파일 조건을 안내하고 다시 선택
+
+            · `OUT_OF_CHALLENGE_PERIOD` 오늘이 챌린지 기간 밖일 때 → 인증 버튼을 비활성화
+
+            · `PROOF_DEADLINE_PASSED` 인증 가능 시간대(06:00~23:59 KST)가 아닐 때 → 인증 가능 시간을 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `NOT_GROUP_MEMBER` 참여 중인 그룹이 아닐 때 → 그룹 목록으로
+
+            · `CONSENT_REQUIRED` 촬영물 처리에 동의하지 않았을 때 → 동의 화면(`agreeMediaConsent`)을 먼저 띄우고, 동의 후 재시도
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내
+
+            · `AGE_NOT_VERIFIED` 연령 확인이 안 됐거나 미성년일 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '· `GROUP_NOT_FOUND` 없는 그룹일 때 → 그룹 목록으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: '· `GROUP_ENDED` 그룹이 이미 종료됐을 때 → 종료 그룹 화면으로
+
+            · `DUPLICATE_DAILY_PROOF` 오늘 유효한 인증이 이미 있을 때 → 오늘 인증 완료 화면으로
+
+            · `PROOF_HIDDEN_BY_ADMIN` 오늘 인증이 관리자 조치로 가려졌을 때 → 오늘은 재제출 불가임을 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: '· `FACE_DETECTED_RETRY` 사진에 얼굴이 찍혔을 때 → 얼굴이 나오지 않게 다시 촬영하도록 안내. 이 사진은 저장되지 않습니다
+
+            · `CONTENT_BLOCKED` 검열에서 위험으로 판정됐을 때 → 다른 사진으로 다시 제출하도록 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: '· `FACE_RETRY_EXCEEDED` 하루 재촬영 한도를 넘겼을 때 → 오늘은 더 시도할 수 없음을 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: '· `AI_SCREENING_UNAVAILABLE` 판정 시스템에 장애가 있을 때 → 잠시 후 재시도 안내. 통과 처리하지 않습니다
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: '· `MEDIA_UPLOAD_FAILED` 파일 저장에 실패했을 때 → 재시도 버튼 노출
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags:
+      - 일일 인증
+      summary: 일자별 인증 조회
+      operationId: getProofsByDate
+      description: '지정한 날짜의 멤버별 인증 현황을 반환합니다.
+
+        - 다른 멤버의 인증은 승인된 것만 보입니다. 그 외에는 `proofStatus`가 `NONE`으로 내려갑니다.
+
+        - 본인 항목의 `proofStatus`는 `SCREENING` `APPROVED` `PENDING_REVIEW` `HOLD` `BLOCKED` 다섯 값 중 하나입니다.
+
+        - 퇴장자와 완주자도 목록에 포함됩니다. `membershipStatus`로 구분해 표시하세요.
+
+        - 사진 썸네일을 띄우려면 `members[].proof.mediaViewable`이 `true`인 항목에 대해 촬영물 열람 URL 발급(`getProofMedia`)을 호출하세요.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/GroupId'
+      - name: date
+        in: query
+        required: true
+        description: 조회할 일자. `YYYY-MM-DD`
+        schema:
+          type: string
+          format: date
+        example: '2026-08-12'
+      responses:
+        '200':
+          description: 해당 일자의 멤버별 인증 현황
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofsByDateResponse'
+        '400':
+          description: '· `OUT_OF_CHALLENGE_PERIOD` `date`가 챌린지 기간 밖일 때 → 날짜 선택 범위를 기간 안으로 제한
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `NOT_GROUP_MEMBER` 참여 이력이 없거나 접근 권한을 잃었을 때 → 그룹 목록으로
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내
+
+            · `AGE_NOT_VERIFIED` 연령 확인이 안 됐거나 미성년일 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /proofs/{proofId}/media:
+    get:
+      tags:
+      - 일일 인증
+      summary: 촬영물 열람 URL 발급
+      operationId: getProofMedia
+      description: '인증 사진을 볼 수 있는 임시 URL을 발급받습니다.
+
+        **이 API는 이미지가 아니라 URL(JSON)을 반환합니다.**
+
+        - 승인된 인증만 열람할 수 있습니다.
+
+        - 받은 `url`을 **그대로 `<img src>`에 넣습니다.** URL을 직접 조립하지 마세요.
+
+        - `expiresInSeconds`(300초)가 지나면 이미지가 403으로 끊깁니다. 화면을 오래 띄워 두는 경우 이 API를 다시 호출해 URL을 갱신하세요.
+
+        - 이 API가 "볼 수 있는지 판단하고 URL을 받는" 역할이고, 실제 이미지 바이트는 `streamProofMedia`(`GET /proofs/{proofId}/media/raw`)가 반환합니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/ProofId'
+      responses:
+        '200':
+          description: 열람 URL 발급 완료
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofMediaUrlResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `NOT_GROUP_MEMBER` 같은 그룹의 참여 중인 멤버가 아닐 때 → 열람 버튼을 숨김
+
+            · `VIEW_BLOCKED_GROUP_ENDED` 그룹이 종료된 뒤 열람하려 할 때 → 종료 후에는 볼 수 없음을 안내
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내
+
+            · `AGE_NOT_VERIFIED` 연령 확인이 안 됐거나 미성년일 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: '· `MEDIA_DELETED` 보관 기간이 지나 사진이 삭제됐을 때 → 삭제된 사진 자리표시자를 노출
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /proofs/{proofId}/media/raw:
+    get:
+      tags:
+      - 일일 인증
+      summary: 촬영물 스트리밍
+      operationId: streamProofMedia
+      security: []
+      description: "**이미지 바이트를 직접 반환합니다. JSON이 아닙니다.**\n열람 URL 발급 API(`getProofMedia`)가 돌려준 `url`이 바로 이 경로입니다.\n\n- 인증 토큰(`Authorization`\
+        \ 헤더)은 필요 없습니다. 대신 쿼리의 서명 토큰 `t`가 신원을 대신합니다.\n- 이 경로는 `<img src>`로 열리기 때문에 `Authorization` 헤더를 실을 수 없습니다. 그래서 이 경로만\
+        \ 토큰 인증을 씁니다.\n- 서버는 토큰으로 신원만 확인하고, 열람 자격은 요청마다 다시 검사합니다. 토큰을 가지고 있어도 그룹을 떠났거나 그룹이 종료됐으면 볼 수 없습니다.\n- 두 API의 역할을 나눠서\
+        \ 쓰세요.\n  - `getProofMedia`: 볼 수 있는지 판단하고 URL을 받습니다. JSON 응답입니다.\n  - `streamProofMedia`: 그 URL을 `<img src>`에 넣어 이미지를\
+        \ 표시합니다. 직접 fetch할 필요가 없습니다.\n- 이미지 로딩 실패(`onerror`)를 처리해 두세요. 토큰 만료 시 이미지가 깨진 상태로 남습니다. 이때는 `getProofMedia`로 URL을\
+        \ 다시 발급받아 재시도합니다.\n"
+      parameters:
+      - $ref: '#/components/parameters/ProofId'
+      - name: t
+        in: query
+        required: true
+        description: 열람 URL 발급 API가 넣어 준 서명 토큰. 직접 만들지 마세요
+        schema:
+          type: string
+        example: eyJhbGciOiJIUzI1NiJ9.bWVkaWEtMzQwMQ.9xQe1sVbKk
+      responses:
+        '200':
+          description: 이미지 바이트
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: '· `INVALID_MEDIA_TOKEN` 서명이 맞지 않거나 토큰이 만료됐을 때 → 열람 URL(`getProofMedia`)을 다시 발급받아 재시도
+
+            · `NOT_GROUP_MEMBER` 토큰은 유효하지만 열람 자격을 잃었을 때 → 이미지 자리에 열람 불가 표시
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /proofs/{proofId}/reactions:
+    post:
+      tags:
+      - 응원 스티커
+      summary: 스티커 토글
+      operationId: toggleSticker
+      description: '인증에 응원 스티커를 붙이거나 뗍니다. 같은 종류를 다시 누르면 떼집니다.
+
+        - **상태 코드로 결과를 구분합니다. 201이면 켜짐(붙음), 200이면 꺼짐(떼짐)입니다.** 두 응답 모두 본문이 없습니다.
+
+        - 한 인증에 같은 종류의 스티커는 한 번만 붙습니다. 종류가 다르면 여러 개를 붙일 수 있습니다.
+
+        - 승인된 인증에만 스티커를 붙일 수 있습니다. 그 외에는 존재 자체를 알리지 않기 위해 404로 응답합니다.
+
+        - 토글 직후 최신 집계가 필요하면 `getStickers`를 다시 호출하세요.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/ProofId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StickerToggleRequest'
+      responses:
+        '201':
+          description: 스티커가 붙었습니다(켜짐). 본문이 없습니다
+        '200':
+          description: 스티커가 떼졌습니다(꺼짐). 본문이 없습니다
+        '400':
+          description: '· `VALIDATION_FAILED` `stickerType` 값이 허용 범위(`CLAP` `MUSCLE` `FIRE`) 밖일 때 → 요청 값 확인
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `NOT_GROUP_MEMBER` 같은 그룹의 참여 중인 멤버가 아닐 때 → 스티커 버튼을 숨김
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내
+
+            · `AGE_NOT_VERIFIED` 연령 확인이 안 됐거나 미성년일 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '· `PROOF_NOT_FOUND` 인증이 없거나 공개 대상이 아닐 때(승인되지 않은 인증 포함) → 목록을 다시 불러오기
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags:
+      - 응원 스티커
+      summary: 스티커 조회
+      operationId: getStickers
+      description: '인증에 붙은 스티커 집계와 내가 누른 스티커를 반환합니다.
+
+        - 일자별 인증 조회(`getProofsByDate`) 응답에도 같은 집계가 들어 있습니다. 목록 화면에서는 그 값을 쓰고, 이 API는 상세 화면이나 토글 직후 갱신에 쓰세요.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/ProofId'
+      responses:
+        '200':
+          description: 스티커 집계
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StickerSummaryResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `NOT_GROUP_MEMBER` 해당 그룹 참여 이력이 없을 때 → 스티커 영역을 숨김
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내
+
+            · `AGE_NOT_VERIFIED` 연령 확인이 안 됐거나 미성년일 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '· `PROOF_NOT_FOUND` 인증이 없거나 공개 대상이 아닐 때 → 목록을 다시 불러오기
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /groups/{groupId}/dashboard:
+    get:
+      tags:
+      - 대시보드
+      summary: 그룹 대시보드
+      operationId: getDashboard
+      description: '내 인증률, 멤버별 일자 인증 현황, 날짜별 그룹 인증 인원을 한 번에 반환합니다.
+
+        - 인증률의 분모는 항상 챌린지 전체 일수입니다. 경과 일수가 아닙니다. 시작 직후에는 값이 낮게 나오는 것이 정상입니다.
+
+        - 순위나 등수 필드는 없습니다. 순위를 화면에 만들지 마세요.
+
+        - `members[].dailyStatuses[].proofStatus`는 본인 행과 타인 행의 값 범위가 다릅니다. 타인은 승인된 것만 노출되고 나머지는 `NONE`입니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/GroupId'
+      responses:
+        '200':
+          description: 그룹 대시보드
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `NOT_GROUP_MEMBER` 해당 그룹 참여 이력이 없을 때 → 그룹 목록으로
+
+            · `WITHDRAWAL_PENDING` 탈퇴 유예 중일 때 → 탈퇴 철회 안내 화면으로
+
+            · `MEMBER_SANCTIONED` 이용 제한 중일 때 → 제한 안내
+
+            · `AGE_NOT_VERIFIED` 연령 확인이 안 됐거나 미성년일 때 → 생년월일 입력 화면으로
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /groups/{groupId}/report:
+    get:
+      tags:
+      - 완주 리포트
+      summary: 완주 리포트 조회
+      operationId: getFinalReport
+      description: "챌린지가 끝난 뒤 내 완주 결과와 그룹 전체 결과를 봅니다.\n\n- 챌린지가 **종료된 뒤에만** 조회할 수 있습니다.\n- 중도 퇴장(자율 퇴장)한 사람은 리포트를 볼 수 없습니다.\
+        \ 끝까지 남은 사람과 신고 후 퇴장한 사람만 대상입니다.\n- `badgeCode`는 서버가 계산해서 내려줍니다. `completed`가 `false`면 항상 `NONE`이고,\n  `true`일 때만\
+        \ 인증률에 따라 `0.95` 이상 `GOLD`, `0.85` 이상 `SILVER`, 그 외 `BRONZE`입니다.\n  **프론트에서 다시 계산하지 마세요.**\n- 인증률의 분모는 챌린지 전체 일수 고정입니다.\
+        \ 오늘까지 경과한 일수가 아닙니다.\n- **200과 202를 반드시 구분해서 처리하세요.** 202는 오류가 아닙니다. 아래 202 설명을 보세요.\n"
+      parameters:
+      - $ref: '#/components/parameters/GroupId'
+      responses:
+        '200':
+          description: 리포트 집계가 끝나 결과를 그릴 수 있는 상태입니다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalReportResponse'
+        '202':
+          description: '`REPORT_NOT_READY` 리포트가 아직 만들어지지 않았습니다.
+
+            **이것은 오류가 아닙니다. 오류 화면을 띄우지 말고 잠시 후 재시도하도록 안내하세요.**
+
+            "결과를 준비 중입니다" 안내 화면을 보여주고, 몇 초 뒤 같은 API를 다시 호출하게 하세요.
+
+            프론트가 이 응답을 에러로 처리하면 완주 화면이 깨집니다.
+
+            리포트는 관리자가 AI 검토 큐의 `COMPLETION` 건을 확정하는 순간 만들어집니다.
+
+            그때까지 참가자는 계속 202를 받습니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: REPORT_NOT_READY
+                  message: 완주 결과를 집계하고 있습니다. 잠시 후 다시 확인해 주세요.
+                  details: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '리포트 접근 불가
+
+            · `NOT_GROUP_MEMBER` 리포트 대상이 아님(중도 퇴장 포함) → "리포트를 볼 수 없는 챌린지"로 안내
+
+            · `MEMBER_SANCTIONED` 이용 제한된 계정 → 제한 안내(`details.endsAt`)
+
+            · `AGE_NOT_VERIFIED` 연령 확인 전 → 생년월일 입력 화면으로
+
+            · `WITHDRAWAL_PENDING` 탈퇴 신청 중 → 탈퇴 철회 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: NOT_GROUP_MEMBER
+                  message: 이 챌린지의 리포트를 볼 수 없습니다.
+                  details: {}
+        '404':
+          description: '`GROUP_NOT_FOUND` 없는 그룹 ID → 그룹 목록으로 돌려보냅니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: GROUP_NOT_FOUND
+                  message: 존재하지 않는 챌린지입니다.
+                  details: {}
+        '409':
+          description: '`GROUP_NOT_ENDED` 챌린지가 아직 진행 중 → 리포트 진입 버튼을 종료 후에만 노출합니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: GROUP_NOT_ENDED
+                  message: 아직 진행 중인 챌린지입니다.
+                  details: {}
+  /reports:
+    post:
+      tags:
+      - 신고
+      summary: 신고 접수
+      operationId: createReport
+      description: "인증물, 사용자, 게시글을 신고합니다.\n\n## 화면 흐름에서 반드시 지킬 것\n\n- **`PROOF`·`MEMBER`를 신고하면 신고한 본인이 그 그룹에서 나가게 됩니다. 되돌릴\
+        \ 수 없습니다.**\n  신고 버튼에 **\"신고하면 이 그룹에서 나가게 됩니다\"** 확인 다이얼로그를 **반드시** 붙이세요.\n  201을 받으면 그룹 화면에서 빠져나오게 처리하고, 이후 그 그룹\
+        \ 상세는 403 `NOT_GROUP_MEMBER`로 막힙니다.\n- **`POST`(게시글) 신고는 그룹과 무관하므로 신고자에게 아무 변화가 없습니다. 확인 다이얼로그도 필요 없습니다.**\n- 신고당한\
+        \ 사람은 신고만으로는 아무 조치도 받지 않습니다. 계속 그룹에 남아 활동합니다.\n  제재는 운영자가 확인한 뒤에만 적용됩니다. \"신고하면 상대가 차단된다\"는 식의 문구를 쓰지 마세요.\n- `detail`에\
+        \ 위험한 표현이 들어 있으면 그 내용만 제거하고 접수는 그대로 진행됩니다. 이 경우에도 201이 옵니다.\n- 같은 대상에 여러 명이 신고하면 하나의 케이스로 묶입니다.\n- 신고는 연령 인증 없이도 호출할\
+        \ 수 있습니다.\n"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReportRequest'
+      responses:
+        '201':
+          description: '신고가 접수되었습니다.
+
+            `targetType`이 `PROOF` 또는 `MEMBER`였다면 **이 시점에 신고자는 해당 그룹에서 나간 상태**입니다.
+
+            그룹 화면을 닫고 그룹 목록을 다시 불러오세요.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateReportResponse'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '신고 불가
+
+            · `NOT_GROUP_MEMBER` `PROOF`·`MEMBER` 신고인데 그 그룹의 참여자가 아님 → 신고 버튼을 같은 그룹 화면에서만 노출
+
+            · `MEMBER_SANCTIONED` 이용 제한된 계정 → 제한 안내
+
+            · `WITHDRAWAL_PENDING` 탈퇴 신청 중 → 탈퇴 철회 안내
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: NOT_GROUP_MEMBER
+                  message: 같은 그룹의 참여자만 신고할 수 있습니다.
+                  details: {}
+        '404':
+          description: '`TARGET_NOT_FOUND` 신고 대상이 없음 → "이미 사라진 대상입니다" 안내 후 화면을 갱신합니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: TARGET_NOT_FOUND
+                  message: 이미 사라진 대상입니다.
+                  details: {}
+        '409':
+          description: '`DUPLICATE_REPORT` 같은 대상에 이미 신고한 상태 → "이미 신고한 대상입니다" 안내를 띄웁니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: DUPLICATE_REPORT
+                  message: 이미 신고한 대상입니다.
+                  details: {}
+        '502':
+          description: '`AI_SCREENING_UNAVAILABLE` 검사 서버 장애 → 재시도 안내를 띄웁니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: AI_SCREENING_UNAVAILABLE
+                  message: 잠시 후 다시 시도해 주세요.
+                  details: {}
+  /posts:
+    post:
+      tags:
+      - 완주 게시판
+      summary: 게시글 작성
+      operationId: createPost
+      description: "완주 리포트를 받은 챌린지의 후기를 게시판에 올립니다.\n\n- `comment`에 전화번호, 카카오톡 ID, `@` 핸들, URL, 이메일이 들어가면 차단됩니다(422 `CONTENT_BLOCKED`).\n\
+        \  입력 단계에서 미리 안내하면 실패를 줄일 수 있습니다.\n- 작성자 별칭, 분야, 기간, 인증 일수, 인증률, 완주 여부는 **서버가 자동으로 넣습니다. 요청에 담지 마세요.**\n- 게시글 작성자\
+        \ 별칭은 그룹 화면에서 쓰던 닉네임과 다른 값입니다.\n- 한 챌린지당 게시글은 하나입니다. 삭제한 뒤에도 같은 챌린지로 다시 쓸 수 없습니다.\n"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePostRequest'
+      responses:
+        '201':
+          description: 게시글이 등록되었습니다. `postId`로 상세 화면에 진입시키세요.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatePostResponse'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: '`GROUP_NOT_FOUND` 없는 그룹 ID → 목록으로 돌려보냅니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: GROUP_NOT_FOUND
+                  message: 존재하지 않는 챌린지입니다.
+                  details: {}
+        '409':
+          description: '작성할 수 없는 상태
+
+            · `GROUP_NOT_ENDED` 챌린지가 아직 진행 중 → 작성 진입을 종료 후에만 허용
+
+            · `POST_REPORT_REQUIRED` 완주 리포트가 아직 만들어지지 않음 → "결과 집계 후 작성할 수 있습니다" 안내
+
+            · `DUPLICATE_POST` 이 챌린지로 이미 게시글을 씀 → 작성 버튼 대신 기존 글로 이동
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: DUPLICATE_POST
+                  message: 이 챌린지의 후기는 이미 작성했습니다.
+                  details: {}
+        '422':
+          description: '`CONTENT_BLOCKED` `comment`에 연락처·계정·링크가 있거나 부적절한 표현이 있음 → 입력창에 인라인 오류를 띄우고 수정하게 합니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: CONTENT_BLOCKED
+                  message: 연락처나 링크는 후기에 넣을 수 없습니다.
+                  details: {}
+        '502':
+          description: '`AI_SCREENING_UNAVAILABLE` 검사 서버 장애 → 재시도 안내를 띄웁니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: AI_SCREENING_UNAVAILABLE
+                  message: 잠시 후 다시 시도해 주세요.
+                  details: {}
+    get:
+      tags:
+      - 완주 게시판
+      summary: 게시글 목록
+      operationId: getPosts
+      description: '완주 게시판 목록을 페이지 단위로 봅니다.
+
+        - 삭제되거나 비노출 처리된 글은 목록에 나오지 않습니다.
+
+        - 작성 시각은 **일 단위**로만 내려옵니다. 시·분은 없습니다.
+
+        - 목록 조회는 **연령 인증 없이도** 호출할 수 있습니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - name: size
+        in: query
+        required: false
+        description: 한 페이지 항목 수. **50 이하**만 허용합니다(공통 파라미터보다 좁습니다).
+        schema:
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 50
+          example: 20
+      responses:
+        '200':
+          description: 게시글 목록입니다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostListResponse'
+        '400':
+          description: '`VALIDATION_FAILED` `size`가 50을 넘는 등 파라미터가 잘못됨 → 요청 값을 고쳐 다시 호출합니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: VALIDATION_FAILED
+                  message: size는 50 이하여야 합니다.
+                  details:
+                    field: size
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '접근 거부
+
+            · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details.endsAt`에 해제 시각)
+
+            · `WITHDRAWAL_PENDING` 탈퇴 신청 중인 계정 → 탈퇴 철회 안내
+
+
+            이 API는 연령 확인을 요구하지 않으므로 `AGE_NOT_VERIFIED`는 발생하지 않습니다.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /posts/{postId}:
+    get:
+      tags:
+      - 완주 게시판
+      summary: 게시글 상세
+      operationId: getPost
+      description: '게시글 하나를 봅니다. 공유 카드에 쓰는 문구가 함께 옵니다.
+
+        - `categoryLabel`, `periodLabel`, `shareTitle`은 서버가 만든 표시용 문구입니다. **프론트에서 다시 조립하지 마세요.**
+
+        - 상세 조회는 **연령 인증 없이도** 호출할 수 있습니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: 목록 항목의 모든 필드에 공유 카드용 문구가 더해진 형태입니다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: '`POST_NOT_FOUND` 없거나 삭제·비노출된 글 → "삭제된 글입니다" 안내 후 목록으로 돌려보냅니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: POST_NOT_FOUND
+                  message: 삭제된 글입니다.
+                  details: {}
+        '403':
+          description: '접근 거부
+
+            · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details.endsAt`에 해제 시각)
+
+            · `WITHDRAWAL_PENDING` 탈퇴 신청 중인 계정 → 탈퇴 철회 안내
+
+
+            이 API는 연령 확인을 요구하지 않으므로 `AGE_NOT_VERIFIED`는 발생하지 않습니다.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+      - 완주 게시판
+      summary: 게시글 삭제
+      operationId: deletePost
+      description: '내가 쓴 게시글을 삭제합니다.
+
+        - 삭제하면 되돌릴 수 없습니다. **확인 다이얼로그를 붙이세요.**
+
+        - 삭제한 뒤 같은 챌린지로 다시 작성할 수 없습니다. 이 점을 확인 다이얼로그에 적어주세요.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/PostId'
+      responses:
+        '204':
+          description: 삭제되었습니다. 응답 본문이 없습니다. 목록을 다시 불러오세요.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`FORBIDDEN` 내가 쓴 글이 아님 → 삭제 버튼을 본인 글에만 노출합니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: 본인이 작성한 글만 삭제할 수 있습니다.
+                  details: {}
+        '404':
+          description: '`POST_NOT_FOUND` 없는 글 → 목록을 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: POST_NOT_FOUND
+                  message: 존재하지 않는 글입니다.
+                  details: {}
+  /posts/{postId}/likes:
+    post:
+      tags:
+      - 완주 게시판
+      summary: 좋아요 토글
+      operationId: togglePostLike
+      description: '게시글 좋아요를 켜고 끕니다. 같은 엔드포인트를 다시 호출하면 취소됩니다.
+
+        - **상태 코드로 켜짐(201)과 꺼짐(200)을 구분합니다.** 응답 본문이 아니라 상태 코드를 보고 하트 아이콘을 갱신하세요.
+
+        - 목록·상세를 다시 불러오지 않고 화면에서 바로 반영하려면 `likeCount`를 직접 증감시켜야 합니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: 좋아요가 **꺼졌습니다**. 하트를 비우고 `likeCount`를 1 줄이세요. 본문은 없습니다.
+        '201':
+          description: 좋아요가 **켜졌습니다**. 하트를 채우고 `likeCount`를 1 늘리세요. 본문은 없습니다.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`AGE_NOT_VERIFIED` 연령 인증을 하지 않았거나 미성년 → 연령 인증(생년월일 입력) 화면으로 보냅니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: AGE_NOT_VERIFIED
+                  message: 연령 확인이 필요합니다.
+                  details: {}
+        '404':
+          description: '`POST_NOT_FOUND` 없거나 삭제·비노출된 글 → 목록을 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: POST_NOT_FOUND
+                  message: 삭제된 글입니다.
+                  details: {}
+  /admin/reports:
+    get:
+      tags:
+      - 관리자
+      summary: 신고 목록
+      operationId: getAdminReports
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        신고 케이스를 조건별로 조회합니다. 같은 대상에 대한 여러 신고는 하나의 케이스로 묶여 있고,
+
+        `reportCount`에 몇 건이 모였는지 들어옵니다.
+
+        '
+      parameters:
+      - name: status
+        in: query
+        required: false
+        description: 처리 상태로 거릅니다.
+        schema:
+          $ref: '#/components/schemas/ReportStatus'
+        example: PENDING
+      - name: severity
+        in: query
+        required: false
+        description: 심각도로 거릅니다.
+        schema:
+          $ref: '#/components/schemas/ReportSeverity'
+        example: HIGH
+      - name: overdue
+        in: query
+        required: false
+        description: '`true`면 처리 기한(`slaDueAt`)을 넘긴 건만 조회합니다.'
+        schema:
+          type: boolean
+          example: true
+      - name: q
+        in: query
+        required: false
+        description: 검색어. 대상 표시명·신고 상세 내용을 대상으로 찾습니다.
+        schema:
+          type: string
+          example: 익명 토끼47
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 신고 케이스 목록입니다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminReportListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+  /admin/reports/{caseId}:
+    get:
+      tags:
+      - 관리자
+      summary: 신고 상세
+      operationId: getAdminReportDetail
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        케이스 요약에 더해 신고 대상 정보, 신고자별 접수 내용, 처리 이력, 자동 판정 결과를 함께 반환합니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/CaseId'
+      responses:
+        '200':
+          description: 신고 케이스 상세입니다.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminReportDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`REPORT_NOT_FOUND` 없는 케이스 → 목록으로 돌려보냅니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: REPORT_NOT_FOUND
+                  message: 존재하지 않는 신고 케이스입니다.
+                  details: {}
+    patch:
+      tags:
+      - 관리자
+      summary: 신고 처리
+      operationId: processReport
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        신고를 종결하고, 필요하면 제재를 함께 적용합니다.
+
+        - 대기(`PENDING`) 중인 케이스만 처리할 수 있습니다.
+
+        - 한 번 종결하면 다시 열 수 없습니다. 재검토는 새 케이스로 진행합니다.
+
+        - `status`가 `SANCTIONED`이면 `sanction`이 **필수**입니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/CaseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessReportRequest'
+      responses:
+        '200':
+          description: '처리가 반영된 **갱신된 케이스 상세**를 그대로 돌려줍니다.
+
+            별도 재조회 없이 이 응답으로 상세 화면을 다시 그리면 됩니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminReportDetail'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`REPORT_NOT_FOUND` 없는 케이스 → 목록으로 돌려보냅니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: REPORT_NOT_FOUND
+                  message: 존재하지 않는 신고 케이스입니다.
+                  details: {}
+        '409':
+          description: '`ALREADY_PROCESSED` 이미 종결된 케이스 → 상세를 다시 불러와 최신 상태를 보여줍니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: ALREADY_PROCESSED
+                  message: 이미 종결된 케이스입니다.
+                  details: {}
+  /admin/members/{memberId}/sanctions:
+    post:
+      tags:
+      - 관리자
+      summary: 제재 적용
+      operationId: createSanction
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        신고 처리와 별개로 회원에게 직접 제재를 겁니다.
+
+        - 제재를 걸면 그 회원의 **진행 중 챌린지 참여가 끊기고, 대기 중인 매칭 요청도 취소됩니다.**
+
+        - `type`이 `TEMP`이면 `days`를 넣습니다. `PERMANENT`이면 `days`는 무시되고 `endsAt`이 `null`로 옵니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/MemberId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSanctionRequest'
+      responses:
+        '201':
+          description: '적용된 제재 정보를 돌려줍니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SanctionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`MEMBER_NOT_FOUND` 없는 회원 → 목록을 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: MEMBER_NOT_FOUND
+                  message: 존재하지 않는 회원입니다.
+                  details: {}
+  /admin/proofs/{proofId}/media:
+    get:
+      tags:
+      - 관리자
+      summary: 관리자 촬영물 열람
+      operationId: getAdminProofMedia
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        신고 대상이거나 AI 검토 큐에 올라온 인증물만 열람할 수 있습니다.
+
+        **열람 기록이 남습니다.**
+
+        이 API는 이미지가 아니라 임시 열람 URL을 반환합니다. 받은 `url`을 그대로 `<img src>`에 넣으세요.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/ProofId'
+      responses:
+        '200':
+          description: '임시 열람 URL입니다. `expiresInSeconds`가 지나면 이미지가 끊기므로 다시 발급받으세요.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminProofMediaResponse'
+        '400':
+          description: '`NOT_REPORTED_PROOF` 열람 조건을 만족하지 않음 → 열람 버튼을 조건 충족 건에만 노출합니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: NOT_REPORTED_PROOF
+                  message: 신고되거나 검토 대기 중인 인증물만 열람할 수 있습니다.
+                  details: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`PROOF_NOT_FOUND` 없는 인증물 → 상세를 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: PROOF_NOT_FOUND
+                  message: 존재하지 않는 인증물입니다.
+                  details: {}
+        '410':
+          description: '`MEDIA_DELETED` 보관 기간이 지나 삭제됨 → "보관 기간이 지났습니다" 안내를 띄웁니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: MEDIA_DELETED
+                  message: 보관 기간이 지나 삭제된 사진입니다.
+                  details: {}
+  /admin/proofs/{proofId}/hide:
+    post:
+      tags:
+      - 관리자
+      summary: 인증물 비노출
+      operationId: hideProof
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        인증물을 숨깁니다. 숨겨진 날의 인증은 당사자가 다시 제출할 수 없고, 재제출을 시도하면
+
+        409 `PROOF_HIDDEN_BY_ADMIN`을 받습니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/ProofId'
+      responses:
+        '200':
+          description: '비노출 처리 후의 인증물 상태를 돌려줍니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofVisibilityResponse'
+              example:
+                proofId: 3401
+                hidden: true
+                aiStatus: BLOCKED
+                updatedAt: '2026-08-12T14:30:00+09:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`PROOF_NOT_FOUND` 없는 인증물 → 상세를 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: PROOF_NOT_FOUND
+                  message: 존재하지 않는 인증물입니다.
+                  details: {}
+  /admin/proofs/{proofId}/unhide:
+    post:
+      tags:
+      - 관리자
+      summary: 인증물 복구
+      operationId: unhideProof
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        비노출 처리한 인증물을 되돌립니다. 복구 버튼은 비노출 상태인 항목에만 노출하세요.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/ProofId'
+      responses:
+        '200':
+          description: '복구 후의 인증물 상태를 돌려줍니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofVisibilityResponse'
+              example:
+                proofId: 3401
+                hidden: false
+                aiStatus: APPROVED
+                updatedAt: '2026-08-12T15:05:00+09:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`PROOF_NOT_FOUND` 없는 인증물 → 상세를 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: PROOF_NOT_FOUND
+                  message: 존재하지 않는 인증물입니다.
+                  details: {}
+  /admin/posts/{postId}/hide:
+    post:
+      tags:
+      - 관리자
+      summary: 게시글 비노출
+      operationId: hidePost
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        게시글을 숨깁니다. 비노출된 글은 사용자 목록·상세에서 404 `POST_NOT_FOUND`로 처리됩니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: '비노출 처리 후의 게시글 상태를 돌려줍니다. `status`가 `HIDDEN`으로 옵니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostVisibilityResponse'
+              example:
+                postId: 512
+                status: HIDDEN
+                updatedAt: '2026-08-12T14:30:00+09:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`POST_NOT_FOUND` 없는 글 → 목록을 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: POST_NOT_FOUND
+                  message: 존재하지 않는 글입니다.
+                  details: {}
+  /admin/posts/{postId}/unhide:
+    post:
+      tags:
+      - 관리자
+      summary: 게시글 복구
+      operationId: unhidePost
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        비노출 처리한 게시글을 되돌립니다.
+
+        **이미 삭제된 게시글(`DELETED`)은 복구할 수 없습니다.** 복구 버튼을 비노출(`HIDDEN`) 상태의 글에만 노출하세요.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/PostId'
+      responses:
+        '200':
+          description: '복구 후의 게시글 상태를 돌려줍니다. `status`가 `VISIBLE`로 옵니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostVisibilityResponse'
+              example:
+                postId: 512
+                status: VISIBLE
+                updatedAt: '2026-08-12T15:05:00+09:00'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`POST_NOT_FOUND` 없는 글 → 목록을 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: POST_NOT_FOUND
+                  message: 존재하지 않는 글입니다.
+                  details: {}
+        '409':
+          description: '`POST_ALREADY_DELETED` 이미 삭제된 글은 복구할 수 없음 → 복구 버튼을 비노출 상태의 글에만 노출합니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: POST_ALREADY_DELETED
+                  message: 삭제된 글은 복구할 수 없습니다.
+                  details: {}
+  /admin/ai-reviews:
+    get:
+      tags:
+      - 관리자
+      summary: AI 검토 큐 목록
+      operationId: getAiReviews
+      description: "운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.\n\n자동 판정이 애매해 관리자 확정이 필요한 건들을 조회합니다.\n\n- `COMPLETION` 건을 확정하면 그 챌린지의\
+        \ 완주 리포트가 만들어집니다.\n  확정 전까지 참가자는 리포트 조회에서 **202 `REPORT_NOT_READY`** 를 받습니다.\n"
+      parameters:
+      - name: type
+        in: query
+        required: false
+        description: 검토 종류로 거릅니다.
+        schema:
+          $ref: '#/components/schemas/AiReviewType'
+        example: COMPLETION
+      - name: status
+        in: query
+        required: false
+        description: 검토 상태로 거릅니다.
+        schema:
+          $ref: '#/components/schemas/AiReviewStatus'
+        example: PENDING
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: '검토 대기 항목 목록입니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiReviewListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+  /admin/ai-reviews/{reviewId}:
+    patch:
+      tags:
+      - 관리자
+      summary: AI 검토 확정
+      operationId: decideAiReview
+      description: "운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.\n\n자동 판정이 애매한 건을 관리자가 확정합니다.\n\n- `decision`이 `CONFIRM`이면 자동 판정을 그대로\
+        \ 유지하고, `OVERRIDE`이면 뒤집습니다.\n- `COMPLETION` 건을 `OVERRIDE`할 때만 `groupAvgRate`, `groupMet`을 함께 보냅니다.\n- **`COMPLETION`\
+        \ 건을 확정하면 그 챌린지의 완주 리포트가 만들어집니다.**\n  확정 전까지 참가자는 리포트 조회에서 202를 받습니다.\n"
+      parameters:
+      - $ref: '#/components/parameters/ReviewId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecideAiReviewRequest'
+      responses:
+        '200':
+          description: '확정 후의 검토 항목을 돌려줍니다. `reportGenerated`가 `true`면 완주 리포트가 생성되어
+
+            참가자가 더 이상 202를 받지 않습니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiReviewDecisionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`AI_REVIEW_NOT_FOUND` 없는 검토 항목 → 큐를 다시 불러옵니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: AI_REVIEW_NOT_FOUND
+                  message: 존재하지 않는 검토 항목입니다.
+                  details: {}
+        '409':
+          description: '`ALREADY_PROCESSED` 이미 확정된 항목 → 큐를 다시 불러와 최신 상태를 보여줍니다'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: ALREADY_PROCESSED
+                  message: 이미 확정된 검토 항목입니다.
+                  details: {}
+  /admin/withdrawals:
+    get:
+      tags:
+      - 관리자
+      summary: 탈퇴 처리 결과
+      operationId: getWithdrawals
+      description: '운영자 전용입니다. 일반 사용자 앱에서는 호출하지 않습니다.
+
+        탈퇴 신청과 삭제 처리 현황을 조회합니다.
+
+        - `deletedAt`이 `null`이면 아직 유예 기간 중이며, 회원이 다시 로그인하면 계정이 되살아납니다.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: '탈퇴 처리 목록입니다.
+
+            다른 목록 API와 같은 페이지 형식(`PageMeta` + `content`)으로 감쌌습니다.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawalListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
