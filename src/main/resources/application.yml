@@ -1,13 +1,9 @@
 spring:
-  datasource:
-    url: jdbc:h2:mem:morak;MODE=MySQL;LOCK_TIMEOUT=3000
-    username: sa
-  h2:
-    console:
-      enabled: true
+  # 로컬 실행 기본값. 운영 배포는 SPRING_PROFILES_ACTIVE=prod 로 덮어쓴다.
+  profiles:
+    default: dev
+
   jpa:
-    hibernate:
-      ddl-auto: update
     properties:
       hibernate:
         format_sql: true
@@ -21,20 +17,23 @@ spring:
 
 # 미결값·정책값은 전부 여기로 격리한다 (API명세서 v1.0 §0-6)
 # 팀 확정이 오면 코드가 아니라 이 값만 바꾼다.
+#
+# 비밀값(jwt.secret, security.*)은 여기 두지 않는다. 공개 저장소에 커밋되고,
+# 폴백을 두면 운영에서 환경변수를 빠뜨려도 그 값으로 조용히 뜬다. dev 값은
+# application-dev.yml, 운영은 환경변수로만 주입한다.
 morak:
   timezone: Asia/Seoul
 
   jwt:
-    # 운영은 환경변수 필수. dev 기본값은 로컬 전용이며 절대 운영에 쓰지 않는다.
-    secret: ${MORAK_JWT_SECRET:morak-local-dev-secret-key-please-change-me-32b}
+    secret: ${MORAK_JWT_SECRET}
     expire-hours: 24
 
   security:
-    media-token-secret: ${MORAK_MEDIA_TOKEN_SECRET:morak-local-media-token-secret}
-    social-hash-pepper: ${MORAK_SOCIAL_HASH_PEPPER:morak-local-social-hash-pepper}
+    media-token-secret: ${MORAK_MEDIA_TOKEN_SECRET}
+    social-hash-pepper: ${MORAK_SOCIAL_HASH_PEPPER}
 
   dev:
-    enabled: true          # @Profile("dev")와 AND 조건. 운영 배포 시 false
+    enabled: false          # dev 프로필에서만 true. @Profile("dev")와 AND 조건
 
   match:
     expire-hours: 24       # 매칭 대기 유효 시간

@@ -1,0 +1,22 @@
+# 로컬 개발 전용. 이 파일의 값은 운영에 절대 쓰지 않는다.
+# H2 인메모리 DB와 개발용 소셜 로그인이 여기서만 켜진다.
+spring:
+  datasource:
+    url: jdbc:h2:mem:morak;MODE=MySQL;LOCK_TIMEOUT=3000
+    username: sa
+  h2:
+    console:
+      enabled: true      # SQL 콘솔. 개발에서만. 무인증이라 운영에 켜면 안 된다
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+morak:
+  # 로컬 전용 비밀값. 운영은 환경변수로만 주입한다.
+  jwt:
+    secret: morak-local-dev-secret-key-please-change-me-32b
+  security:
+    media-token-secret: morak-local-media-token-secret
+    social-hash-pepper: morak-local-social-hash-pepper
+  dev:
+    enabled: true        # 개발용 소셜 로그인(DevSocialClient) 활성화

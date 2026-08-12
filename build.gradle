@@ -23,6 +23,12 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 
+	// JWT. jjwt-jackson 대신 gson 구현을 쓴다 — jackson 쪽은 Jackson 2를 끌고 오는데
+	// Spring Boot 4.1은 Jackson 3 기반이라 두 버전이 섞인다.
+	implementation 'io.jsonwebtoken:jjwt-api:0.13.0'
+	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.13.0'
+	runtimeOnly 'io.jsonwebtoken:jjwt-gson:0.13.0'
+
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
 	testCompileOnly 'org.projectlombok:lombok'

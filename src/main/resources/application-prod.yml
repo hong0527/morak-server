@@ -1,0 +1,17 @@
+# 운영 전용. 비밀값과 DB 접속 정보는 환경변수로만 주입한다.
+# 이 파일에 실제 값을 적지 않는다 — 공개 저장소에 커밋되기 때문이다.
+spring:
+  datasource:
+    url: ${MORAK_DB_URL}
+    username: ${MORAK_DB_USERNAME}
+    password: ${MORAK_DB_PASSWORD}
+  h2:
+    console:
+      enabled: false     # 운영에서 SQL 콘솔은 절대 열지 않는다
+  jpa:
+    hibernate:
+      ddl-auto: validate # 운영은 스키마를 자동 변경하지 않는다. 마이그레이션으로만
+
+morak:
+  dev:
+    enabled: false       # 개발용 소셜 로그인은 운영에서 꺼진다
