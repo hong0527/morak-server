@@ -316,7 +316,7 @@ morak:
 | AD-5 | GET /api/admin/appeals | 이의 큐 | 10 |
 | AD-6 | PATCH /api/admin/appeals/{appealId} | 이의 처리 | 10 |
 | AD-7 | GET /api/admin/sessions | 진행 중 세션 모니터 | 10 |
-| AD-8 | GET /api/admin/withdrawals | 탈퇴 처리 결과 | 11 |
+| AD-8 | GET /api/admin/withdrawals | 탈퇴 처리 결과 | 10 |
 | DEV-2 | POST /api/dev/clock | 개발 전용 시각 조작 | 1 |
 | DEV-3 | POST /api/dev/sessions/seed | 개발 전용 완주 이력 시드 | 5 |
 | DEV-4 | POST /api/dev/batches/{name} | 개발 전용 배치 트리거 | 2 |
@@ -1598,6 +1598,8 @@ UPDATE session_participant
 
 `overdue`는 AD-1과 동일하게 조회 시점의 파생값이다 — `status = PENDING AND sla_due_at < now`. 신고 케이스와 이의가 같은 규칙을 쓴다.
 
+정렬은 AD-1과 같이 `sla_due_at` 오름차순(동률은 `appealId` 오름차순)이다 — 기한이 임박한 건이 위로 온다. `status`·`overdue`는 생략하면 조건 자체를 만들지 않는다. `sessionId`·`warningCount`는 이의의 컬럼이 아니라 근거 퇴출(`eviction`)의 값이고, `nickname`은 서버가 만든 익명 닉네임이다.
+
 발생 에러: 403 `FORBIDDEN_ROLE`
 
 게이트: ③ ADMIN · ② ✓
@@ -1632,8 +1634,10 @@ UPDATE session_participant
 
 - `appeal_case.status = ACCEPTED`, `decided_by=ADMIN`, `decided_at`, `note`
 - `eviction.revoked_at = now` — 퇴출 기록 자체는 남긴다(감사 추적). `session_participant.status`는 `EVICTED`로 유지하고 취소 사실은 `revoked_at`으로 표현한다
-- `point_ledger` INSERT — `reason=APPEAL_REFUND`, `delta=+300`, `ref_type=EVICTION`, `ref_id={evictionId}`. 역분개이며 원래의 `EVICTION_PENALTY` 행은 지우지 않는다
-- 완주 소급 재판정 (★D1 기준) — 퇴출이 없었다면 세션 종료 시각까지 참가한 것으로 보아 `completed=true`, `point_awarded` 지급(`point_ledger(SESSION_COMPLETE, ref_type=SESSION_PARTICIPANT, ref_id=participantId)` — UNIQUE로 중복 지급이 막힌다)
+- `point_ledger` INSERT — `reason=APPEAL_REFUND`, `delta=+300`, `ref_type=EVICTION`, `ref_id={evictionId}`. 역분개이며 원래의 `EVICTION_PENALTY` 행은 지우지 않는다.
+  **되돌릴 차감이 원장에 없으면 이 행도 만들지 않고 `pointRefunded=0`이다.** 퇴출 -300을 원장에 넣는 주체는 B1(§5)이라 퇴출과 차감 사이에 최대 1분의 틈이 있고, 그 사이에 인용되면 빠져나간 적 없는 300이 들어온다. 역분개는 기존 기록을 뒤집는 것이지 새 지급이 아니다
+- 완주 소급 재판정 (★D1 기준) — 퇴출이 없었다면 세션 종료 시각까지 참가한 것으로 보아 `completed=true`, `point_awarded` 지급(`point_ledger(SESSION_COMPLETE, ref_type=SESSION_PARTICIPANT, ref_id=participantId)` — UNIQUE로 중복 지급이 막힌다).
+  **대상은 세션이 이미 `ENDED`이고 참가자 상태가 `EVICTED`인 경우뿐이다.** 세션이 아직 `LIVE`면 완주 여부가 정해지지 않았으므로 소급하지 않고 `sessionCompletedRestored=false`로 답한다 — 남은 시간을 채우지 않은 사람을 완주자로 만들 수는 없고, 세션 복귀(LiveKit 재입장) 경로는 v1 범위 밖이다. 이 경우 그 세션은 미완주로 남는다(SLA 72시간 > 최대 세션 길이 4시간이라 실제로는 드문 경로다)
 - `streak_day` INSERT(UNIQUE(member_id, completed_on)로 멱등) → `member.current_streak`·`last_completed_on` 재계산 → 목표 달성 검사(★D3). 달성 시 `GOAL_ACHIEVED` 지급
 - 재매칭 쿨다운은 이 시점부터 해제된다
 
@@ -1661,6 +1665,8 @@ UPDATE session_participant
 }
 ```
 
+`status`를 생략하면 조건 자체를 만들지 않아 종료된 세션까지 함께 나온다(AD-1과 같은 규칙). 정렬은 `started_at` 내림차순(동률은 `sessionId` 내림차순)이다. 상태별 인원수는 저장 컬럼이 아니라 `participants`를 센 값이고, **이의가 인용된 퇴출도 `evictedCount`에 남는다** — 참가자 상태는 `EVICTED`로 유지되고 취소 사실은 `eviction.revoked_at`이 표현하기 때문이다(AD-6).
+
 발생 에러: 403 `FORBIDDEN_ROLE`
 
 게이트: ③ ADMIN · ② ✓
@@ -1673,7 +1679,11 @@ UPDATE session_participant
 
 응답 200 — `PageResponse<{memberId, requestedAt, deleteScheduledAt, deletedAt, status}>`
 
-발생 에러: 403 `FORBIDDEN_ROLE`
+`status`는 `WITHDRAW_PENDING`(유예 중)·`DELETED`(파기 완료) 둘만 받는다. 생략하면 두 상태를 함께 내린다 — **이 화면이 답해야 하는 것은 "예정대로 파기됐는가"라, 유예 중과 완료를 나눠 보여주면 그 비교가 화면 밖에서 일어난다.** 그 외 상태(`ACTIVE`)는 400 `VALIDATION_FAILED`다. 정렬은 `withdraw_requested_at` 내림차순(동률은 `memberId` 내림차순).
+
+닉네임은 싣지 않는다. 파기된 계정의 닉네임은 이미 '탈퇴회원'으로 덮여 있어 식별에 쓸 수 없고, 유예 중인 계정만 실명 격 정보를 내리면 파기 전후로 응답이 갈린다.
+
+발생 에러: 403 `FORBIDDEN_ROLE` / 400 `VALIDATION_FAILED`(조회 대상이 아닌 `status`)
 
 게이트: ③ ADMIN · ② ✓
 

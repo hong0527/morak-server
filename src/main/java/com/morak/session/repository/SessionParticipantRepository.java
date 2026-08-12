@@ -22,6 +22,12 @@ public interface SessionParticipantRepository extends JpaRepository<SessionParti
     /** SS-1 참가자 목록. 자리 순서가 매번 바뀌지 않도록 생성 순으로 고정한다. */
     List<SessionParticipant> findBySessionIdOrderByIdAsc(Long sessionId);
 
+    /**
+     * AD-7 모니터가 한 페이지분 세션의 참가자를 한 번에 읽는다. 세션마다 따로 조회하면
+     * 목록 한 화면에 페이지 크기만큼의 쿼리가 나간다.
+     */
+    List<SessionParticipant> findBySessionIdInOrderByIdAsc(Collection<Long> sessionIds);
+
     /** 조기 종료 판정(D12)과 종료 시 완주 처리가 함께 쓰는 "지금 남아 있는 사람" 조회. */
     List<SessionParticipant> findBySessionIdAndStatusIn(Long sessionId,
                                                         Collection<ParticipantStatus> statuses);

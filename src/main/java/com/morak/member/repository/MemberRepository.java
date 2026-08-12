@@ -4,8 +4,11 @@ import com.morak.member.entity.Member;
 import com.morak.member.type.MemberStatus;
 import com.morak.member.type.SocialProvider;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -17,6 +20,13 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
 
     /** 탈퇴 처리 배치가 삭제 예정 시각이 지난 회원을 찾는다. */
     List<Member> findByStatusAndDeleteScheduledAtBefore(MemberStatus status, LocalDateTime now);
+
+    /**
+     * AD-8 탈퇴 처리 결과. 유예 중과 파기 완료가 한 목록이라 상태를 집합으로 받는다 —
+     * "신청은 됐는데 예정일이 지나도 파기되지 않은 건"을 찾는 것이 이 화면의 목적이라,
+     * 두 상태를 나눠 보여주면 그 비교가 화면 밖에서 일어난다.
+     */
+    Page<Member> findByStatusIn(Collection<MemberStatus> statuses, Pageable pageable);
 
     /**
      * 잔액이 있을 때만 깎는다(SR-3). <b>잔액을 읽고 서비스에서 비교한 뒤 깎으면 동시 주문 두

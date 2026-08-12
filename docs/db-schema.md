@@ -539,6 +539,8 @@ CREATE TABLE appeal_case (
 - `reason_text`(신청자 진술)와 `note`(관리자 판단)는 서로 덮어쓰지 않는다. AD-6 처리 시 `note`만 채운다.
 - overdue는 **저장하지 않고 파생한다**: `status='PENDING' AND sla_due_at < now`. `report_case`도 같은 규칙이라 두 큐의 지연 판정이 하나의 식으로 통일된다.
 - 인용(ACCEPTED) 처리는 세 가지를 함께 한다: `eviction.revoked_at` 기록, `point_ledger` 역분개(APPEAL_REFUND), 그날 완주 소급 재판정(★D1 기준 → `streak_day` INSERT).
+- 역분개는 원장에 `EVICTION_PENALTY` 행이 실제로 있을 때만 만든다. 차감 주체가 B1이라 퇴출과 차감 사이에 틈이 있고, 그 틈에 인용하면 빠져나간 적 없는 300이 들어온다.
+- 소급 완주가 만든 `streak_day` 행은 `member.current_streak`·`last_completed_on`을 **재계산으로** 갱신한다. 되살린 날이 마지막 완주일보다 과거일 수 있어 증분 갱신으로는 반영되지 않는다.
 - 종결된 이의는 재오픈하지 않는다.
 
 ---

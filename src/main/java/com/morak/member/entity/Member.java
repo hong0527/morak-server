@@ -149,6 +149,21 @@ public class Member {
     }
 
     /**
+     * 완주일 소급 반영(AD-6). {@link #recordCompletion}이 앞으로만 세는 것과 달리 이미 지나간
+     * 하루가 뒤늦게 채워지는 경우라, 증분이 아니라 {@code streak_day}를 다시 센 결과를 통째로
+     * 받는다.
+     *
+     * <p><b>증분으로는 답이 나오지 않는다.</b> 8일을 되살렸는데 9·10일 완주가 이미 있으면
+     * 늘어나는 것은 오늘의 연속 일수이지 소급한 그날이 아니다. {@code recordCompletion}은
+     * 마지막 완주일보다 과거인 날짜를 아예 무시하므로, 그 경로로는 인용된 이의가 Streak를
+     * 끊긴 채로 남긴다.
+     */
+    public void applyRecountedStreak(LocalDate lastCompletedOn, int currentStreak) {
+        this.lastCompletedOn = lastCompletedOn;
+        this.currentStreak = currentStreak;
+    }
+
+    /**
      * 오늘 기준으로 살아 있는 연속 일수(AU-2). 캐시는 마지막 완주 시점의 값을 그대로 들고
      * 있으므로 — 미완주일에 0을 써 두는 배치가 없다 — <b>끊겼는지는 읽는 자리에서 판정한다.</b>
      *

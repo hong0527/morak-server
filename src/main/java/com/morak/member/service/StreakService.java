@@ -91,6 +91,53 @@ public class StreakService {
     }
 
     /**
+     * 완주 하루를 소급 기록한다(AD-6 이의 인용). 하는 일은 {@link #recordCompletion}과 같지만
+     * <b>캐시를 증분이 아니라 재계산으로 갱신한다</b>.
+     *
+     * <p>되살린 날이 마지막 완주일보다 과거일 수 있기 때문이다. 그 경우 증분 갱신
+     * ({@link Member#recordCompletion})은 날짜를 무시하고 끝나, {@code streak_day}에는 행이
+     * 생겼는데 회원의 연속 일수는 끊긴 채로 남는다. 되살린 하루가 앞뒤 날짜를 잇는 경우가
+     * 바로 이의를 인용하는 이유이므로, 여기서는 완주일 전체를 다시 세어 덮어쓴다.
+     */
+    public CompletionRecord recordBackfilledCompletion(Long memberId, LocalDate completedOn,
+                                                       Long sessionId, LocalDateTime now) {
+        Member member = memberRepository.findById(memberId)
+                .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 완주 기록: " + memberId));
+        boolean countedToday = false;
+        if (streakDayRepository.findByMemberIdAndCompletedOn(memberId, completedOn).isEmpty()) {
+            streakDayRepository.save(StreakDay.complete(memberId, completedOn, sessionId));
+            // 아래 재계산이 방금 넣은 행까지 읽어야 한다. INSERT가 아직 영속성 컨텍스트에만
+            // 있으면 재계산은 소급 이전의 연속 일수를 그대로 돌려준다.
+            streakDayRepository.flush();
+            recountStreak(member);
+            countedToday = true;
+        }
+        return new CompletionRecord(countedToday, member.getCurrentStreak(),
+                achieveGoalIfReached(member, now));
+    }
+
+    /**
+     * 완주일 기록을 근거로 캐시를 다시 센다.
+     *
+     * <p>기준점은 오늘이 아니라 <b>가장 최근 완주일</b>이다. 오늘부터 세면 어제 완주하고 오늘
+     * 아직 안 한 회원의 연속이 0으로 굳어, 캐시를 읽는 자리의 판정
+     * ({@link Member#currentStreakOn})과 이중으로 끊긴다 — 그쪽은 어제 완주를 살아 있는
+     * 연속으로 본다.
+     *
+     * <p>읽는 범위에도 상한을 두지 않는다. 소급한 날 이후의 완주일을 빼고 세면
+     * {@code last_completed_on}이 과거로 밀려, 되살린 하루가 오히려 연속을 깎는다.
+     */
+    private void recountStreak(Member member) {
+        List<LocalDate> completedDays = streakDayRepository.findAllCompletedOn(
+                member.getId(), PageRequest.ofSize(MAX_LOOKBACK_DAYS));
+        if (completedDays.isEmpty()) {
+            return;
+        }
+        LocalDate latest = completedDays.getFirst();
+        member.applyRecountedStreak(latest, countBackFrom(new HashSet<>(completedDays), latest));
+    }
+
+    /**
      * 목표 달성 검사(★D3). 달성한 목표는 ACHIEVED로 닫는다 — ACTIVE로 두면 다음 완주 때마다
      * 같은 목표에 1,000p가 다시 지급된다. 재도전은 새 행이라 목표를 다시 설정할 수 있다.
      */

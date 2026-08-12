@@ -35,6 +35,21 @@ public interface StreakDayRepository extends JpaRepository<StreakDay, Long> {
                                         @Param("date") LocalDate date,
                                         Pageable pageable);
 
+    /**
+     * 완주일 전체를 최근 순으로. AD-6 인용이 소급 완주를 넣은 뒤 캐시를 다시 셀 때 쓴다.
+     *
+     * <p>{@link #findCompletedOnUpTo}와 달리 <b>상한을 두지 않는다.</b> 재계산에 상한을 걸면
+     * 그 뒤의 완주일이 집계에서 빠져 {@code last_completed_on}이 과거로 되돌아간다 —
+     * 되살린 하루가 오히려 연속을 깎는 결과가 된다.
+     */
+    @Query("""
+            SELECT sd.completedOn
+              FROM StreakDay sd
+             WHERE sd.memberId = :memberId
+             ORDER BY sd.completedOn DESC
+            """)
+    List<LocalDate> findAllCompletedOn(@Param("memberId") Long memberId, Pageable pageable);
+
     /** 만 14세 미만 파기(AU-3)와 탈퇴 파기(B4)가 회원의 완주 기록을 함께 지운다. */
     void deleteByMemberId(Long memberId);
 }

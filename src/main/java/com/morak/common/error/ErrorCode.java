@@ -67,7 +67,8 @@ public enum ErrorCode {
     DUPLICATE_REPORT(HttpStatus.CONFLICT, "이미 신고한 대상입니다."),
     TARGET_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 신고 대상입니다."),
     REPORT_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 신고입니다."),
-    ALREADY_PROCESSED(HttpStatus.CONFLICT, "이미 처리된 신고입니다."),
+    // AD-3 신고와 AD-6 이의가 함께 쓰는 코드라 문구에 한쪽 자원 이름을 넣지 않는다
+    ALREADY_PROCESSED(HttpStatus.CONFLICT, "이미 처리된 건입니다."),
     APPEAL_ALREADY_FILED(HttpStatus.CONFLICT, "이미 이의를 신청했습니다."),
     APPEAL_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 이의입니다.");
 

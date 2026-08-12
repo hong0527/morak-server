@@ -16,6 +16,7 @@ import com.morak.session.repository.WarningRepository;
 import com.morak.session.type.AbsenceEventType;
 import com.morak.session.type.ParticipantStatus;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
@@ -125,7 +126,7 @@ public class SessionClosingService {
                         .toList();
         int targetMinutes = session.getTargetMinutes();
         for (Long participantId : completerIds) {
-            settleCompletion(participantId, sessionId, targetMinutes, endedAt);
+            settleCompletion(participantId, sessionId, targetMinutes, endedAt, false);
         }
         log.info("세션 종료 처리: session={}, reason={}, 완주 {}명",
                 sessionId, session.getEndReason(), completerIds.size());
@@ -143,8 +144,43 @@ public class SessionClosingService {
                 .orElseThrow(() -> new IllegalStateException(
                         "참가자의 세션이 없다: participant=" + participantId));
         settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
-                session.getEndedAt());
+                session.getEndedAt(), false);
         return 1;
+    }
+
+    /**
+     * 이의 인용(AD-6)의 완주 소급. 퇴출이 없었다면 세션 종료 시각까지 남아 있었을 사람이므로
+     * ★D1 기준으로 완주다 — 지급·완주 표시·완주일·목표 검사가 {@link #closeDueSession}과
+     * 같은 자리를 지난다.
+     *
+     * <p><b>지급 경로를 따로 만들지 않는 이유는 멱등키 때문이다.</b> 완주 지급의 근거는
+     * {@code (memberId, SESSION_COMPLETE, SESSION_PARTICIPANT, participantId)}이고, B1이
+     * 나중에 같은 참가자를 흡수 지급 대상으로 집어 들어도 이 4튜플이 겹쳐 두 번 지급되지
+     * 않는다. 여기서 다른 ref로 지급하면 그 방어가 사라진다.
+     *
+     * <p>참가자 상태는 {@code EVICTED}로 남긴다(명세 AD-6). 취소된 사실은 상태가 아니라
+     * {@code eviction.revoked_at}이 표현하고, 상태를 되돌리면 그 세션에 퇴출이 있었다는
+     * 감사 기록이 참가자 행에서 사라진다.
+     *
+     * @return 실제로 완주를 세웠으면 true. 이미 완주였거나 세션이 아직 끝나지 않았으면 false
+     */
+    public boolean restoreCompletion(Long participantId) {
+        SessionParticipant participant =
+                sessionParticipantRepository.findById(participantId).orElse(null);
+        if (participant == null || participant.isCompleted()) {
+            return false;
+        }
+        LiveSession session = liveSessionRepository.findById(participant.getSessionId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "참가자의 세션이 없다: participant=" + participantId));
+        // 아직 진행 중인 세션은 완주 여부가 정해지지 않았다. 지금 완주로 찍으면 남은 시간을
+        // 채우지 않은 사람이 완주자가 된다 — 판정은 종료 시각에 B1이 한다.
+        if (session.getEndedAt() == null) {
+            return false;
+        }
+        settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
+                session.getEndedAt(), true);
+        return true;
     }
 
     /**
@@ -179,14 +215,22 @@ public class SessionClosingService {
      * <p>금액은 실제 재실 시간이 아니라 {@code target_minutes} 기준이다(D15 보충).
      * 조기 종료로 30분 만에 끝난 60분 세션도 남아 있던 사람에게는 +100이다 — 세션이 일찍
      * 끝난 것은 남은 사람의 책임이 아니다.
+     *
+     * @param backfilled 이미 지나간 날의 완주를 뒤늦게 세우는가(AD-6 인용). Streak 캐시를
+     *                   증분이 아니라 재계산으로 갱신해야 하는 유일한 차이다
      */
     private void settleCompletion(Long participantId, Long sessionId, int targetMinutes,
-                                  LocalDateTime endedAt) {
+                                  LocalDateTime endedAt, boolean backfilled) {
         Long memberId = loadParticipant(participantId).getMemberId();
         int amount = completePointPerHour * targetMinutes / MINUTES_PER_HOUR;
         pointService.award(memberId, amount, PointReason.SESSION_COMPLETE, participantId, endedAt);
         loadParticipant(participantId).complete(amount);
-        streakService.recordCompletion(memberId, endedAt.toLocalDate(), sessionId, endedAt);
+        LocalDate completedOn = endedAt.toLocalDate();
+        if (backfilled) {
+            streakService.recordBackfilledCompletion(memberId, completedOn, sessionId, endedAt);
+        } else {
+            streakService.recordCompletion(memberId, completedOn, sessionId, endedAt);
+        }
     }
 
     private SessionParticipant loadParticipant(Long participantId) {

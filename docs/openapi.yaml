@@ -2254,7 +2254,9 @@ components:
           $ref: '#/components/schemas/AppealDecision'
         note:
           type: string
+          maxLength: 1000
           nullable: true
+          description: 관리자 처리 사유. 신청자의 `reasonText`를 덮어쓰지 않습니다
       example:
         decision: ACCEPTED
         note: 자리비움 이벤트 로그상 카메라 각도 문제로 확인. 퇴출 취소.
@@ -2279,11 +2281,11 @@ components:
         pointRefunded:
           type: integer
           nullable: true
-          description: 인용 시 역분개로 되돌린 포인트. 기각이면 지급이 없습니다
+          description: 인용 시 역분개로 되돌린 포인트. 기각이면 `0`입니다. 되돌릴 차감이 아직 원장에 없으면 인용이어도 `0`입니다
         sessionCompletedRestored:
           type: boolean
           nullable: true
-          description: 완주 소급 재판정 결과
+          description: 완주 소급 재판정 결과. 세션이 아직 진행 중이면 소급하지 않으므로 `false`입니다
         streakAfter:
           type: integer
           nullable: true
@@ -4174,8 +4176,10 @@ paths:
       description: "이의를 인용하거나 기각합니다.\n\n- **인용해도 퇴출 기록 자체는 남깁니다(감사 추적).** 참가자 상태는\
         \ 퇴출로 유지하고 취소 사실은 별도 시각으로 표현합니다.\n- 인용 시 패널티는 역분개로 되돌아가고, 원래의 차감 행은 지우지 않습니다.\n\
         - 인용 시 완주를 소급 재판정합니다 — 퇴출이 없었다면 세션 종료까지 참가한 것으로 보아 완주 처리하고 포인트를 지급합니다.\n \
-        \ Streak도 함께 재계산되며 목표 달성 조건을 채우면 달성 처리됩니다.\n- 재매칭 쿨다운은 인용 시점부터 해제됩니다.\n- 기각이면\
-        \ 상태와 메모만 기록하고 원복은 일어나지 않습니다.\n"
+        \ Streak도 함께 재계산되며 목표 달성 조건을 채우면 달성 처리됩니다.\n  단, 세션이 아직 진행 중이면 완주 여부가 정해지지\
+        \ 않았으므로 소급하지 않습니다(`sessionCompletedRestored=false`).\n- 되돌릴 차감이 아직 원장에 없으면 역분개도\
+        \ 만들지 않습니다(`pointRefunded=0`). 역분개는 기존 기록을 뒤집는 것이지 새 지급이 아닙니다.\n- 재매칭 쿨다운은\
+        \ 인용 시점부터 해제됩니다.\n- 기각이면 상태와 메모만 기록하고 원복은 일어나지 않습니다.\n"
       parameters:
       - $ref: '#/components/parameters/AppealId'
       requestBody:
@@ -4216,7 +4220,9 @@ paths:
       summary: AD-7 진행 중 세션 모니터
       operationId: getAdminSessions
       description: "진행 중인 세션과 참가자 상태를 봅니다.\n\n- **관리자에게도 영상은 제공하지 않습니다.** 저장하지 않으므로\
-        \ 존재하지 않습니다.\n"
+        \ 존재하지 않습니다.\n- `status`를 생략하면 종료된 세션까지 함께 나옵니다.\n- 이의가 인용된 퇴출도 `evictedCount`에\
+        \ 남습니다 — 참가자 상태는 퇴출로 유지되고 취소 사실은 별도 시각으로 표현하기 때문입니다.\n- 조회 전용입니다. 관리자가 세션에\
+        \ 개입하는 경로는 v1 범위 밖입니다.\n"
       parameters:
       - name: status
         in: query
@@ -4251,9 +4257,12 @@ paths:
       - name: status
         in: query
         required: false
-        description: 회원 상태 필터
+        description: 회원 상태 필터. 생략하면 두 상태를 함께 내립니다. 그 외 값은 400입니다
         schema:
-          $ref: '#/components/schemas/MemberStatus'
+          type: string
+          enum:
+          - WITHDRAW_PENDING
+          - DELETED
       - $ref: '#/components/parameters/Page'
       - $ref: '#/components/parameters/Size'
       responses:
