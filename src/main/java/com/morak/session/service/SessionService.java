@@ -6,18 +6,24 @@ import com.morak.common.error.BusinessException;
 import com.morak.common.error.ErrorCode;
 import com.morak.member.entity.Member;
 import com.morak.member.repository.MediaConsentRepository;
+import com.morak.member.repository.MemberGoalRepository;
 import com.morak.member.repository.MemberRepository;
+import com.morak.member.repository.StreakDayRepository;
+import com.morak.member.service.StreakService;
+import com.morak.member.type.GoalStatus;
 import com.morak.session.dto.request.SessionGoalRequest;
 import com.morak.session.dto.response.LivekitTokenResponse;
 import com.morak.session.dto.response.MySessionSummaryResponse;
 import com.morak.session.dto.response.SessionDetailResponse;
 import com.morak.session.dto.response.SessionGoalResponse;
+import com.morak.session.dto.response.SessionResultResponse;
 import com.morak.session.entity.LiveSession;
 import com.morak.session.entity.SessionParticipant;
 import com.morak.session.repository.LiveSessionRepository;
 import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.type.ParticipantStatus;
 import com.morak.session.type.SessionStatus;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,17 +55,26 @@ public class SessionService {
     private final SessionParticipantRepository sessionParticipantRepository;
     private final MemberRepository memberRepository;
     private final MediaConsentRepository mediaConsentRepository;
+    private final StreakDayRepository streakDayRepository;
+    private final MemberGoalRepository memberGoalRepository;
+    private final StreakService streakService;
     private final LiveKitTokenProvider liveKitTokenProvider;
 
     public SessionService(LiveSessionRepository liveSessionRepository,
                           SessionParticipantRepository sessionParticipantRepository,
                           MemberRepository memberRepository,
                           MediaConsentRepository mediaConsentRepository,
+                          StreakDayRepository streakDayRepository,
+                          MemberGoalRepository memberGoalRepository,
+                          StreakService streakService,
                           LiveKitTokenProvider liveKitTokenProvider) {
         this.liveSessionRepository = liveSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.memberRepository = memberRepository;
         this.mediaConsentRepository = mediaConsentRepository;
+        this.streakDayRepository = streakDayRepository;
+        this.memberGoalRepository = memberGoalRepository;
+        this.streakService = streakService;
         this.liveKitTokenProvider = liveKitTokenProvider;
     }
 
@@ -76,6 +91,41 @@ public class SessionService {
         Map<Long, String> nicknames = memberRepository.findAllById(memberIds).stream()
                 .collect(Collectors.toMap(Member::getId, Member::getNickname));
         return SessionDetailResponse.of(session, participants, nicknames, memberId);
+    }
+
+    /**
+     * SS-8 세션 결과. 검사 순서가 곧 명세다 — 참가 이력이 먼저이고 종료 여부가 그다음이다.
+     * 뒤집으면 남의 진행 중 세션을 찔러 본 사람이 403 대신 409를 받아 그 세션의 존재와
+     * 진행 여부를 알게 된다.
+     */
+    public SessionResultResponse getResult(Long memberId, Long sessionId) {
+        LiveSession session = findSession(sessionId);
+        List<SessionParticipant> participants =
+                sessionParticipantRepository.findBySessionIdOrderByIdAsc(sessionId);
+        SessionParticipant me = participants.stream()
+                .filter(participant -> participant.getMemberId().equals(memberId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_SESSION_PARTICIPANT));
+        if (session.getStatus() != SessionStatus.ENDED) {
+            throw new BusinessException(ErrorCode.SESSION_NOT_ENDED);
+        }
+        Map<Long, String> nicknames = memberRepository
+                .findAllById(participants.stream().map(SessionParticipant::getMemberId).toList())
+                .stream()
+                .collect(Collectors.toMap(Member::getId, Member::getNickname));
+        LocalDate completedOn = session.getEndedAt().toLocalDate();
+        // 그날의 완주가 이 세션으로 성립했는지. 다른 세션이 먼저 기록했으면 Streak는
+        // 이미 올라 있고 이 세션은 중복 증가시키지 않았다는 뜻이다(★D2).
+        boolean countedToday = streakDayRepository
+                .findByMemberIdAndCompletedOn(memberId, completedOn)
+                .map(streakDay -> streakDay.getSessionId().equals(sessionId))
+                .orElse(false);
+        // B1이 목표 달성 시각으로 세션 종료 시각을 그대로 쓴다. 저장 컬럼을 새로 두지 않고
+        // 그 값으로 "이 세션이 목표를 채웠는가"를 답한다.
+        boolean goalAchieved = memberGoalRepository.existsByMemberIdAndStatusAndAchievedAt(
+                memberId, GoalStatus.ACHIEVED, session.getEndedAt());
+        return SessionResultResponse.of(session, participants, nicknames, me,
+                streakService.snapshotOn(memberId, completedOn), countedToday, goalAchieved);
     }
 
     /**

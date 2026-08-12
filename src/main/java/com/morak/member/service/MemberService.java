@@ -94,10 +94,11 @@ public class MemberService {
                 .map(GoalResponse::from)
                 .orElse(null);
         // Streak와 포인트 잔액은 member의 캐시 컬럼에서 읽는다. 진실은 streak_day·point_ledger지만
-        // 홈 화면 조회마다 역방향 연속 일수를 세고 원장을 합산할 비용이 아니다.
+        // 홈 화면 조회마다 역방향 연속 일수를 세고 원장을 합산할 비용이 아니다. 다만 연속이
+        // 끊긴 날 캐시를 0으로 쓰는 배치가 없어서, 끊겼는지만 오늘 날짜로 판정해 내린다.
         // 동의 여부는 행의 존재 그 자체다 — 미동의를 저장하지 않으므로 false 행이 없다(AU-6).
-        return MemberMeResponse.from(
-                member, mediaConsentRepository.existsById(memberId), goal, sanction);
+        return MemberMeResponse.from(member, now.toLocalDate(),
+                mediaConsentRepository.existsById(memberId), goal, sanction);
     }
 
     /**

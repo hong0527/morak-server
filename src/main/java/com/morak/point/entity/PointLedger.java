@@ -103,8 +103,13 @@ public class PointLedger {
                 createdAt);
     }
 
-    /** 사유별 ref 규약(db-schema). 제약과 함께 중복 지급을 두 겹으로 막는다. */
-    private static String refTypeOf(PointReason reason) {
+    /**
+     * 사유별 ref 규약(db-schema). 제약과 함께 중복 지급을 두 겹으로 막는다.
+     *
+     * <p>공개하는 이유는 멱등 검사가 같은 규약을 봐야 하기 때문이다 — 조회가 다른 refType으로
+     * 물으면 "없다"는 답을 받고 INSERT까지 가서 제약에 부딪힌다.
+     */
+    public static String refTypeOf(PointReason reason) {
         return switch (reason) {
             case WELCOME -> REF_MEMBER;
             case SESSION_COMPLETE -> REF_SESSION_PARTICIPANT;

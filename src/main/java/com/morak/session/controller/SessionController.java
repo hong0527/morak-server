@@ -10,6 +10,7 @@ import com.morak.session.dto.response.PauseResumeResponse;
 import com.morak.session.dto.response.PauseStartResponse;
 import com.morak.session.dto.response.SessionDetailResponse;
 import com.morak.session.dto.response.SessionGoalResponse;
+import com.morak.session.dto.response.SessionResultResponse;
 import com.morak.session.service.AbsenceJudgeService;
 import com.morak.session.service.PauseService;
 import com.morak.session.service.SessionExitService;
@@ -41,6 +42,13 @@ public class SessionController {
     public SessionDetailResponse getSession(@LoginMember Long memberId,
                                             @PathVariable Long sessionId) {
         return sessionService.getSession(memberId, sessionId);
+    }
+
+    /** SS-8. 종료된 세션에서만 답한다 — 진행 중에 열면 409 SESSION_NOT_ENDED다. */
+    @GetMapping("/{sessionId}/result")
+    public SessionResultResponse getResult(@LoginMember Long memberId,
+                                           @PathVariable Long sessionId) {
+        return sessionService.getResult(memberId, sessionId);
     }
 
     /** SS-2. 요청 본문이 없다. 발급 대상은 언제나 토큰의 주인 본인이다. */

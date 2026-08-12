@@ -149,7 +149,7 @@ CREATE TABLE member_goal (
 **불변식**
 - 회원당 `status='ACTIVE'` 행은 최대 1개다. **DB 제약이 아니라 조건부 로직으로 지킨다** — AU-7이 `SELECT ... FOR UPDATE`로 회원 행(`match_lock`의 `member:{id}`)을 잡은 뒤 활성 목표를 확인하고, 있으면 409 `GOAL_ALREADY_ACTIVE`를 낸다.
 - 달성(`ACHIEVED`) 이후 그 행은 다시 `ACTIVE`가 되지 않는다. 재도전은 새 행.
-- 미완주일이 생기면 `current_streak`가 0으로 리셋될 뿐 목표 행은 `ACTIVE`로 유지된다(★D3).
+- 미완주일이 생기면 연속이 끊길 뿐 목표 행은 `ACTIVE`로 유지된다(★D3). 끊김은 다음 완주 시점에 판정하므로 `current_streak`는 그때 1부터 다시 센다.
 
 ```sql
 -- (잠정 — 팀 확인 대기: ★D2 Streak 단위)

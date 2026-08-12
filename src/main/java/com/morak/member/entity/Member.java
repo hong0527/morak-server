@@ -130,6 +130,49 @@ public class Member {
         this.ageVerification = result;
     }
 
+    /**
+     * 포인트 증감 반영(B1·주문·충전). <b>원장 INSERT와 같은 트랜잭션에서만 부른다</b> —
+     * 이 값은 캐시일 뿐이라 원장 없이 움직이면 다음 지급의 {@code balance_after}까지 틀어진다.
+     *
+     * <p>음수 잔액을 막지 않는다. 퇴출 패널티는 잔액이 모자란다고 회피할 수 있으면 안 된다.
+     */
+    public int applyPointDelta(int delta) {
+        this.pointBalance += delta;
+        return this.pointBalance;
+    }
+
+    /**
+     * 완주일 반영(B1). 어제 완주했으면 +1, 아니면 1부터 다시 센다 — 미완주일에 0으로 미리
+     * 써 두는 배치를 두지 않고 <b>다음 완주 시점에 연속이 끊겼는지 판정</b>한다. 회원 수만큼
+     * 매일 UPDATE를 도는 대신 마지막 완주일과의 거리를 보는 쪽이 같은 답을 준다(★D2·D3).
+     *
+     * <p>이미 기록된 날짜나 그보다 과거는 캐시를 흔들지 않는다. 하루 두 번째 완주(★D2)와
+     * 과거 이력 시드가 여기로 들어와도 연속 일수가 부풀지 않아야 한다.
+     */
+    public void recordCompletion(LocalDate completedOn) {
+        if (this.lastCompletedOn != null && !completedOn.isAfter(this.lastCompletedOn)) {
+            return;
+        }
+        boolean continued = this.lastCompletedOn != null
+                && this.lastCompletedOn.plusDays(1).equals(completedOn);
+        this.currentStreak = continued ? this.currentStreak + 1 : 1;
+        this.lastCompletedOn = completedOn;
+    }
+
+    /**
+     * 오늘 기준으로 살아 있는 연속 일수(AU-2). 캐시는 마지막 완주 시점의 값을 그대로 들고
+     * 있으므로 — 미완주일에 0을 써 두는 배치가 없다 — <b>끊겼는지는 읽는 자리에서 판정한다.</b>
+     *
+     * <p>어제 완주는 유지다. 오늘이 아직 끝나지 않아 오늘 완주로 이어질 수 있고, 어제를
+     * 끊긴 것으로 보면 매일 자정에 모든 회원의 Streak가 0으로 보였다가 완주와 함께 되살아난다.
+     */
+    public int currentStreakOn(LocalDate today) {
+        if (this.lastCompletedOn == null || this.lastCompletedOn.isBefore(today.minusDays(1))) {
+            return 0;
+        }
+        return this.currentStreak;
+    }
+
     public void requestWithdrawal(LocalDateTime now, LocalDateTime deleteScheduledAt) {
         this.status = MemberStatus.WITHDRAW_PENDING;
         this.withdrawRequestedAt = now;

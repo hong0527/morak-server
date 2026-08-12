@@ -197,7 +197,7 @@ morak:
 | 세션 완주 | 세션 종료 시각에 `session_participant.status ∈ {ACTIVE, PAUSED}` | LEFT·EVICTED는 미완주. 재실 비율 기준 없음 (★D1) |
 | 세션 완주 포인트 | `point.session-complete-per-hour × (target_minutes ÷ 60)` | 120분 세션 = 200p. **실제 재실 시간이 아니라 `target_minutes` 기준이다** — D12 조기 종료로 30분 만에 끝난 60분 세션도 +100 (D15 보충) |
 | Streak 증가 | 하루에 1세션 이상 완주하면 그날 +1. `streak_day` UNIQUE(member_id, completed_on)로 멱등 | 하루 다회 완주해도 1일 (★D2) |
-| Streak 리셋 | 완주일이 하루라도 끊기면 `member.current_streak = 0` | 목표는 유지 (★D3) |
+| Streak 리셋 | 완주일이 하루라도 끊기면 연속이 끊긴다. **끊긴 날에 캐시를 0으로 써 두는 배치는 없고**, 다음 완주 때 `last_completed_on`과의 거리로 판정해 1부터 다시 센다 | 목표는 유지 (★D3). 회원 수만큼 매일 UPDATE를 도는 대신 판정을 다음 완주로 미룬 것이라 `streak_day` 기준 결과는 같다. 저장된 `member.current_streak`에는 끊긴 뒤에도 직전 연속 일수가 남으므로, **AU-2가 내려보내기 전에 이 판정을 서버에서 수행한다** — `last_completed_on`이 오늘도 어제도 아니면(NULL 포함) `streak.current = 0`. 어제는 오늘 완주로 이어질 수 있어 유지한다 |
 | 세션 시점 Streak | SS-8의 `before`·`after` = `streak_day`에서 해당 `completed_on`을 기준으로 **역방향 연속 행 수** | `member.current_streak`(현재값 캐시)를 쓰면 과거 세션 결과를 다시 열었을 때 그때가 아닌 지금 값이 나온다 |
 | 목표 달성 | `current_streak >= member_goal.period_days` | 달성 시 `GoalStatus=ACHIEVED`, `point.goal-achieved` 지급, `BadgeCode=GOAL_ACHIEVED`. 재설정 가능 (★D3) |
 | 경고 부여 | **캠이 연결된 상태에서** 얼굴 미검출 지속시간 > `session.absence-threshold-seconds` | 경고 1회. `warning.seq`는 세션 내 1~3 (★D4) |
@@ -411,6 +411,8 @@ morak:
 ```
 
 목표 미설정이면 `"goal": null`. 유효 제재 보유 시 `"sanction": {"type": "TEMP", "endsAt": "2026-08-15T00:00:00+09:00"}`.
+
+`streak.current`는 저장된 캐시가 아니라 조회 시점 기준 판정값이다(§0-6 Streak 리셋). `lastCompletedOn`이 오늘도 어제도 아니면 `current`는 0으로 내려가지만 `lastCompletedOn`은 마지막 완주일 그대로다 — 둘이 어긋나 보이는 것이 정상이고, 그것이 "언제 끊겼는지"를 화면에 그릴 수 있는 유일한 재료다.
 
 발생 에러: 401 `UNAUTHORIZED` / 401 `TOKEN_EXPIRED`
 
@@ -1659,7 +1661,8 @@ UPDATE session_participant
 1. 미종료 `absence_event(START)`를 세션 종료 시각을 END로 간주해 정산 → 60초 초과분은 `warning` 부여
 2. 미복귀 `PAUSED` 참가자를 10분 초과 여부로 정산 → 초과면 `warning` 부여 (D9)
 3. 1~2에서 경고가 3회에 도달하면 퇴출 처리(`EVICTED` + `eviction` + `EVICTION_PENALTY`)
-4. `live_session.status = ENDED`, `ended_at`·`end_reason`(`NORMAL` 또는 `EARLY_UNDER_MIN`) 기록, LiveKit 룸 종료
+4. `live_session.status = ENDED`, `ended_at`·`end_reason`(`NORMAL` 또는 `EARLY_UNDER_MIN`) 기록, LiveKit 룸 종료.
+   **정시 종료의 `ended_at`은 배치가 도는 시각이 아니라 `ends_at`이다** — 1~2의 정산이 그 시각을 기준으로 하므로, 배치가 몇 분 늦게 돌았다는 이유로 자리비움 구간이 길어져 없던 경고가 붙으면 안 된다. 조기 종료는 실제로 인원이 미달한 시각이 `ended_at`이다
 5. 완주 판정 — 종료 시점 `status ∈ {ACTIVE, PAUSED}`인 참가자를 `completed=true`로 기록 (★D1)
 6. 포인트 지급 — `point_ledger(SESSION_COMPLETE, +100×(target_minutes÷60), ref_type=SESSION_PARTICIPANT, ref_id=participantId)`. 조기 종료여도 `target_minutes` 기준 그대로다(D15 보충). UNIQUE로 재실행 시 중복 지급되지 않는다
 7. Streak 갱신 — `streak_day(member_id, completed_on, session_id)` INSERT. UNIQUE(member_id, completed_on)로 하루 다회 완주가 1일로 흡수된다 (★D2). `member.current_streak`·`last_completed_on` 갱신

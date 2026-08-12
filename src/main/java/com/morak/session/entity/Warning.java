@@ -69,6 +69,16 @@ public class Warning {
         return new Warning(sessionId, memberId, seq, absenceEventId, createdAt);
     }
 
+    /**
+     * 세션이 끝날 때까지 END가 오지 않은 자리비움을 정산해 부여하는 경고(B1). 근거는 짝을
+     * 잃은 START 이벤트다 — 판정을 유발한 것이 END가 아니라 세션 종료라는 점만 다르고,
+     * 어느 구간 때문에 경고가 붙었는지는 이 id로 되짚을 수 있다.
+     */
+    public static Warning fromUnclosedAbsence(Long sessionId, Long memberId, int seq,
+                                              Long startEventId, LocalDateTime createdAt) {
+        return new Warning(sessionId, memberId, seq, startEventId, createdAt);
+    }
+
     /** Pause 제한 시간 초과로 부여하는 경고(D9). 근거 이벤트가 없다. */
     public static Warning fromPauseOverrun(Long sessionId, Long memberId, int seq,
                                            LocalDateTime createdAt) {

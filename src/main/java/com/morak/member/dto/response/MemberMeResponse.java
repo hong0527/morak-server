@@ -26,7 +26,13 @@ public record MemberMeResponse(
         Streak streak,
         Sanction sanction) {
 
-    /** 연속 완주일. 한 번도 완주하지 않았으면 current=0, lastCompletedOn=null. */
+    /**
+     * 연속 완주일. 한 번도 완주하지 않았으면 current=0, lastCompletedOn=null.
+     *
+     * <p>{@code current}는 캐시값을 그대로 내리지 않고 조회 시점 기준으로 판정한 값이다
+     * ({@link Member#currentStreakOn}) — 연속이 끊긴 날 캐시를 0으로 쓰는 배치가 없어서,
+     * 그대로 내리면 며칠 전에 끊긴 회원이 계속 옛 기록을 본다.
+     */
     public record Streak(int current, LocalDate lastCompletedOn) {
     }
 
@@ -34,7 +40,7 @@ public record MemberMeResponse(
     public record Sanction(SanctionType type, LocalDateTime endsAt) {
     }
 
-    public static MemberMeResponse from(Member member, boolean mediaConsented,
+    public static MemberMeResponse from(Member member, LocalDate today, boolean mediaConsented,
                                         GoalResponse goal, Sanction sanction) {
         return new MemberMeResponse(
                 member.getId(),
@@ -45,7 +51,7 @@ public record MemberMeResponse(
                 mediaConsented,
                 member.getPointBalance(),
                 goal,
-                new Streak(member.getCurrentStreak(), member.getLastCompletedOn()),
+                new Streak(member.currentStreakOn(today), member.getLastCompletedOn()),
                 sanction);
     }
 }

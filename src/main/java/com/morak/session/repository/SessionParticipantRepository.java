@@ -66,6 +66,25 @@ public interface SessionParticipantRepository extends JpaRepository<SessionParti
                    @Param("active") ParticipantStatus active,
                    @Param("paused") ParticipantStatus paused);
 
+    /**
+     * B1의 두 번째 지급 대상 — <b>이미 끝난 세션의 미지급 완주자</b>. 조기 종료(D12)와
+     * {@code room_finished} 웹훅은 종료·완주 마킹까지만 하고 포인트를 만들지 않으므로,
+     * 이 흡수 경로가 없으면 그 완주자들이 영구 미지급으로 남는다.
+     *
+     * <p>{@code point_awarded = 0}이 미지급의 표식이 될 수 있는 것은 완주 지급액이 최소
+     * 60분 세션에서도 100이라 0이 나올 수 없기 때문이다.
+     */
+    @Query("""
+            SELECT sp.id
+              FROM SessionParticipant sp
+             WHERE sp.completed = true
+               AND sp.pointAwarded = 0
+               AND sp.sessionId IN (
+                     SELECT ls.id FROM LiveSession ls WHERE ls.status = :sessionStatus)
+             ORDER BY sp.id
+            """)
+    List<Long> findIdsAwaitingAward(@Param("sessionStatus") SessionStatus sessionStatus);
+
     /** SS-9 내 세션 이력. 필터 없는 경우. */
     Page<SessionParticipant> findByMemberId(Long memberId, Pageable pageable);
 

@@ -44,8 +44,10 @@ public class EvictionService {
      * 경고 부여 직후 호출한다. 누적이 임계에 닿았으면 퇴출하고 만든 행을, 아니면 {@code null}을
      * 돌려준다.
      *
-     * <p>포인트 원장(-300)은 5·6단계가 붙는다. 지금은 {@code point_penalty} 컬럼이 그 근거를
-     * 대신 들고 있어, 원장이 붙는 시점에 이 행들로 소급 지급할 수 있다.
+     * <p><b>포인트 차감은 여기서 하지 않는다.</b> 원장에 -300을 넣는 주체는 B1
+     * ({@link SessionClosingService#settleEvictionPenalty})로 일원화했다 — 퇴출 경로가 직접
+     * 차감하면 배치와 주체가 둘이 되어, 어느 쪽이 넣었는지 모르는 행이 생기고 한쪽만 고친
+     * 정책이 다른 쪽에 반영되지 않는다. 이 행의 {@code point_penalty}가 그 근거를 들고 있다.
      */
     public Eviction evictIfWarningLimitReached(LiveSession session, SessionParticipant participant,
                                                LocalDateTime now) {
@@ -59,7 +61,6 @@ public class EvictionService {
         participant.evict(now);
         log.info("경고 누적 퇴출: session={}, member={}, warningCount={}",
                 session.getId(), participant.getMemberId(), participant.getWarningCount());
-        // TODO(6단계): point_ledger(EVICTION_PENALTY, -300, ref=EVICTION) 기록
         // TODO(12단계): LiveKit RemoveParticipant 호출. 3단계의 LEFT 경로도 같은 자리를 비워 뒀다
         sessionExitService.endIfUnderMinimum(session, now);
         return eviction;
