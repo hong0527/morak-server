@@ -4,6 +4,8 @@ import com.morak.member.entity.Member;
 import com.morak.member.type.AgeVerification;
 import com.morak.member.type.MemberRole;
 import com.morak.member.type.MemberStatus;
+import com.morak.report.type.SanctionType;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -19,13 +21,21 @@ public record MemberMeResponse(
         AgeVerification ageVerification,
         MemberStatus memberStatus,
         boolean mediaConsented,
+        int pointBalance,
+        GoalResponse goal,
+        Streak streak,
         Sanction sanction) {
 
-    /** 제재 정보. 제재가 없으면 sanction 자체가 null이다. endsAt은 영구 제재면 null. */
-    public record Sanction(boolean active, LocalDateTime endsAt) {
+    /** 연속 완주일. 한 번도 완주하지 않았으면 current=0, lastCompletedOn=null. */
+    public record Streak(int current, LocalDate lastCompletedOn) {
     }
 
-    public static MemberMeResponse from(Member member, boolean mediaConsented, Sanction sanction) {
+    /** 제재 정보. 제재가 없으면 sanction 자체가 null이다. endsAt은 영구 제재면 null. */
+    public record Sanction(SanctionType type, LocalDateTime endsAt) {
+    }
+
+    public static MemberMeResponse from(Member member, boolean mediaConsented,
+                                        GoalResponse goal, Sanction sanction) {
         return new MemberMeResponse(
                 member.getId(),
                 member.getNickname(),
@@ -33,6 +43,9 @@ public record MemberMeResponse(
                 member.getAgeVerification(),
                 member.getStatus(),
                 mediaConsented,
+                member.getPointBalance(),
+                goal,
+                new Streak(member.getCurrentStreak(), member.getLastCompletedOn()),
                 sanction);
     }
 }

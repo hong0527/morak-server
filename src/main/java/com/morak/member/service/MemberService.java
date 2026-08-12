@@ -2,21 +2,36 @@ package com.morak.member.service;
 
 import com.morak.common.error.BusinessException;
 import com.morak.common.error.ErrorCode;
+import com.morak.match.entity.MatchLock;
+import com.morak.match.repository.MatchLockRepository;
+import com.morak.match.service.MatchService;
 import com.morak.member.dto.request.BirthDateRequest;
+import com.morak.member.dto.request.GoalRequest;
+import com.morak.member.dto.request.MediaConsentRequest;
 import com.morak.member.dto.response.AgeVerificationResponse;
+import com.morak.member.dto.response.GoalResponse;
 import com.morak.member.dto.response.MemberMeResponse;
 import com.morak.member.dto.response.WithdrawalResponse;
+import com.morak.member.entity.MediaConsent;
 import com.morak.member.entity.Member;
+import com.morak.member.entity.MemberGoal;
+import com.morak.member.repository.MediaConsentRepository;
+import com.morak.member.repository.MemberGoalRepository;
 import com.morak.member.repository.MemberRepository;
 import com.morak.member.type.AgeVerification;
+import com.morak.member.type.GoalStatus;
 import com.morak.member.type.MemberStatus;
 import com.morak.report.entity.Sanction;
 import com.morak.report.repository.SanctionRepository;
+import com.morak.session.service.SessionExitService;
+import com.morak.session.type.LeftReason;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.Period;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,17 +43,38 @@ public class MemberService {
     /** 만 나이 하한. api-spec §4 AU-3의 "만 14세 미만 차단" 기준. */
     private static final int MINIMUM_AGE = 14;
 
+    /** AU-7 목표 기간 선택지. §0-4의 periodDays {7, 14, 30}. */
+    private static final Set<Integer> ALLOWED_PERIOD_DAYS = Set.of(7, 14, 30);
+
     private final MemberRepository memberRepository;
+    private final MemberGoalRepository memberGoalRepository;
+    private final MediaConsentRepository mediaConsentRepository;
     private final SanctionRepository sanctionRepository;
+    private final MatchLockRepository matchLockRepository;
+    private final MatchService matchService;
+    private final SessionExitService sessionExitService;
+    private final MemberAccountPurger memberAccountPurger;
     private final Clock clock;
     private final int withdrawalGraceDays;
 
     public MemberService(MemberRepository memberRepository,
+                         MemberGoalRepository memberGoalRepository,
+                         MediaConsentRepository mediaConsentRepository,
                          SanctionRepository sanctionRepository,
+                         MatchLockRepository matchLockRepository,
+                         MatchService matchService,
+                         SessionExitService sessionExitService,
+                         MemberAccountPurger memberAccountPurger,
                          Clock clock,
                          @Value("${morak.withdrawal.grace-days}") int withdrawalGraceDays) {
         this.memberRepository = memberRepository;
+        this.memberGoalRepository = memberGoalRepository;
+        this.mediaConsentRepository = mediaConsentRepository;
         this.sanctionRepository = sanctionRepository;
+        this.matchLockRepository = matchLockRepository;
+        this.matchService = matchService;
+        this.sessionExitService = sessionExitService;
+        this.memberAccountPurger = memberAccountPurger;
         this.clock = clock;
         this.withdrawalGraceDays = withdrawalGraceDays;
     }
@@ -49,37 +85,98 @@ public class MemberService {
         List<Sanction> effective = sanctionRepository.findByMemberId(memberId).stream()
                 .filter(sanction -> sanction.isEffectiveAt(now))
                 .toList();
-        // endsAt 계산은 인터셉터 429 응답과 같은 규칙이어야 해서 Sanction.latestEndsAt에 모았다
+        // 종류·종료 시각 계산은 인터셉터 403 응답과 같은 규칙이어야 해서 Sanction에 모았다
         MemberMeResponse.Sanction sanction = effective.isEmpty()
                 ? null
-                : new MemberMeResponse.Sanction(true, Sanction.latestEndsAt(effective));
-        // TODO: 4단계(PF-1)에서 MediaConsentRepository 연결 — 행 존재 여부로 mediaConsented를 채운다
-        return MemberMeResponse.from(member, false, sanction);
+                : new MemberMeResponse.Sanction(
+                        Sanction.representativeType(effective), Sanction.latestEndsAt(effective));
+        GoalResponse goal = memberGoalRepository.findFirstByMemberIdOrderByIdDesc(memberId)
+                .map(GoalResponse::from)
+                .orElse(null);
+        // Streak와 포인트 잔액은 member의 캐시 컬럼에서 읽는다. 진실은 streak_day·point_ledger지만
+        // 홈 화면 조회마다 역방향 연속 일수를 세고 원장을 합산할 비용이 아니다.
+        // 동의 여부는 행의 존재 그 자체다 — 미동의를 저장하지 않으므로 false 행이 없다(AU-6).
+        return MemberMeResponse.from(
+                member, mediaConsentRepository.existsById(memberId), goal, sanction);
+    }
+
+    /**
+     * AU-6 캠 영상 온디바이스 분석 동의. 미동의(false)는 저장하지 않고 400으로 거부한다 —
+     * 철회가 v1 범위 밖이라 false 행은 "동의를 취소했다"로도 "아직 안 했다"로도 읽히는
+     * 값이 된다.
+     */
+    @Transactional
+    public void agreeMediaConsent(Long memberId, MediaConsentRequest request) {
+        if (!request.agreed()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    Map.of("agreed", "동의해야 세션에 참여할 수 있습니다."));
+        }
+        findMember(memberId);
+        LocalDateTime now = LocalDateTime.now(clock);
+        mediaConsentRepository.findById(memberId)
+                .ifPresentOrElse(
+                        consent -> consent.renew(now),
+                        () -> mediaConsentRepository.save(MediaConsent.agree(memberId, now)));
     }
 
     @Transactional
     public AgeVerificationResponse verifyAge(Long memberId, BirthDateRequest request) {
         Member member = findMember(memberId);
-        // UNDER_AGE 판정 후 재입력으로 결과를 뒤집을 수 없어야 하므로 REQUIRED가 아니면 전부 거부한다
+        // 검증 결과를 재입력으로 뒤집을 수 없어야 하므로 REQUIRED가 아니면 전부 거부한다
         if (member.getAgeVerification() != AgeVerification.REQUIRED) {
             throw new BusinessException(ErrorCode.ALREADY_VERIFIED);
         }
         int age = Period.between(request.birthDate(), LocalDate.now(clock)).getYears();
-        AgeVerification result =
-                age >= MINIMUM_AGE ? AgeVerification.VERIFIED : AgeVerification.UNDER_AGE;
-        member.verifyAge(request.birthDate(), result);
+        if (age < MINIMUM_AGE) {
+            // 파기를 별도 트랜잭션에 맡기고 나서 던진다. 같은 트랜잭션에서 지우면 이 예외의
+            // 롤백이 삭제를 되돌려 계정이 남는다(★D7, MemberAccountPurger 주석 참조).
+            memberAccountPurger.purge(memberId);
+            throw new BusinessException(ErrorCode.UNDER_AGE_SIGNUP_BLOCKED);
+        }
+        member.verifyAge(request.birthDate(), AgeVerification.VERIFIED);
         return AgeVerificationResponse.from(member);
     }
 
     @Transactional
+    public GoalResponse setGoal(Long memberId, GoalRequest request) {
+        if (!ALLOWED_PERIOD_DAYS.contains(request.periodDays())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    Map.of("periodDays", "허용값은 7, 14, 30입니다."));
+        }
+        findMember(memberId);
+        // 활성 1건 제약이 DB에 없어서(부분 인덱스를 못 쓴다) 이 잠금이 유일한 방어선이다.
+        // 잠그지 않으면 동시 요청 두 건이 각각 "활성 목표 없음"을 보고 둘 다 통과한다.
+        matchLockRepository.findByLockKey(MatchLock.memberKey(memberId))
+                .orElseThrow(() -> new IllegalStateException(
+                        "회원 잠금 행이 없다. 가입 트랜잭션이 깨진 계정이다: " + memberId));
+        if (memberGoalRepository.existsByMemberIdAndStatus(memberId, GoalStatus.ACTIVE)) {
+            throw new BusinessException(ErrorCode.GOAL_ALREADY_ACTIVE);
+        }
+        MemberGoal goal = memberGoalRepository.save(
+                MemberGoal.start(memberId, request.periodDays(), LocalDate.now(clock)));
+        return GoalResponse.from(goal);
+    }
+
+    @Transactional
     public WithdrawalResponse requestWithdrawal(Long memberId) {
-        Member member = findMember(memberId);
-        if (member.getStatus() == MemberStatus.WITHDRAW_PENDING) {
+        if (findMember(memberId).getStatus() == MemberStatus.WITHDRAW_PENDING) {
             throw new BusinessException(ErrorCode.WITHDRAWAL_PENDING);
         }
+        // 잠금 순서는 회원 행 → 조건 행 고정이다(MatchService 주석). 조건 행은 아래 호출이 잡는다.
+        matchLockRepository.findByLockKey(MatchLock.memberKey(memberId))
+                .orElseThrow(() -> new IllegalStateException(
+                        "회원 잠금 행이 없다. 가입 트랜잭션이 깨진 계정이다: " + memberId));
+        // 대기 중인 요청을 남기면 탈퇴한 회원이 남의 세션에 6번째로 들어간다
+        matchService.cancelActiveRequest(memberId);
+        // 진행 중인 세션에 남겨 두면 탈퇴한 회원이 남의 세션에서 계속 자리를 차지한다.
+        // 이 퇴장으로 잔여 인원이 최소치 미만이 되면 세션도 함께 조기 종료된다(D12).
+        sessionExitService.leaveAll(memberId, LeftReason.WITHDRAWAL);
+
+        // 위 호출의 조건부 UPDATE가 영속성 컨텍스트를 비우므로 회원을 다시 읽어 상태를 바꾼다.
+        // 비워지기 전에 읽은 엔티티는 준영속이라 변경이 반영되지 않는다.
+        Member member = findMember(memberId);
         LocalDateTime now = LocalDateTime.now(clock);
         member.requestWithdrawal(now, now.plusDays(withdrawalGraceDays));
-        // TODO: 2·3단계에서 매칭 취소·그룹 퇴장 연결 — 활성 매칭 요청 CANCELLED, 진행 그룹 LEFT(WITHDRAWAL)
         return WithdrawalResponse.from(member);
     }
 

@@ -61,10 +61,6 @@ public class AuthInterceptor implements HandlerInterceptor {
      * 한 요청에 여러 행이 걸리면 건너뛰기의 합집합을 적용한다.
      */
     private static final List<SkipRule> SKIP_RULES = List.of(
-            // PF-4r: <img src>로 열려 Authorization 헤더를 못 싣는다. HMAC 서명 토큰이 신원을
-            // 대신하고 자격 재검증은 미디어 서비스 계층이 수행한다
-            rule("GET", "/api/proofs/*/media/raw",
-                    Set.of(Gate.JWT, Gate.MEMBER_STATUS, Gate.SANCTION, Gate.AGE)),
             // AU-2: 제재 중·탈퇴 대기 중에도 자기 상태는 확인할 수 있어야 한다
             rule("GET", "/api/members/me", Set.of(Gate.MEMBER_STATUS, Gate.SANCTION, Gate.AGE)),
             // AU-3: 연령 미확인 상태에서 호출하는 API다. ⑤로 막으면 그 화면에서 빠져나올 수 없다
@@ -74,13 +70,16 @@ public class AuthInterceptor implements HandlerInterceptor {
             // AU-5: 철회를 막으면 계정 복구가 영구 불가해진다
             rule("DELETE", "/api/members/me/withdrawal",
                     Set.of(Gate.MEMBER_STATUS, Gate.SANCTION, Gate.AGE)),
-            // GR-1: 내 그룹 상태 확인은 연령과 무관하게 허용한다 (진입 통제는 GR-2가 한다)
-            rule("GET", "/api/members/me/groups", Set.of(Gate.AGE)),
+            // AU-6: 캠 분석 동의는 세션 진입 전 단계라 연령 확인 전에도 받을 수 있다
+            rule("POST", "/api/members/me/media-consent", Set.of(Gate.AGE)),
+            // SS-9: 내 세션 이력 확인은 연령과 무관하게 허용한다 (참여는 MT-1이 막는다)
+            rule("GET", "/api/members/me/sessions", Set.of(Gate.AGE)),
             // RP-1: 안전 도구는 절대 막지 않는다 — 미성년이 유해물을 보고도 신고 못 하는 상태 방지
             rule("POST", "/api/reports", Set.of(Gate.AGE)),
-            // PB-2·PB-3: 게시글 열람은 허용하고 작성·좋아요만 연령을 확인한다
-            rule("GET", "/api/posts", Set.of(Gate.AGE)),
-            rule("GET", "/api/posts/*", Set.of(Gate.AGE)),
+            // SS-10·PY-3: 호출 주체가 회원이 아니라 외부 서버다. 회원 상태·제재·연령 검사가
+            // 성립하지 않으므로 전 게이트를 건너뛰고, 신원 보장은 각 컨트롤러의 서명 검증이 진다
+            rule("POST", "/api/webhooks/livekit", EnumSet.allOf(Gate.class)),
+            rule("POST", "/api/webhooks/payment", EnumSet.allOf(Gate.class)),
             // AD-1~8: 관리자에게 ④⑤는 걸지 않는다. 대신 ③ 역할 검사를 통과해야 한다
             rule(null, "/api/admin/**", Set.of(Gate.SANCTION, Gate.AGE)));
 
