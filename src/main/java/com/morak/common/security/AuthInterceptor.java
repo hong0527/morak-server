@@ -76,6 +76,10 @@ public class AuthInterceptor implements HandlerInterceptor {
             rule("GET", "/api/members/me/sessions", Set.of(Gate.AGE)),
             // RP-1: 안전 도구는 절대 막지 않는다 — 미성년이 유해물을 보고도 신고 못 하는 상태 방지
             rule("POST", "/api/reports", Set.of(Gate.AGE)),
+            // AP-1: 퇴출 이의는 잘못된 퇴출을 되돌리는 유일한 수단이다(NFR-402). ④로 막으면
+            // 별개의 제재가 구제 경로까지 함께 닫아 3일짜리 이의 기한이 그대로 지나간다.
+            // AU-5 철회를 열어 두는 것과 같은 논리다
+            rule("POST", "/api/evictions/*/appeals", Set.of(Gate.SANCTION)),
             // SS-10·PY-3: 호출 주체가 회원이 아니라 외부 서버다. 회원 상태·제재·연령 검사가
             // 성립하지 않으므로 전 게이트를 건너뛰고, 신원 보장은 각 컨트롤러의 서명 검증이 진다
             rule("POST", "/api/webhooks/livekit", EnumSet.allOf(Gate.class)),

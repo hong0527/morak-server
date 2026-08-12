@@ -143,7 +143,7 @@ CREATE TABLE member_goal (
 | 컬럼 | 설명 |
 |---|---|
 | period_days | 목표 기간. 7·14·30 |
-| started_on | 목표 시작일. 연속 판정의 기준점 |
+| started_on | 목표 시작일. 달성 판정의 기산점이다 — 이 날짜 이후의 `streak_day` 행 수가 `period_days` 이상이어야 달성이며, 연속 캐시만 보면 같은 연속으로 여러 번 달성이 성립한다 |
 | status | ACTIVE 진행 중 · ACHIEVED 달성 · CANCELLED 취소. 재설정은 새 행 |
 | achieved_at | B1이 목표 달성 검사에서 기록(★D3) |
 
@@ -540,7 +540,7 @@ CREATE TABLE appeal_case (
 - `reason_text`(신청자 진술)와 `note`(관리자 판단)는 서로 덮어쓰지 않는다. AD-6 처리 시 `note`만 채운다.
 - overdue는 **저장하지 않고 파생한다**: `status='PENDING' AND sla_due_at < now`. `report_case`도 같은 규칙이라 두 큐의 지연 판정이 하나의 식으로 통일된다.
 - 인용(ACCEPTED) 처리는 세 가지를 함께 한다: `eviction.revoked_at` 기록, `point_ledger` 역분개(APPEAL_REFUND), 그날 완주 소급 재판정(★D1 기준 → `streak_day` INSERT).
-- 역분개는 원장에 `EVICTION_PENALTY` 행이 실제로 있을 때만 만든다. 차감 주체가 B1이라 퇴출과 차감 사이에 틈이 있고, 그 틈에 인용하면 빠져나간 적 없는 300이 들어온다.
+- 역분개는 원장에 `EVICTION_PENALTY` 행이 실제로 있을 때만 만든다. 차감은 퇴출 트랜잭션이 즉시 하지만 그 트랜잭션이 원장을 남기지 못하고 끊길 수 있고, B1의 안전망이 채우기 전에 인용하면 빠져나간 적 없는 300이 들어온다.
 - 소급 완주가 만든 `streak_day` 행은 `member.current_streak`·`last_completed_on`을 **재계산으로** 갱신한다. 되살린 날이 마지막 완주일보다 과거일 수 있어 증분 갱신으로는 반영되지 않는다.
 - 종결된 이의는 재오픈하지 않는다.
 
@@ -686,8 +686,8 @@ CREATE TABLE point_charge (
 |---|---|
 | pg_order_id | PY-1이 만들어 클라이언트에 내려준다. PG 요청의 우리 쪽 키. 형식은 `molock-chg-{yyyyMMdd}-{충전 건 id 6자리}` — PG 콘솔에 찍힌 주문번호 하나로 우리 행을 되짚을 수 있어야 대사가 된다. id가 INSERT 후에 정해지므로 임시 유일값으로 넣고 같은 트랜잭션에서 덮는다(`live_session.livekit_room_name`과 같은 방식) |
 | pg_tid | PG가 발급하는 거래 식별자. 승인 응답·웹훅 양쪽에 들어온다 |
-| created_at | PY-1 생성 시각. PG 대사 기준이자 READY 방치 건 정리 기준 |
-| status | READY 생성 · APPROVED 승인 · FAILED 실패 |
+| created_at | PY-1 생성 시각. PG 대사 기준이자 READY 방치 건 정리 기준(`created_at + pg.ready-expire-minutes` 경과 → FAILED) |
+| status | READY 생성 · APPROVED 승인 · FAILED 실패 또는 승인 기한 경과 |
 
 **불변식**
 - **같은 `pg_tid`로 승인이 두 번 기록되지 않는다.** PY-2 확인 응답과 PY-3 웹훅이 같은 거래를 중복 전달하는 상황을 여기서 막는다. `pg_tid`가 NULL을 허용하는 것은 승인 전 READY 행 여러 건이 공존해야 하기 때문이다.
@@ -907,7 +907,7 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 | ProductType | GIFTICON, BOOK | product.type |
 | ProductStatus | ON_SALE, SOLD_OUT, HIDDEN | product.status |
 | OrderStatus | ORDERED, CANCELLED | store_order.status |
-| ChargeStatus | READY, APPROVED, FAILED | point_charge.status |
+| ChargeStatus | READY, APPROVED, FAILED | point_charge.status. 승인 기한 경과도 FAILED다 — 별도 값을 두지 않는 이유는 프론트가 가르는 것이 "적립됐는가"이고 만료와 실패는 그 답이 같기 때문이다 |
 | ReportTargetType | MEMBER, SESSION | report_case.target_type |
 | ReportReasonCode | SEXUAL_CONTENT, VIOLENT_THREAT, AD_SPAM, INAPPROPRIATE_SCREEN, ETC | report.reason_code |
 | ReportSeverity | HIGH, NORMAL | report_case.severity |

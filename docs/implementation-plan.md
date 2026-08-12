@@ -56,7 +56,7 @@ base yml의 시크릿 폴백을 제거해 운영에서 환경변수가 없으면
 | # | 대상 | 수정 내용 | 해소 단계 |
 |---|---|---|---|
 | M-1 | `MemberService.verifyAge` | ★D7 반영. 만 14세 미만은 `AgeVerification.UNDER_AGE`로 두는 것이 아니라 **계정을 삭제하고 403 `UNDER_AGE_SIGNUP_BLOCKED`**. 미만 판정자는 계정 자체가 남지 않는다 | 1.5 |
-| M-2 | `AuthInterceptor.SKIP_RULES` | `GET /api/proofs/*/media/raw` 행 삭제(폐기 API). `POST /api/webhooks/livekit`·`POST /api/webhooks/payment` 2행 추가 — 전 게이트 skip + 각 컨트롤러가 서명 검증. `GET /api/members/me/groups` → `GET /api/members/me/sessions`, `GET /api/posts` 계열 2행 삭제 | 3(웹훅), 1.5(정리) |
+| M-2 | `AuthInterceptor.SKIP_RULES` | `GET /api/proofs/*/media/raw` 행 삭제(폐기 API). `POST /api/webhooks/livekit`·`POST /api/webhooks/payment` 2행 추가 — 전 게이트 skip + 각 컨트롤러가 서명 검증. `GET /api/members/me/groups` → `GET /api/members/me/sessions`, `GET /api/posts` 계열 2행 삭제. `POST /api/members/me/media-consent`(⑤ skip)·`POST /api/evictions/*/appeals`(④ skip) 2행 추가 | 3(웹훅·동의), 1.5(정리), 10(AP-1) |
 | M-3 | `AuthService.login` | 최초 가입 시 웰컴 +1,000p `point_ledger` INSERT. **6단계에서 추가한다** — point_ledger 테이블과 지급 서비스가 그때 생긴다. 지금 넣으면 의존이 거꾸로 선다 | 6 |
 
 **`AgeVerification` enum은 `REQUIRED`/`VERIFIED` 2값으로 줄인다.** D7이 가입 자체를 차단하므로 `UNDER_AGE` 상태인 계정은 존재할 수 없다 — 값을 남겨 두면 인터셉터 ⑤가 영원히 도달하지 않는 분기를 검사하게 되고, 읽는 사람은 그 상태가 실재한다고 오해한다. 0.5단계에서 값을 지우고 1.5단계에서 M-1을 반영한다.
@@ -121,9 +121,18 @@ DEV-2(시각)·DEV-4(배치)는 2단계, DEV-3(세션 시드)는 5단계에서 �
 12단계 게이트에서 운영 프로필 기동 후 전 경로 404를 실측한다.
 
 ### 배치 실행 규약
-배치는 **3종(B1·B2·B4)**이다. 전부 `@Scheduled` + DEV-4 수동 트리거(`POST /api/dev/batches/{name}`) 쌍으로 구현한다.
+배치는 **4종(B1·B2·B4·B5)**이다. 전부 `@Scheduled` + DEV-4 수동 트리거(`POST /api/dev/batches/{name}`) 쌍으로 구현한다.
+
+| 배치 | 하는 일 | 단계 |
+|---|---|---|
+| B1 | 세션 종료 처리 + 미지급 완주 흡수 + 퇴출 패널티 소급 | 5 |
+| B2 | 매칭 대기 만료(10분) | 2 |
+| B4 | 탈퇴 계정 파기(30일) | 11 |
+| B5 | 충전 READY 만료 스윕(`pg.ready-expire-minutes` 30분) | 8 |
+
 게이트의 "배치 트리거"는 이 엔드포인트 호출을 뜻한다. **모든 배치는 멱등(재실행 안전)해야 하고, 멱등의 근거는 코드가 아니라 UNIQUE 제약이다.**
-패키지는 도메인 안에 둔다(CLAUDE.md §4): B1→session, B2→match, B4→member.
+패키지는 도메인 안에 둔다(CLAUDE.md §4): B1→session, B2→match, B4→member, B5→point.
+**주기가 같다고 배치를 합치지 않는다.** B2와 B5는 둘 다 매분 도는 만료 스윕이지만 대상도 도메인도 다르다 — 한 배치가 두 도메인을 훑기 시작하면 배치 표가 그 배치를 더 이상 설명하지 못하고, 한쪽 정책을 고칠 때 다른 쪽 대상까지 함께 읽어야 한다. `DevBatch` 인터페이스는 도메인마다 배치를 따로 두고 **트리거만 공유**하라고 만든 자리다.
 구 B3(SLA overdue 마킹)는 폐지됐다 — 신고·이의 모두 `overdue`가 저장 컬럼이 아니라 조회 시점 파생이라 마킹할 대상이 없다.
 
 ### 게이트 실행 준비 (모든 단계 공통)
@@ -508,7 +517,9 @@ D8(시간 옵션 4종) 확정 시 재실측: 시드 행과 요청 검증 범위.
 - **재접속 유예 90초(D13 확정 해석)**: `participant_left` 웹훅이 왔다고 즉시 전이하지 않는다. 유예 안에 `participant_joined`가 오면 없던 일로 본다. **90초를 넘기면 `LEFT` + `left_reason=DEVICE_ISSUE`로 자동 처리한다 — 경고를 주지 않고 포인트도 차감하지 않는다.** 대가는 그 세션의 미완주뿐이다.
 - **연결 끊김과 자리비움은 별개 축이다(D13 확정).** 자리비움 경고는 **캠이 연결된 상태에서 얼굴이 60초 넘게 안 잡힐 때만** 생긴다. 연결이 끊긴 사람은 애초에 얼굴 이벤트를 보낼 수 없으므로 4단계 경고 카운터와 무관하다. 둘을 같은 카운터로 세면 지하철에서 끊긴 사람이 퇴출되고, 반대로 별개로 두지 않으면 "연결을 끊어 두면 경고를 피할 수 있다"가 성립한다 — 그래서 끊김은 경고가 아니라 즉시 미완주(LEFT)로 정산한다.
 - **웹훅은 순서를 보장하지 않고 중복 수신된다.** `joined`가 `left` 뒤에 도착하는 경우를 상태 전이표로 방어한다.
+- **`room_finished`가 세션을 직접 닫지 않는다.** 5단계의 공통 종료 루틴(`SessionClosingService.closeSession`)을 부른다. 이 단계에서 자체 종료 로직을 만들면 5단계에서 지워야 하고, 그 사이에 **미결 정산과 지급이 빠진 종료 경로**가 남는다 — 실제로 그렇게 만들었다가 조기 종료·`room_finished`로 끝난 세션의 완주자가 최대 1분간 `pointAwarded=0`을 받았고, 10분 넘게 자리를 비운 사람이 경고 없이 완주했다. 3단계에서는 종료 루틴 호출부만 만들고 본체는 5단계에서 채운다.
 - **`identity`를 닉네임이나 UUID로 잡지 않는다.** 닉네임은 바뀌고 UUID는 조회를 한 번 더 태운다. `member_id` 문자열은 파싱 실패가 곧 위조 신호라 검증도 단순하다 — 숫자가 아니거나 그 세션의 참가자가 아니면 웹훅을 무시한다(200으로 응답하되 처리는 하지 않는다. 4xx를 주면 LiveKit이 재시도를 반복한다).
+- **SS 계열의 검사 순서는 세션 존재(404) → 참가 자격(403) → 세션 상태(409)로 고정한다**(§0-3). **자격이 상태보다 먼저다** — 뒤집으면 참가자가 아닌 사람이 세션 번호를 훑어 "그 세션이 존재하고 끝났다"를 알아낼 수 있다. `SESSION_ENDED`·`SESSION_NOT_ENDED`는 참가자에게만 보이는 정보다. SS-1~SS-8 전부 같은 순서이고, SS-4는 뒤에 참가자 상태(409 `ALREADY_EVICTED`) → 시각 검증(400) → 재전송(409) → 레이트리밋(429)이 이어진다.
 - **SS-2는 세션 LIVE 중에만.** ENDED 세션 토큰을 발급하면 종료된 방에 계속 접속한다 — 409 `SESSION_ENDED`.
 - **참가자 목록은 익명 닉네임만.** 실명·소셜 ID는 응답에 넣지 않는다.
 - **SS-3의 goal_text는 50자 제한.** 세션 중 수정 가능하고, 종료 후에는 409.
@@ -547,7 +558,7 @@ D8(시간 옵션 4종) 확정 시 재실측: 시드 행과 요청 검증 범위.
 작업 순서:
 1. `AbsenceEventRepository`·`WarningRepository`·`EvictionRepository`
 2. `AbsenceJudgeService` — SS-4 절차: 멱등 확인(`client_seq`) → 레이트리밋 → START/END 짝 맞춤 → 지속 60초 초과 시 `warning` INSERT → seq가 3이면 `EvictionService` 호출
-3. `EvictionService` — 퇴출 단일 메서드: `eviction` INSERT + 참가자 EVICTED + 포인트 -300(**6단계 원장 연결 전까지 TODO**) + LiveKit 강제 퇴장 API 호출
+3. `EvictionService` — **퇴출 단일 경로**. 경고를 만드는 자리는 셋이지만(SS-4 자리비움 판정·SS-6 Pause 초과·5단계 종료 정산) 퇴출 절차는 여기 하나뿐이다 — 나뉘면 `eviction` 행 없이 상태만 EVICTED가 되거나 차감이 빠지는 경로가 생긴다. 절차: `eviction` INSERT → 참가자 EVICTED 전이 → **포인트 -300 즉시 차감** → LiveKit 강제 퇴장. **임계 판정("3회인가")도 호출자가 아니라 이 클래스가 한다** — 호출자는 경고를 부여한 뒤 무조건 물어보고, 정책값을 쥔 쪽이 답한다
 4. `PauseService` — SS-5(세션당 1회, 조건부 UPDATE) · SS-6(10분 초과 시 경고 1회 후 자동 종료)
 5. SS-7 자율 퇴장 — 참가자 LEFT + `left_reason`
 
@@ -564,12 +575,14 @@ D8(시간 옵션 4종) 확정 시 재실측: 시드 행과 요청 검증 범위.
 - **이미 EVICTED인 참가자의 SS-4·SS-5·SS-7은 409 `ALREADY_EVICTED`.** 퇴출은 종점이다.
 - **SS-7의 reason은 요청 전용 값만 받는다** — `WITHDRAWAL`·`SANCTION`은 서버 전용이다. `LeftReason`을 그대로 바인딩하면 클라이언트가 서버 전용 값을 보낼 수 있다.
 - **필드 하나짜리 request record는 `@JsonCreator` 필수**(CLAUDE.md §4-2). `LeaveSessionRequest(reason)`가 그 케이스다.
-- 포인트 차감(-300)은 6단계 원장 연결까지 TODO 주석으로 남긴다. `eviction.point_penalty` 컬럼에는 값을 기록해 둔다 — 6단계에서 소급 지급할 근거가 된다.
+- **퇴출 패널티는 퇴출 트랜잭션이 즉시 차감한다.** SS-4 응답이 `pointDelta=-300`을 싣는데 원장 기록을 B1에 미루면 최대 1분 동안 그 값이 사실이 아니다 — 사용자는 화면에서 -300을 보고 PT-1을 열면 아직 없는 상태를 만난다. 지급 주체가 둘(퇴출 트랜잭션·B1)이 되는 문제는 **원장 멱등키 `(memberId, EVICTION_PENALTY, EVICTION, evictionId)`가 막는다** — 두 자리가 같은 키로 쓰므로 이미 있으면 조용히 무시된다. B1의 `settleEvictionPenalty`는 **이 트랜잭션이 어떤 이유로 원장을 남기지 못했을 때만 걸리는 소급 안전망**으로 남는다.
+- **차감은 절차의 마지막에 둔다.** `PointService.award`가 잔액 캐시를 벌크 UPDATE로 갱신하며 영속성 컨텍스트를 비우므로, 그 뒤에 엔티티에 쓴 값은 사라진다. 퇴출 행 생성과 참가자 상태 전이가 먼저다.
+- **`EvictionService`는 잔여 인원 검사를 하지 않는다.** 퇴출이 사람을 줄이니 이어서 해야 할 일이 맞지만, 그 검사가 5단계 종료 루틴을 부르고 종료 루틴은 미결 정산에서 다시 경고를 만들어 이 클래스로 돌아온다 — 순환이다. 검사는 **호출자가 이어서** 부른다(5단계 함정 참조).
 
 ### 완료 게이트
 1. SS-4 START 후 61초(DEV-2 조작) 뒤 END → `warning` 1행, `warning_count=1`
 2. 같은 `clientSeq` 재전송 → 409 `DUPLICATE_ABSENCE_EVENT`, `absence_event` 행 수 불변
-3. 경고 3회 누적 → 참가자 EVICTED + `eviction` 1행 + SS-1 응답에 반영. 이후 SS-4 → 409 `ALREADY_EVICTED`
+3. 경고 3회 누적 → 참가자 EVICTED + `eviction` 1행 + **그 자리에서 `point_ledger` `EVICTION_PENALTY` -300 1행**(B1을 기다리지 않는다) + SS-4 응답 `pointDelta=-300`이 PT-1 잔액과 즉시 일치. SS-1 응답에 반영. 이후 SS-4 → 409 `ALREADY_EVICTED`
 4. SS-4 연속 호출(레이트 초과) → 429 `ABSENCE_RATE_LIMITED`
 5. SS-5 → 200, 재요청 → 409 `PAUSE_ALREADY_USED` / SS-6 정상 복귀 → 200, 경고 미부여
 6. Pause 후 DEV-2 +11분 → SS-6 → 경고 1회 부여 + Pause 종료
@@ -601,13 +614,14 @@ Q3·경고 임계 확정 시 재실측: 이벤트 스키마, 60초 값.
 1. `DevSessionSeedController`(DEV-3) — 과거 일자 완주 이력 시드. **Streak 연속 판정과 목표 달성 게이트를 이것 없이는 재현할 수 없다**(D3의 30일 목표를 실시간으로 채울 수 없다). 정식 경로로 INSERT해 `UNIQUE(member_id, completed_on)`을 그대로 통과시킨다
 2. `PointLedgerRepository` + `PointService.award()` — 단일 지급 메서드. `UNIQUE(member_id, reason, ref_type, ref_id)` 위반은 중복 지급 시도로 보고 조용히 무시(멱등). ref 대상은 E단계의 reason별 규약표를 따른다
 3. `SessionCompletionJudge` — D1 판정: 종료 시각까지 LEFT·EVICTED 아니면 완주. Pause 10분은 재실 인정
-4. `SessionClosingBatch`(B1) — 절차: ①`ends_at` 도래 + LIVE 세션 선정 ②ENDED 전이 ③**미결 상태 사후 정산** ④참가자별 완주 판정 ⑤완주자 포인트 지급 `+100×(targetMinutes/60)` ⑥`streak_day` INSERT + `member.current_streak` 갱신 ⑦목표 달성 검사(D3) → 도달 시 ACHIEVED + 1,000p + 뱃지
+4. **`SessionClosingService` — 공통 종료 루틴**. 세션이 어떤 이유로 끝나든 여기를 지난다: 예정 시각 도래(B1) · 잔여 인원 미달 조기 종료(D12) · `room_finished` 웹훅(3단계). 절차는 ①세션 ENDED 전이 ②**미결 상태 사후 정산** ③남은 사람 완주 판정 ④지급 `+100×(targetMinutes/60)` + `streak_day` INSERT + `current_streak` 갱신 + 목표 달성 검사(D3).
+5. `SessionClosingBatch`(B1) — **대상 선별만** 하고 처리는 위 서비스에 맡긴다(같은 빈 안에서 부르면 프록시를 타지 않아 대상별 트랜잭션 경계가 서지 않는다). 세 갈래를 순서대로: ⓐ`ends_at` 지난 LIVE 종료 ⓑ이미 ENDED인데 미지급인 완주자 흡수 ⓒ원장에 안 남은 퇴출 패널티 소급
 
-   **③ 사후 정산이 필요한 이유**: 세션이 끝나는 순간 두 종류의 미결 상태가 남는다 — **복귀하지 않은 PAUSED 참가자**(SS-6를 안 부르고 세션이 끝남)와 **END가 오지 않은 자리비움 START**(SS-4 START만 있고 END가 없음). 둘 다 판정 주체가 사용자 요청이라, 요청이 영영 안 오면 경고가 부여되지 않는다. 세션 중에 10분 넘게 자리를 비우고 그대로 이탈한 사람이 아무 경고 없이 끝나는 셈이다.
-   정산 규칙은 진행 중 판정과 동일하게 적용한다: PAUSED 시작 시각부터 세션 종료까지가 `pause-limit-minutes` 초과면 경고 1회(D9), 자리비움 START부터 세션 종료까지가 `absence-threshold-seconds` 초과면 경고 1회. **부여 결과가 3회째면 그 시점에 퇴출 처리**하고 완주 판정(④)은 그 결과를 본다 — 순서가 뒤집히면 퇴출자가 완주로 집계된다.
-5. `SessionService`에 SS-8 추가
-6. **4단계 TODO 해소**: 퇴출 포인트 -300을 `PointService`로 연결
-7. D12 조기 종료: 잔여 ACTIVE 2인 미만이면 세션 즉시 종료, 그 시점까지 잔류자는 완주 인정. `live_session.end_reason`에 `EARLY_UNDER_MIN` 기록(정상 종료는 `NORMAL`, 진행 중은 NULL)
+   **② 사후 정산이 필요한 이유**: 세션이 끝나는 순간 두 종류의 미결 상태가 남는다 — **복귀하지 않은 PAUSED 참가자**(SS-6를 안 부르고 세션이 끝남)와 **END가 오지 않은 자리비움 START**(SS-4 START만 있고 END가 없음). 둘 다 판정 주체가 사용자 요청이라, 요청이 영영 안 오면 경고가 부여되지 않는다. 세션 중에 10분 넘게 자리를 비우고 그대로 이탈한 사람이 아무 경고 없이 끝나는 셈이고, 조기 종료까지 겹치면 **"남이 먼저 나가면 내 경고가 사라진다"**는 회피 경로가 성립한다.
+   정산 규칙은 진행 중 판정과 동일하게 적용한다: PAUSED 시작 시각부터 세션 종료까지가 `pause-limit-minutes` 초과면 경고 1회(D9), 자리비움 START부터 세션 종료까지가 `absence-threshold-seconds` 초과면 경고 1회. **부여 결과가 3회째면 그 시점에 퇴출 처리**하고 완주 판정(③)은 그 결과를 본다.
+6. `closeIfUnderMinimum`(D12 조기 종료) — 잔여 인원이 `min-participants` 미만이면 같은 종료 루틴을 `EARLY_UNDER_MIN`으로 탄다. **PAUSED도 재실로 세어 인원에 포함한다**(★D1) — 빼면 화장실 간 사람 때문에 세션이 끝난다. 사람이 빠지는 경로마다 이 검사를 뒤에 붙인다(SS-4 퇴출·SS-6 Pause 초과·SS-7 퇴장)
+7. `SessionService`에 SS-8 추가
+8. **AD-6 소급용 `restoreCompletion`** — 10단계가 쓴다. 지급 경로를 따로 만들지 않고 같은 자리를 지나게 한다(멱등키가 겹쳐야 B1 흡수와 이중 지급이 안 난다)
 
 ### 이 단계의 함정
 - **멱등의 근거는 코드가 아니라 제약이다.** B1 재실행 시 `point_ledger`의 `UNIQUE(member_id, reason, ref_type, ref_id)`와 `streak_day`의 `UNIQUE(member_id, completed_on)`이 중복을 막는다. "이미 처리했나 조회 후 INSERT"는 동시 실행에서 뚫린다.
@@ -616,9 +630,17 @@ Q3·경고 임계 확정 시 재실측: 이벤트 스키마, 60초 값.
 - **하루 2세션 완주는 Streak +1이지 +2가 아니다**(D2). `streak_day` UNIQUE가 이것을 보장하고, `member.current_streak`는 그 결과를 반영할 뿐이다.
 - **Streak 연속 판정은 `last_completed_on`과의 차이로 한다.** 1일 차이면 +1, 2일 이상이면 1로 리셋. 목표 자체는 유지된다(D3) — 리셋과 목표 취소는 다르다.
 - **목표 달성 시 목표는 ACHIEVED로 닫고 재설정 가능하게 둔다.** 계속 ACTIVE로 두면 같은 목표에 포인트가 반복 지급된다.
+- **판정식은 조건 둘이다. 연속 캐시만 보면 뚫린다(치명 결함 A).** `current_streak >= period_days` 하나로 판정하면, 7일 목표를 막 달성한 회원이 곧바로 7일 목표를 다시 걸고 **다음 날 한 번만 완주해도 또 1,000p를 받는다** — `current_streak`가 이미 8이기 때문이다. 같은 연속을 몇 번이고 다시 팔 수 있다. 그래서 **`started_on` 이후 완주일 수 >= `period_days`**를 함께 본다. 목표는 "지금까지 며칠 했는가"가 아니라 **"여기서부터 며칠 더 하는가"**다.
+- **두 조건은 서로를 대체하지 못한다.** 시작일 이후 완주일이 7일이어도 중간에 하루 끊겼다면 연속이 아니라 달성이 아니므로 연속 캐시 조건도 남긴다. 반대로 연속만 보면 위 구멍이 열린다.
+- **집계 전에 `flush()`가 필요하다.** 방금 INSERT한 완주일이 아직 영속성 컨텍스트에만 있으면 `started_on` 이후 집계가 그 하루를 빼고 세어, 마지막 날 달성이 판정되지 않는다.
 - **완주 포인트는 `targetMinutes` 기준이지 실제 재실 시간이 아니다**(D15). 60분 세션 완주 = 100p, 240분 = 400p.
 - **조기 종료(D12)와 정상 종료의 완주 판정이 같다**는 점에 주의. 2인 미만으로 떨어져 30분 만에 끝난 세션도 잔류자는 완주다 — 남의 이탈로 내 Streak가 끊기지 않게 하는 결정이다.
-- **B1의 지급 대상은 두 갈래다.** ① `ends_at <= now`인 LIVE를 종료 처리하며 지급 ② **이미 ENDED인데 `completed=true AND point_awarded=0`인 참가자를 흡수해 지급**. ②가 없으면 3단계가 실시간으로 종료시킨 세션(조기 종료·room_finished)의 완주자가 영구 미지급이 된다 — 3단계는 종료·완주 마킹까지만 하고 포인트를 만들지 않기 때문이다(3단계 실측 인계 사항).
+- **B1은 정시 종료 + 흡수 안전망이다.** 종료 경로가 지급까지 함께 하도록 통일된 뒤로, 흡수 갈래(ⓑⓒ)는 **종료 트랜잭션이 지급을 남기지 못하고 끊긴 경우에만** 대상이 생긴다. 그래도 지우지 않는 이유는 그 경우에 완주자가 영구 미지급으로 남기 때문이다. 통일 전에는 조기 종료·`room_finished`가 완주 마킹까지만 하고 지급을 B1에 미뤄 그 사이 SS-8이 `pointAwarded=0`을 내렸다.
+- **순서가 곧 명세다: ①닫기 → ②정산 → ③판정 → ④지급.** ②가 ③보다 먼저인 것이 핵심이다 — 뒤집으면 정산으로 퇴출될 사람이 이미 완주로 집계된 뒤라 되돌릴 자리가 없다.
+- **①이 맨 앞인 것은 순환 차단이다.** ②의 퇴출이 잔여 인원을 최소 미만으로 떨어뜨려 조기 종료 검사를 다시 부르는데, 세션을 먼저 ENDED로 찍어 뒀으므로 그 호출이 곧바로 되돌아 나간다. 같은 이유로 **`EvictionService`는 잔여 인원 검사를 스스로 하지 않는다** — 퇴출이 사람을 줄이니 이어서 해야 할 일이 맞지만, 그 검사가 종료 루틴을 부르고 종료 루틴은 정산에서 다시 경고를 만들어 `EvictionService`로 돌아온다. 검사를 **호출자로 옮겨** 순환을 끊었고, 호출자 셋(SS-4 판정·SS-6 Pause 초과·SS-7 퇴장)이 각각 이어서 부른다. 종료 루틴 자신만 예외다(이미 닫은 세션을 다시 닫을 이유가 없다).
+- **지급 호출이 영속성 컨텍스트를 비운다.** `PointService.award`가 잔액 캐시를 벌크 UPDATE로 갱신하므로(원장의 `balance_after`가 증감 후 값이려면 그래야 한다), 지급 이전에 잡아 둔 엔티티 참조는 그 뒤로 준영속이다. **엔티티 목록이 아니라 id로 루프를 돌고 쓸 행은 그때그때 다시 읽는다** — 목록을 미리 읽어 돌면 첫 지급 이후의 참가자가 전부 준영속이 되어 완주 표시와 경고가 조용히 사라지고, 완주 표시가 없으면 흡수 대상 조회에도 안 잡혀 영구 미표시가 된다.
+- **종료 시각은 배치가 도는 시각이 아니라 `ends_at`이다.** 배치가 몇 분 늦게 돌았다는 이유로 자리비움 구간이 길어져 경고가 붙으면, 같은 세션을 언제 처리했느냐에 따라 결과가 달라진다. 정시 종료의 사유는 정산 중 퇴출로 인원이 미달해도 `NORMAL`로 고정한다 — 예정된 시간을 다 채웠으므로 조기 종료가 아니다.
+- **한 참가자에게 미결 정산 두 규칙을 함께 적용하지 않는다.** PAUSED는 자리를 비우라고 만든 상태라 진행 중 판정도 자리비움 경고를 주지 않는데, 종료 정산에서만 둘 다 걸면 화장실 모드를 쓴 사람이 경고를 두 배로 받는다.
 - **포인트 지급과 잔액 캐시 갱신은 같은 트랜잭션.** `member.point_balance` 갱신을 빠뜨리면 원장과 캐시가 갈린다.
 
 ### 완료 게이트
@@ -628,6 +650,7 @@ Q3·경고 임계 확정 시 재실측: 이벤트 스키마, 60초 값.
    **소급 규칙(4단계 인계)**: 4단계는 퇴출 시 원장을 만들지 않고 `eviction.point_penalty=300`만 남겼다. 원장 지급 주체는 이 단계로 일원화한다 — B1이 `revoked_at IS NULL`인 eviction 중 원장에 `(EVICTION_PENALTY, EVICTION, eviction.id)` 행이 없는 것을 소급 차감한다. 멱등키(4열 UNIQUE)가 이중 차감을 막으므로 재실행 안전. 퇴출 트랜잭션이 직접 차감하도록 되돌리면 B1과 이중 주체가 되니 금지
 4. 같은 날 2세션 완주 → `streak_day` 1행, `current_streak` +1
 5. DEV-3로 6일 시드 + 7일 목표 회원이 7일차 완주 → `member_goal` ACHIEVED + `GOAL_ACHIEVED` 1,000p
+5-1. **재달성 구멍 검증(치명 결함 A 회귀)**: 위 회원이 곧바로 7일 목표를 다시 설정하고 **다음 날 1회만 완주** → `current_streak`는 8이지만 새 목표의 `started_on` 이후 완주일이 1일이므로 **ACHIEVED 아님, 지급 0**. 이후 6일 더 완주해야 달성
 6. 하루 건너뛴 회원 → `current_streak` 1로 리셋, 목표는 ACTIVE 유지
 7. SS-8 → 본인 완주 여부·지급 포인트·Streak 반영·참가자별 요약. 종료 전 호출 → 409 `SESSION_NOT_ENDED`
 8. 참가자 4명 퇴장으로 2인 미만 → 세션 즉시 ENDED + `end_reason=EARLY_UNDER_MIN`, 잔류 2인 완주 인정
@@ -716,7 +739,8 @@ Q7·상품 목록 확정 시 재실측: 상품 데이터, 커머스 범위.
 - **엔드포인트**: PY-1 충전 생성 · PY-2 승인 확인 · PY-3 PG 웹훅
 - **테이블**: `point_charge`
 - **enum**: `ChargeStatus`, `PointReason.CHARGE`
-- **설정**: `morak.pg.provider(toss-test)`, `secret-key`, `point-per-krw(1)`, `min-amount-krw(1,000)`, `max-amount-krw(1,000,000)`
+- **설정**: `morak.pg.provider(toss-test)`, `secret-key`, `point-per-krw(1)`, `min-amount-krw(1,000)`, `max-amount-krw(1,000,000)`, `ready-expire-minutes(30)`
+- **배치**: **B5 충전 승인 기한 만료** — 승인도 실패도 오지 않은 채 `ready-expire-minutes`를 넘긴 READY를 FAILED로 닫는다. `@Scheduled`(매분) + DEV-4 트리거, 패키지는 point
 - **PG 클라이언트**: `PgClient` 인터페이스 + `DevPgClient`(1단계 `SocialClient` 패턴). 실 키 연동은 12단계
 - `AuthInterceptor.SKIP_RULES`에 `POST /api/webhooks/payment` 행(M-2, 3단계에서 함께 추가했으면 확인만)
 
@@ -726,11 +750,13 @@ Q7·상품 목록 확정 시 재실측: 상품 데이터, 커머스 범위.
 - **웹훅 서명 검증 필수.** JWT skip과 무인증은 다르다(3단계와 같은 규칙) → 401 `INVALID_WEBHOOK_SIGNATURE`. 테스트 모드 PG가 서명을 붙여 주지 않아 규약을 우리가 정했다 — `X-Morak-Signature`에 본문 바이트의 HMAC-SHA256(hex), 키는 `pg.secret-key`.
 - **지급 경로의 잔액 캐시가 상대 UPDATE인지 확인한다.** 여기서 처음으로 같은 회원에게 지급 두 건(PY-2·PY-3)이 동시에 들어온다. 엔티티를 읽어 더하면 한쪽이 사라져 "잔액 = 원장 합"이 깨진다 — 원장 UNIQUE는 서로 다른 충전 건을 막지 않으므로 이 결함을 가려 주지 않는다.
 - **`pg_tid`는 NULL 허용 UNIQUE.** READY 상태에서는 아직 없다.
+- **승인도 실패도 오지 않는 READY가 반드시 생긴다**(결제창을 열고 닫은 경우). 닫아 주지 않으면 영구 잔존하면서 사용자의 충전 이력을 "진행 중"으로 오염시킨다. B5의 기한은 **PG 승인 API가 결제창 생성 후 받아 주는 시간의 배**로 잡는다(토스 10분 → 30분) — 짧으면 정상 결제가 닫히고, 길면 잔존 시간이 늘어난다.
+- **B5는 조회 시점과 전이 시점 사이에 승인이 도착할 수 있다.** 전이 직전에 상태를 다시 확인해 READY가 아니면 건너뛴다. 재실행이 안전한 근거는 두 번째 실행의 대상 조회가 `status='READY'`에 걸려 비어 있다는 점이다.
 - **승인되지 않은 충전에 적립 요청** → 409 `PAYMENT_NOT_APPROVED`.
 - **IAP는 보류**(v2). 웹 PG 테스트 모드 1종만 구현한다. FR-505의 "실물+인앱결제 혼합"은 스토어 정책 위반이라 구현하지 않는다(팀 전달 사항).
 
 ### 완료 게이트
-1. PY-1 → 201 + `pgOrderId`, `point_charge` READY 1행
+1. PY-1 → 201 + `pgOrderId`, `point_charge` READY 1행. **DEV-2 +31분 → B5 트리거 → FAILED 전이**, 그 뒤 PY-2 → 409 `PAYMENT_NOT_APPROVED`. B5 재트리거 시 행 상태 불변
 2. PG 테스트 결제 후 PY-2 → 200 + 포인트 적립 + `point_ledger` `CHARGE` 1행 + 상태 APPROVED
 3. PY-2 재호출 → 원장 행 수 불변(멱등)
 4. PY-3 웹훅이 뒤늦게 도착 → 원장 행 수 불변
@@ -807,6 +833,7 @@ Q5 확정 시 재실측: 신고 시 세션 처리 정책.
 
 ### 이 단계의 함정
 - **AP-1은 본인·1회만.** `eviction_id` UNIQUE가 방어선 → 409 `APPEAL_ALREADY_FILED`. 요청 본문의 `reason_text`는 200자 제한이고 필수다 — 사유 없는 이의는 관리자가 판단할 근거가 없다.
+- **AP-1은 게이트 ④(제재)를 건너뛴다**(§0-3 SKIP_RULES). 퇴출 이의는 잘못된 퇴출을 되돌리는 유일한 수단인데(NFR-402), 별개의 제재가 걸려 있으면 구제 경로까지 함께 닫혀 3일짜리 이의 기한이 그대로 지나간다. AU-5(탈퇴 철회)를 제재 중에도 열어 두는 것과 같은 논리다. **연령 게이트 ⑤는 그대로 건다** — 퇴출당했다는 것은 이미 세션에 들어갔다는 뜻이라 연령 확인을 통과한 회원이다.
 - **타인의 퇴출과 존재하지 않는 퇴출을 같은 403 `FORBIDDEN`으로 응답한다.** 404를 주면 evictionId를 훑어 "그 번호의 퇴출이 실재한다"를 알아낼 수 있고, 퇴출 사실은 그 자체로 민감하다. 7단계 SR-5(없는 주문 404·타인 주문 403)와 방향이 반대로 보이지만 원칙은 같다 — **응답 두 종류가 갈리는 지점을 만들지 않는다**는 것이 핵심이고, 어느 쪽으로 통일하느냐는 그 자원의 기본 응답을 따른다. `APPEAL_NOT_FOUND`는 AD-6(관리자가 없는 이의를 처리)에서만 쓴다.
 - **`overdue`는 컬럼이 아니라 조회 조건이다**(blueprint §10.5). 미종결 AND `sla_due_at < now`를 그때그때 계산한다. **신고(9단계)와 같은 규칙이므로 판정식을 공용 헬퍼로 뽑아 두 콘솔이 같은 코드를 쓰게 한다** — 한쪽만 고쳐 두 큐의 SLA 판정이 갈리는 것이 이 구조에서 가장 흔한 사고다.
 - **인용 시 원복은 3종 세트다**: ①`eviction.revoked_at` 기록(행을 지우지 않는다 — 감사 기록이다) ②포인트 역분개(`APPEAL_REFUND` +300, 기존 -300 행은 그대로 둔다) ③해당일 완주 소급 재판정(D1 기준으로 다시 판정 → 완주면 `streak_day` INSERT + 완주 포인트 지급).
@@ -905,7 +932,7 @@ B4 대상: `delete_scheduled_at < now`인 WITHDRAW_PENDING. 처리 내용은 익
 2. 실기기 2대 이상으로 LiveKit 세션 입장·자리비움 경고·Pause 실측
 3. 운영 프로필 기동: 환경변수 미설정 → 기동 실패 실측 / 설정 후 기동 → `/api/dev/clock`·`/api/dev/batches/B1`·`/api/dev/sessions/seed` 각각 404 — **아래 실측표로 통과**(단, 실구현이 아닌 스텁 위에서 측정했으므로 `KakaoSocialClient` 투입 후 1회 재확인)
 4. MySQL 6스레드 동시 매칭 → 정확 6인(2단계 게이트 재실행)
-5. 전 배치(B1·B2·B4) MySQL에서 1회씩 트리거 → 멱등 확인
+5. 전 배치(B1·B2·B4·B5) MySQL에서 1회씩 트리거 → 멱등 확인
 6. MySQL 스키마 생성 후 테이블 24·UNIQUE 17을 이름으로 대조 — H2 실측치와 같은지 확인한다. 다르면 그 자리가 곧 개발/운영이 갈리는 지점이다
 
 ### 강의 포인트
@@ -936,6 +963,10 @@ B4 대상: `delete_scheduled_at < now`인 WITHDRAW_PENDING. 처리 내용은 익
 `MORAK_DB_URL`·`MORAK_DB_USERNAME`·`MORAK_DB_PASSWORD`도 없으면 기동은 실패하지만 **원인 메시지가 다르다** — 각각 `'url' must start with "jdbc"`, `Wrong user name or password`다. 미해석 플레이스홀더가 문자열로 흘러 들어가 뒤늦게 터지기 때문이다. 배포 중 이 메시지를 보면 DB 문제가 아니라 환경변수 누락을 먼저 의심한다.
 
 ### 배포 전 확인표
+
+> **예행 권고(최종검증 리서치)**: 이 표를 12단계 당일에 처음 여는 것이 최악이다. MySQL 8 컨테이너로
+> `ddl-auto=validate` 기동을 **미리 한 번** 해 보라 — 네이티브 enum 생성·FK 0개·DEFAULT 절 부재
+> 3건은 붙여 봐야만 어긋남이 드러나고, validate는 UNIQUE를 검사하지 않으므로 제약 이름 대조도 그때 함께.
 
 1. **환경변수 6종**을 배포 환경에 등록했는가 — `MORAK_JWT_SECRET`(32자 이상) · `MORAK_SOCIAL_HASH_PEPPER` · `MORAK_LIVEKIT_HOST` · `MORAK_LIVEKIT_API_KEY` · `MORAK_LIVEKIT_API_SECRET` · `MORAK_PG_SECRET_KEY`. DB 3종(`MORAK_DB_URL`·`MORAK_DB_USERNAME`·`MORAK_DB_PASSWORD`)까지 합쳐 9종이다
 2. **`MORAK_SOCIAL_HASH_PEPPER`는 한 번 정하면 바꿀 수 없다.** `blocked_social_hash`가 이 pepper로 HMAC을 걸어 저장돼 있어, 값을 바꾸면 기존 차단 해시가 전부 매칭되지 않는다 — 재가입 차단이 조용히 풀린다. 교체하려면 원본 소셜 ID가 필요한데 그건 파기 대상이라 남아 있지 않다

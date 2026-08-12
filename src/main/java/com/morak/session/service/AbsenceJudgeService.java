@@ -54,6 +54,7 @@ public class AbsenceJudgeService {
     private final AbsenceEventRepository absenceEventRepository;
     private final WarningRepository warningRepository;
     private final EvictionService evictionService;
+    private final SessionClosingService closingService;
     private final Clock clock;
     private final int thresholdSeconds;
     private final int minIntervalSeconds;
@@ -63,6 +64,7 @@ public class AbsenceJudgeService {
                                AbsenceEventRepository absenceEventRepository,
                                WarningRepository warningRepository,
                                EvictionService evictionService,
+                               SessionClosingService closingService,
                                Clock clock,
                                @Value("${morak.session.absence-threshold-seconds}")
                                int thresholdSeconds,
@@ -73,21 +75,27 @@ public class AbsenceJudgeService {
         this.absenceEventRepository = absenceEventRepository;
         this.warningRepository = warningRepository;
         this.evictionService = evictionService;
+        this.closingService = closingService;
         this.clock = clock;
         this.thresholdSeconds = thresholdSeconds;
         this.minIntervalSeconds = minIntervalSeconds;
     }
 
+    /**
+     * 검사 순서는 참가 자격이 먼저다(§0-3). 세션 상태를 먼저 보면 참가자가 아닌 사람이 세션
+     * 번호를 훑어 남의 세션이 끝났는지를 알아낼 수 있다 — 실제로 비참가자가 종료된 세션에
+     * 409 {@code SESSION_ENDED}를 받아 그 세션의 존재와 상태를 알 수 있었다.
+     */
     public AbsenceEventResponse report(Long memberId, Long sessionId,
                                        AbsenceEventRequest request) {
         LiveSession session = liveSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.SESSION_NOT_FOUND));
-        if (!session.isLive()) {
-            throw new BusinessException(ErrorCode.SESSION_ENDED);
-        }
         SessionParticipant participant = sessionParticipantRepository
                 .findBySessionIdAndMemberId(sessionId, memberId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_SESSION_PARTICIPANT));
+        if (!session.isLive()) {
+            throw new BusinessException(ErrorCode.SESSION_ENDED);
+        }
         rejectIfNotJudgeable(participant);
 
         LocalDateTime now = LocalDateTime.now(clock);
@@ -185,14 +193,22 @@ public class AbsenceJudgeService {
                 && participant.getStatus() == ParticipantStatus.ACTIVE;
     }
 
+    /**
+     * 퇴출이 났으면 잔여 인원 검사를 이어서 부른다. 퇴출도 사람이 세션에서 빠지는 경로라
+     * 남은 인원이 최소 미만이면 그 자리에서 세션이 끝나야 한다(D12).
+     */
     private AbsenceEventResponse warn(LiveSession session, SessionParticipant participant,
                                       AbsenceEvent event, long absentSeconds, LocalDateTime now) {
+        Long sessionId = session.getId();
         int seq = participant.addWarning();
         warningRepository.save(Warning.fromAbsence(
-                session.getId(), participant.getMemberId(), seq, event.getId(), now));
+                sessionId, participant.getMemberId(), seq, event.getId(), now));
         log.info("자리비움 경고: session={}, member={}, seq={}, 지속 {}초",
-                session.getId(), participant.getMemberId(), seq, absentSeconds);
-        Eviction eviction = evictionService.evictIfWarningLimitReached(session, participant, now);
+                sessionId, participant.getMemberId(), seq, absentSeconds);
+        Eviction eviction = evictionService.evictIfWarningLimitReached(sessionId, participant, now);
+        if (eviction != null) {
+            closingService.closeIfUnderMinimum(sessionId, now);
+        }
         return AbsenceEventResponse.of(participant.getWarningCount(),
                 eviction == null ? null : eviction.getId(), evictionService.getPointPenalty());
     }

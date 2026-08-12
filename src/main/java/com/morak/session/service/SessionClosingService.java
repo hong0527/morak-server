@@ -15,6 +15,7 @@ import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.repository.WarningRepository;
 import com.morak.session.type.AbsenceEventType;
 import com.morak.session.type.ParticipantStatus;
+import com.morak.session.type.SessionEndReason;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -27,19 +28,29 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * B1 세션 종료 루틴의 실제 작업. 배치({@link SessionClosingBatch})는 대상만 고르고 처리는
- * 전부 여기서 하며, <b>메서드 하나가 트랜잭션 하나</b>다 — 한 세션의 정산이 실패해도 같은
- * 실행의 다른 세션은 처리돼야 하기 때문이다.
+ * 세션 종료 루틴. <b>세션이 어떤 이유로 끝나든 여기를 지난다</b> — 예정 시각 도래(B1),
+ * 잔여 인원 미달 조기 종료(D12), {@code room_finished} 웹훅(SS-10)이 모두
+ * {@link #closeSession}의 같은 순서를 탄다(명세 §5).
  *
- * <p>지급 대상은 두 갈래다. ① {@code ends_at}이 지난 LIVE 세션을 종료하며 지급
- * ({@link #closeDueSession}) ② 이미 끝났는데 지급이 남은 완주자를 흡수({@link #awardCompletion}).
- * ②가 없으면 3단계가 실시간으로 끝낸 세션(조기 종료·{@code room_finished})의 완주자가
- * 영구 미지급으로 남는다 — 그 경로는 완주 마킹까지만 하고 금액을 만들지 않는다.
+ * <p><b>진입점마다 따로 끝내면 종료 사유에 따라 결과가 달라진다.</b> 실제로 그랬다 —
+ * 조기 종료와 {@code room_finished}는 완주 마킹까지만 하고 지급을 B1에 미뤄, 그 사이 SS-8이
+ * {@code pointAwarded=0}을 내렸다. 더 나쁜 것은 미결 정산이 통째로 빠진 것이다: 10분 넘게
+ * 자리를 비운 사람도, 돌아오지 않은 PAUSED도 남들이 먼저 나가 세션이 조기 종료되면 경고 없이
+ * 완주했다. "남이 나가면 내 경고가 사라진다"는 회피 경로가 성립한다.
  *
- * <p><b>지급 호출은 영속성 컨텍스트를 비운다</b>({@link PointService#award}가 잔액 캐시를
- * 벌크 UPDATE로 갱신한다). 그래서 이 클래스는 지급을 사이에 두고 엔티티 참조를 들고 있지
- * 않는다 — 지급 뒤에 쓸 행은 지급 뒤에 다시 읽는다. 목록을 미리 읽어 루프를 돌면 첫 지급
- * 이후의 참가자가 전부 준영속이 되어 완주 표시가 조용히 사라진다.
+ * <p>메서드 하나가 트랜잭션 하나다 — 한 세션의 정산이 실패해도 같은 배치 실행의 다른 세션은
+ * 처리돼야 한다.
+ *
+ * <p><b>순서가 곧 명세다.</b> ① 세션을 닫는다 ② 미결 정산(경고·퇴출) ③ 남은 사람 완주 판정
+ * ④ 지급·완주일·목표 검사. ②가 ③보다 먼저인 것이 핵심이다 — 뒤집으면 정산으로 퇴출될
+ * 사람이 이미 완주로 집계된 뒤라 되돌릴 자리가 없다. ①이 맨 앞인 것은 재귀 차단이다:
+ * ②의 퇴출이 잔여 인원을 최소 미만으로 떨어뜨려 조기 종료 검사를 다시 부르는데, 세션이 이미
+ * ENDED라 그 호출이 곧바로 되돌아 나간다.
+ *
+ * <p><b>지급과 퇴출은 영속성 컨텍스트를 비운다</b>({@link PointService#award}가 잔액 캐시를
+ * 벌크 UPDATE로 갱신한다). 그래서 이 클래스는 그 호출을 사이에 두고 엔티티 참조를 들고 있지
+ * 않는다 — 목록이 아니라 id로 루프를 돌고, 쓸 행은 그때그때 다시 읽는다. 목록을 미리 읽어
+ * 돌면 첫 지급 이후의 참가자가 전부 준영속이 되어 완주 표시와 경고가 조용히 사라진다.
  *
  * <p><b>재실행 안전이 이 클래스의 유일한 합격 기준이다.</b> 근거는 코드가 아니라 제약이다:
  * 지급은 {@code uk_pl_dedup}, 완주일은 {@code uk_streak_day}, 사후 정산 경고는
@@ -64,10 +75,12 @@ public class SessionClosingService {
     private final WarningRepository warningRepository;
     private final EvictionRepository evictionRepository;
     private final EvictionService evictionService;
+    private final ReconnectGraceRegistry graceRegistry;
     private final PointService pointService;
     private final StreakService streakService;
     private final int absenceThresholdSeconds;
     private final int pauseLimitSeconds;
+    private final int minParticipants;
     private final int completePointPerHour;
 
     public SessionClosingService(LiveSessionRepository liveSessionRepository,
@@ -76,12 +89,15 @@ public class SessionClosingService {
                                  WarningRepository warningRepository,
                                  EvictionRepository evictionRepository,
                                  EvictionService evictionService,
+                                 ReconnectGraceRegistry graceRegistry,
                                  PointService pointService,
                                  StreakService streakService,
                                  @Value("${morak.session.absence-threshold-seconds}")
                                  int absenceThresholdSeconds,
                                  @Value("${morak.session.pause-limit-minutes}")
                                  int pauseLimitMinutes,
+                                 @Value("${morak.session.min-participants}")
+                                 int minParticipants,
                                  @Value("${morak.point.session-complete-per-hour}")
                                  int completePointPerHour) {
         this.liveSessionRepository = liveSessionRepository;
@@ -90,50 +106,87 @@ public class SessionClosingService {
         this.warningRepository = warningRepository;
         this.evictionRepository = evictionRepository;
         this.evictionService = evictionService;
+        this.graceRegistry = graceRegistry;
         this.pointService = pointService;
         this.streakService = streakService;
         this.absenceThresholdSeconds = absenceThresholdSeconds;
         this.pauseLimitSeconds = pauseLimitMinutes * SECONDS_PER_MINUTE;
+        this.minParticipants = minParticipants;
         this.completePointPerHour = completePointPerHour;
     }
 
     /**
-     * 예정 시각이 지난 세션을 닫는다. 순서가 곧 명세다 — 사후 정산이 완주 판정보다 먼저다.
-     * 뒤집으면 정산으로 퇴출될 사람이 이미 완주로 집계된 뒤라 되돌릴 자리가 없다.
+     * 예정 시각이 지난 세션을 닫는다(B1).
      *
      * <p>종료 시각은 배치가 도는 시각이 아니라 {@code ends_at}이다. 배치가 몇 분 늦게
      * 돌았다는 이유로 자리비움 구간이 길어져 경고가 붙으면, 같은 세션을 언제 처리했느냐에
      * 따라 결과가 달라진다.
+     *
+     * <p>사유는 {@code NORMAL}로 고정한다. 정산 중의 퇴출이 잔여 인원을 최소 미만으로
+     * 떨어뜨려도 마찬가지다 — 그 세션은 예정된 시간을 다 채웠으므로 조기 종료가 아니다.
      */
     public int closeDueSession(Long sessionId) {
         LiveSession session = liveSessionRepository.findById(sessionId).orElse(null);
         if (session == null || !session.isLive()) {
             return 0;
         }
-        LocalDateTime endedAt = session.getEndsAt();
-        settleUnresolved(session, endedAt);
-        // 정산 중의 퇴출이 잔여 인원을 최소 미만으로 떨어뜨리면 EvictionService가 이미
-        // 세션을 조기 종료(D12)로 닫아 둔다. 그때는 그 사유를 그대로 둔다.
-        if (session.isLive()) {
-            session.endNormally(endedAt);
+        return closeSession(sessionId, SessionEndReason.NORMAL, session.getEndsAt());
+    }
+
+    /**
+     * 잔여 인원이 최소 미만이면 조기 종료한다(D12). PAUSED를 세는 것은 Pause가 재실로
+     * 인정되기 때문이다(★D1) — 빼면 화장실 간 사람 때문에 세션이 끝난다.
+     *
+     * <p>사람이 PRESENT에서 빠지는 경로마다 이 검사가 뒤따라야 한다. 퇴장은
+     * {@link SessionExitService}가, 퇴출은 {@link EvictionService}의 호출자가 부른다.
+     */
+    public void closeIfUnderMinimum(Long sessionId, LocalDateTime now) {
+        if (presentParticipantIds(sessionId).size() >= minParticipants) {
+            return;
         }
-        // 지급이 시작되면 여기서 읽은 엔티티는 전부 준영속이 된다(settleCompletion 주석).
-        // 그래서 목록이 아니라 id만 들고 루프를 돈다 — 참가자 행은 각자의 지급 뒤에 다시 읽는다.
-        List<Long> completerIds =
-                sessionParticipantRepository.findBySessionIdAndStatusIn(sessionId, PRESENT)
-                        .stream()
-                        .map(SessionParticipant::getId)
-                        .toList();
+        closeSession(sessionId, SessionEndReason.EARLY_UNDER_MIN, now);
+    }
+
+    /**
+     * 종료 루틴 본체. 이미 끝난 세션에는 아무것도 하지 않는다 — 웹훅은 중복 수신되고,
+     * 조기 종료가 먼저 닿았을 수도 있다.
+     *
+     * @param endedAt 정시 종료는 {@code ends_at}, 조기 종료는 실제로 인원이 미달한 시각
+     * @return 실제로 닫았으면 1, 이미 닫혀 있었으면 0
+     */
+    public int closeSession(Long sessionId, SessionEndReason reason, LocalDateTime endedAt) {
+        LiveSession session = liveSessionRepository.findById(sessionId).orElse(null);
+        if (session == null || !session.isLive()) {
+            return 0;
+        }
+        if (reason == SessionEndReason.NORMAL) {
+            session.endNormally(endedAt);
+        } else {
+            session.endUnderMinimum(endedAt);
+        }
+        // 지급이 시작되면 여기서 읽은 세션은 준영속이 된다. 뒤에 쓸 값은 지금 꺼내 둔다.
         int targetMinutes = session.getTargetMinutes();
+        // 끝난 세션의 유예 창은 판정할 이유가 없다. 두면 스위퍼가 이미 끝난 세션을 집어 든다.
+        graceRegistry.discardSession(sessionId);
+
+        settleUnresolved(sessionId, endedAt);
+
+        List<Long> completerIds = presentParticipantIds(sessionId);
         for (Long participantId : completerIds) {
             settleCompletion(participantId, sessionId, targetMinutes, endedAt, false);
         }
         log.info("세션 종료 처리: session={}, reason={}, 완주 {}명",
-                sessionId, session.getEndReason(), completerIds.size());
+                sessionId, reason, completerIds.size());
         return 1;
     }
 
-    /** 이미 끝난 세션의 미지급 완주자를 흡수 지급한다. 대상 선별은 배치가 한다. */
+    /**
+     * 이미 끝난 세션의 미지급 완주자를 흡수 지급한다(B1). 대상 선별은 배치가 한다.
+     *
+     * <p>종료 경로가 지급까지 함께 하도록 통일된 뒤로 이 자리는 안전망이다 — 종료 트랜잭션이
+     * 지급을 남기지 못하고 끊긴 경우에만 대상이 생긴다. 안전망을 지우지 않는 이유는 그 경우에
+     * 완주자가 영구 미지급으로 남기 때문이다.
+     */
     public int awardCompletion(Long participantId) {
         SessionParticipant participant =
                 sessionParticipantRepository.findById(participantId).orElse(null);
@@ -150,7 +203,7 @@ public class SessionClosingService {
 
     /**
      * 이의 인용(AD-6)의 완주 소급. 퇴출이 없었다면 세션 종료 시각까지 남아 있었을 사람이므로
-     * ★D1 기준으로 완주다 — 지급·완주 표시·완주일·목표 검사가 {@link #closeDueSession}과
+     * ★D1 기준으로 완주다 — 지급·완주 표시·완주일·목표 검사가 {@link #closeSession}과
      * 같은 자리를 지난다.
      *
      * <p><b>지급 경로를 따로 만들지 않는 이유는 멱등키 때문이다.</b> 완주 지급의 근거는
@@ -174,7 +227,7 @@ public class SessionClosingService {
                 .orElseThrow(() -> new IllegalStateException(
                         "참가자의 세션이 없다: participant=" + participantId));
         // 아직 진행 중인 세션은 완주 여부가 정해지지 않았다. 지금 완주로 찍으면 남은 시간을
-        // 채우지 않은 사람이 완주자가 된다 — 판정은 종료 시각에 B1이 한다.
+        // 채우지 않은 사람이 완주자가 된다 — 판정은 종료 시각에 종료 루틴이 한다.
         if (session.getEndedAt() == null) {
             return false;
         }
@@ -184,8 +237,13 @@ public class SessionClosingService {
     }
 
     /**
-     * 퇴출 패널티 소급 차감. 4단계 퇴출 트랜잭션은 {@code eviction.point_penalty}만 남기고
-     * 원장을 만들지 않으므로, 차감이 실제로 일어나는 자리는 여기 하나뿐이다.
+     * 퇴출 패널티 소급 차감(B1). 차감의 제자리는 퇴출 트랜잭션이고
+     * ({@link EvictionService#evictIfWarningLimitReached}), 여기는 그 트랜잭션이 원장을
+     * 남기지 못한 채 끝난 경우에만 걸리는 안전망이다.
+     *
+     * <p>이중 차감은 원장 멱등키가 막는다 — 두 자리가 같은
+     * {@code (memberId, EVICTION_PENALTY, EVICTION, evictionId)}로 쓰기 때문에, 이미 있으면
+     * {@link PointService#award}가 조용히 false를 돌려준다.
      */
     public int settleEvictionPenalty(Long evictionId) {
         Eviction eviction = evictionRepository.findById(evictionId).orElse(null);
@@ -239,6 +297,13 @@ public class SessionClosingService {
                         "지급 대상 참가자가 사라졌다: " + participantId));
     }
 
+    /** 지금 세션에 남아 있는 참가자. 조기 종료 판정과 완주 판정이 같은 질문을 쓴다. */
+    private List<Long> presentParticipantIds(Long sessionId) {
+        return sessionParticipantRepository.findBySessionIdAndStatusIn(sessionId, PRESENT).stream()
+                .map(SessionParticipant::getId)
+                .toList();
+    }
+
     /**
      * 세션이 끝나는 순간 남는 두 종류의 미결 상태를 세션 종료 시각 기준으로 정산한다 —
      * 복귀하지 않은 PAUSED(SS-6 미호출)와 END가 오지 않은 자리비움(SS-4 START만 도착).
@@ -250,20 +315,24 @@ public class SessionClosingService {
      * <p>한 참가자에게 두 규칙을 함께 적용하지 않는다. PAUSED는 자리를 비우라고 만든
      * 상태(SS-5)라 진행 중 판정도 자리비움 경고를 주지 않는데, 종료 정산에서만 둘 다
      * 걸면 화장실 모드를 쓴 사람이 경고를 두 배로 받는다.
+     *
+     * <p>목록이 아니라 id로 도는 것은 퇴출 때문이다. 3회째 경고가 붙은 참가자의 차감이
+     * 영속성 컨텍스트를 비우므로, 미리 읽어 둔 뒷사람들이 준영속이 되어 그들의 경고가
+     * 사라진다.
      */
-    private void settleUnresolved(LiveSession session, LocalDateTime endedAt) {
-        for (SessionParticipant participant
-                : sessionParticipantRepository.findBySessionIdAndStatusIn(session.getId(), PRESENT)) {
+    private void settleUnresolved(Long sessionId, LocalDateTime endedAt) {
+        for (Long participantId : presentParticipantIds(sessionId)) {
+            SessionParticipant participant = loadParticipant(participantId);
             if (participant.getStatus() == ParticipantStatus.PAUSED) {
-                settleUnreturnedPause(session, participant, endedAt);
+                settleUnreturnedPause(sessionId, participant, endedAt);
             } else {
-                settleUnclosedAbsence(session, participant, endedAt);
+                settleUnclosedAbsence(sessionId, participant, endedAt);
             }
         }
     }
 
     /** 미복귀 PAUSED. 판정식은 SS-6 초과 복귀와 같다(D9) — 돌아오지 않은 쪽이 더 관대하면 안 된다. */
-    private void settleUnreturnedPause(LiveSession session, SessionParticipant participant,
+    private void settleUnreturnedPause(Long sessionId, SessionParticipant participant,
                                        LocalDateTime endedAt) {
         long elapsedSeconds =
                 Duration.between(participant.getPauseStartedAt(), endedAt).getSeconds();
@@ -271,16 +340,15 @@ public class SessionClosingService {
             return;
         }
         log.info("미복귀 Pause 정산: session={}, member={}, 경과 {}초",
-                session.getId(), participant.getMemberId(), elapsedSeconds);
-        warn(session, participant, null, endedAt);
+                sessionId, participant.getMemberId(), elapsedSeconds);
+        warn(sessionId, participant, null, endedAt);
     }
 
     /** 짝 없는 자리비움 START. 세션 종료 시각을 END로 간주해 SS-4와 같은 임계로 판정한다. */
-    private void settleUnclosedAbsence(LiveSession session, SessionParticipant participant,
+    private void settleUnclosedAbsence(Long sessionId, SessionParticipant participant,
                                        LocalDateTime endedAt) {
         AbsenceEvent last = absenceEventRepository
-                .findFirstBySessionIdAndMemberIdOrderByIdDesc(session.getId(),
-                        participant.getMemberId())
+                .findFirstBySessionIdAndMemberIdOrderByIdDesc(sessionId, participant.getMemberId())
                 .orElse(null);
         if (last == null || last.getType() != AbsenceEventType.START) {
             return;
@@ -290,22 +358,24 @@ public class SessionClosingService {
             return;
         }
         log.info("미종료 자리비움 정산: session={}, member={}, 지속 {}초",
-                session.getId(), participant.getMemberId(), absentSeconds);
-        warn(session, participant, last.getId(), endedAt);
+                sessionId, participant.getMemberId(), absentSeconds);
+        warn(sessionId, participant, last.getId(), endedAt);
     }
 
     /**
      * 경고 부여와 퇴출 검사. 3회째면 그 자리에서 퇴출되고, 완주 판정이 그 결과를 본다 —
-     * {@link #closeDueSession}이 정산을 끝낸 뒤에 남은 사람을 세는 이유가 이것이다.
+     * {@link #closeSession}이 정산을 끝낸 뒤에 남은 사람을 세는 이유가 이것이다.
+     *
+     * <p>다른 경고 경로와 달리 퇴출 뒤에 조기 종료 검사를 잇지 않는다. 이 메서드는 이미
+     * ENDED로 표시한 세션의 정산 중에만 불리므로 다시 닫을 세션이 없다.
      */
-    private void warn(LiveSession session, SessionParticipant participant, Long absenceEventId,
+    private void warn(Long sessionId, SessionParticipant participant, Long absenceEventId,
                       LocalDateTime at) {
         int seq = participant.addWarning();
-        Long sessionId = session.getId();
         Long memberId = participant.getMemberId();
         warningRepository.save(absenceEventId == null
                 ? Warning.fromPauseOverrun(sessionId, memberId, seq, at)
                 : Warning.fromUnclosedAbsence(sessionId, memberId, seq, absenceEventId, at));
-        evictionService.evictIfWarningLimitReached(session, participant, at);
+        evictionService.evictIfWarningLimitReached(sessionId, participant, at);
     }
 }

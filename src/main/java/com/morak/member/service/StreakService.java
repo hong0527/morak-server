@@ -74,7 +74,8 @@ public class StreakService {
 
     /**
      * 완주 하루를 기록한다. 같은 날이 이미 기록돼 있으면 캐시를 건드리지 않고 목표 검사만
-     * 한 번 더 한다 — 목표를 늦게 설정한 회원이 이미 채운 연속을 인정받지 못하면 안 된다.
+     * 한 번 더 한다 — 그날의 첫 세션이 끝난 뒤에 목표를 설정한 회원은 두 번째 세션의 검사에서
+     * 그날을 처음 인정받는다. 검사를 건너뛰면 그 하루가 영영 세어지지 않는다.
      */
     public CompletionRecord recordCompletion(Long memberId, LocalDate completedOn, Long sessionId,
                                              LocalDateTime now) {
@@ -140,12 +141,27 @@ public class StreakService {
     /**
      * 목표 달성 검사(★D3). 달성한 목표는 ACHIEVED로 닫는다 — ACTIVE로 두면 다음 완주 때마다
      * 같은 목표에 1,000p가 다시 지급된다. 재도전은 새 행이라 목표를 다시 설정할 수 있다.
+     *
+     * <p><b>조건이 둘인 이유는 같은 연속을 여러 번 팔 수 없게 하기 위해서다.</b> 연속 캐시만
+     * 보면 7일 목표를 달성한 회원이 곧바로 7일 목표를 다시 걸고 다음 날 한 번 완주하는 것으로
+     * 또 1,000p를 받는다({@code current_streak}가 이미 8이므로). 그래서 목표 시작일 이후에
+     * 실제로 쌓인 완주일이 기간만큼 되는지를 함께 본다 — 목표는 "지금까지 며칠 했는가"가
+     * 아니라 "여기서부터 며칠 더 하는가"이기 때문이다.
+     *
+     * <p>연속 캐시 조건도 남긴다. 시작일 이후 완주일이 7일이어도 중간에 하루 끊겼다면
+     * 연속이 아니므로 달성이 아니다. 두 조건은 서로를 대체하지 못한다.
      */
     private Long achieveGoalIfReached(Member member, LocalDateTime now) {
         MemberGoal goal = memberGoalRepository
                 .findFirstByMemberIdAndStatusOrderByIdDesc(member.getId(), GoalStatus.ACTIVE)
                 .orElse(null);
         if (goal == null || member.getCurrentStreak() < goal.getPeriodDays()) {
+            return null;
+        }
+        // 방금 넣은 완주일이 아직 영속성 컨텍스트에만 있으면 아래 집계가 그 하루를 빼고 센다.
+        streakDayRepository.flush();
+        if (streakDayRepository.countByMemberIdAndCompletedOnGreaterThanEqual(
+                member.getId(), goal.getStartedOn()) < goal.getPeriodDays()) {
             return null;
         }
         goal.achieve(now);

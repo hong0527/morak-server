@@ -153,10 +153,10 @@ public class AppealAdminService {
      * 역분개. 원래의 {@code EVICTION_PENALTY} 행은 그대로 두고 반대 부호의 새 행을 더한다 —
      * 지우면 {@code balance_after} 연쇄가 깨지고 무슨 일이 있었는지 사라진다.
      *
-     * <p><b>실제로 빠져나간 적이 없으면 되돌릴 것도 없다.</b> 퇴출 -300을 원장에 넣는 주체는
-     * B1({@code settleEvictionPenalty})이라 퇴출과 차감 사이에 최대 1분의 틈이 있고, 그 틈에
-     * 인용되면 차감된 적 없는 300을 환급하는 셈이 된다. 되돌릴 대상이 원장에 있는지를 보고
-     * 판단한다.
+     * <p><b>실제로 빠져나간 적이 없으면 되돌릴 것도 없다.</b> 퇴출 -300은 퇴출 트랜잭션이
+     * 즉시 넣지만, 그 트랜잭션이 원장을 남기지 못하고 끊겼다면 B1의 안전망
+     * ({@code settleEvictionPenalty})이 채우기 전까지 차감이 없는 상태가 존재한다. 그때 인용하면
+     * 차감된 적 없는 300을 환급하는 셈이 되므로, 되돌릴 대상이 원장에 있는지를 보고 판단한다.
      */
     private int refundPenalty(Eviction eviction, LocalDateTime now) {
         boolean penaltyCharged = pointService.findLedgerId(eviction.getMemberId(),

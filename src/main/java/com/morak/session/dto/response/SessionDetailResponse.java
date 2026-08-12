@@ -28,6 +28,10 @@ public record SessionDetailResponse(
     /**
      * {@code joinedAt}이 null이면 매칭은 됐지만 아직 룸에 들어오지 않은 참가자다.
      * 값은 SS-10 {@code participant_joined} 웹훅이 최초 1회만 채운다.
+     *
+     * <p>{@code evictionId}는 <b>본인 행에만</b> 실린다. 이의 신청(AP-1)의 진입 번호이므로
+     * 남의 행에 실으면 같은 세션에 있었다는 이유로 타인의 이의 경로를 열 수 있다.
+     * 퇴출되지 않았거나 남의 행이면 null이다.
      */
     public record Participant(
             Long memberId,
@@ -38,26 +42,31 @@ public record SessionDetailResponse(
             boolean paused,
             boolean pauseUsed,
             LocalDateTime joinedAt,
-            String goalText) {
+            String goalText,
+            Long evictionId) {
 
-        static Participant of(SessionParticipant participant, String nickname, Long viewerId) {
+        static Participant of(SessionParticipant participant, String nickname, Long viewerId,
+                              Long viewerEvictionId) {
+            boolean isMe = participant.getMemberId().equals(viewerId);
             return new Participant(
                     participant.getMemberId(),
                     nickname,
-                    participant.getMemberId().equals(viewerId),
+                    isMe,
                     participant.getStatus(),
                     participant.getWarningCount(),
                     participant.getStatus() == ParticipantStatus.PAUSED,
                     participant.isPauseUsed(),
                     participant.getJoinedAt(),
-                    participant.getGoalText());
+                    participant.getGoalText(),
+                    isMe ? viewerEvictionId : null);
         }
     }
 
     public static SessionDetailResponse of(LiveSession session,
                                            List<SessionParticipant> participants,
                                            Map<Long, String> nicknames,
-                                           Long viewerId) {
+                                           Long viewerId,
+                                           Long viewerEvictionId) {
         return new SessionDetailResponse(
                 session.getId(),
                 session.getStatus(),
@@ -71,7 +80,8 @@ public record SessionDetailResponse(
                         .map(participant -> Participant.of(
                                 participant,
                                 nicknames.get(participant.getMemberId()),
-                                viewerId))
+                                viewerId,
+                                viewerEvictionId))
                         .toList());
     }
 }

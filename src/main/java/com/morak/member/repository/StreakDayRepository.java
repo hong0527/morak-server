@@ -50,6 +50,16 @@ public interface StreakDayRepository extends JpaRepository<StreakDay, Long> {
             """)
     List<LocalDate> findAllCompletedOn(@Param("memberId") Long memberId, Pageable pageable);
 
+    /**
+     * 목표 시작일 이후로 실제 쌓인 완주일 수. 목표 달성 판정이 연속 캐시와 함께 보는 값이다.
+     *
+     * <p>캐시만 보면 <b>같은 연속을 몇 번이든 다시 팔 수 있다</b>. 7일을 채워 목표를 달성한
+     * 회원이 곧바로 7일 목표를 새로 걸면 {@code current_streak}는 이미 7이라, 다음 날 한 번만
+     * 완주해도 그 자리에서 또 1,000p가 나간다. 목표 기간은 "앞으로 그만큼 더 해내는 것"이므로
+     * 시작일 이후의 완주일을 세어 그 하한을 함께 건다.
+     */
+    int countByMemberIdAndCompletedOnGreaterThanEqual(Long memberId, LocalDate startedOn);
+
     /** 만 14세 미만 파기(AU-3)와 탈퇴 파기(B4)가 회원의 완주 기록을 함께 지운다. */
     void deleteByMemberId(Long memberId);
 }

@@ -34,6 +34,11 @@ public record SessionResultResponse(
      */
     public record Streak(int before, int after, boolean countedToday) {}
 
+    /**
+     * {@code evictionId}는 퇴출된 본인에게만 값이 있고 아니면 null이다. 이의 신청(AP-1)의
+     * 진입 번호라 결과 화면에서 그대로 이의 버튼을 그릴 수 있어야 한다 — 퇴출 순간의 SS-4
+     * 응답 한 번에만 실려 있으면 그 응답을 놓친 사용자는 3일짜리 기한을 흘려보낸다.
+     */
     public record My(
             boolean completed,
             ParticipantStatus participantStatus,
@@ -42,10 +47,11 @@ public record SessionResultResponse(
             int pointAwarded,
             Streak streak,
             boolean goalAchieved,
-            BadgeCode badgeCode) {
+            BadgeCode badgeCode,
+            Long evictionId) {
 
         static My of(SessionParticipant participant, StreakService.StreakSnapshot snapshot,
-                     boolean countedToday, boolean goalAchieved) {
+                     boolean countedToday, boolean goalAchieved, Long evictionId) {
             return new My(
                     participant.isCompleted(),
                     participant.getStatus(),
@@ -55,7 +61,8 @@ public record SessionResultResponse(
                     new Streak(snapshot.before(), snapshot.after(), countedToday),
                     goalAchieved,
                     // 뱃지는 저장하지 않고 목표 달성 여부에서 파생한다(D3)
-                    goalAchieved ? BadgeCode.GOAL_ACHIEVED : null);
+                    goalAchieved ? BadgeCode.GOAL_ACHIEVED : null,
+                    evictionId);
         }
     }
 
@@ -85,7 +92,8 @@ public record SessionResultResponse(
                                            SessionParticipant me,
                                            StreakService.StreakSnapshot snapshot,
                                            boolean countedToday,
-                                           boolean goalAchieved) {
+                                           boolean goalAchieved,
+                                           Long evictionId) {
         return new SessionResultResponse(
                 session.getId(),
                 session.getStatus(),
@@ -93,7 +101,7 @@ public record SessionResultResponse(
                 session.getStartedAt(),
                 session.getEndedAt(),
                 session.getEndReason(),
-                My.of(me, snapshot, countedToday, goalAchieved),
+                My.of(me, snapshot, countedToday, goalAchieved, evictionId),
                 participants.stream()
                         .map(participant -> Participant.of(
                                 participant,

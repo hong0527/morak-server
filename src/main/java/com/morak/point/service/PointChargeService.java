@@ -59,6 +59,7 @@ public class PointChargeService {
     private final int pointPerKrw;
     private final int minAmountKrw;
     private final int maxAmountKrw;
+    private final int readyExpireMinutes;
 
     public PointChargeService(PointChargeRepository pointChargeRepository,
                               PointService pointService,
@@ -68,7 +69,8 @@ public class PointChargeService {
                               @Value("${morak.pg.provider}") String provider,
                               @Value("${morak.pg.point-per-krw}") int pointPerKrw,
                               @Value("${morak.pg.min-amount-krw}") int minAmountKrw,
-                              @Value("${morak.pg.max-amount-krw}") int maxAmountKrw) {
+                              @Value("${morak.pg.max-amount-krw}") int maxAmountKrw,
+                              @Value("${morak.pg.ready-expire-minutes}") int readyExpireMinutes) {
         this.pointChargeRepository = pointChargeRepository;
         this.pointService = pointService;
         this.pgClient = pgClient;
@@ -78,6 +80,7 @@ public class PointChargeService {
         this.pointPerKrw = pointPerKrw;
         this.minAmountKrw = minAmountKrw;
         this.maxAmountKrw = maxAmountKrw;
+        this.readyExpireMinutes = readyExpireMinutes;
     }
 
     /**
@@ -175,6 +178,48 @@ public class PointChargeService {
         }
     }
 
+    /**
+     * B5. 승인도 실패도 오지 않은 채 기한을 넘긴 READY를 FAILED로 닫는다.
+     *
+     * <p>결제창을 띄우고 그냥 닫으면 PG는 아무것도 통보하지 않는다. 그 행을 그대로 두면
+     * "결제된 건가"를 사람이 판단해야 하는 미결이 매일 쌓이고, 30일 지난 주문번호로 승인을
+     * 시도하는 요청에도 계속 문이 열려 있다.
+     *
+     * <p>충전 건마다 트랜잭션을 나눈다 — 한 건의 실패가 같은 실행의 나머지를 되돌리면 안 된다.
+     */
+    public int expireStaleReady() {
+        LocalDateTime cutoff = LocalDateTime.now(clock).minusMinutes(readyExpireMinutes);
+        int expired = 0;
+        for (Long chargeId : pointChargeRepository.findIdsToExpire(ChargeStatus.READY, cutoff)) {
+            expired += expireIfStillReady(chargeId);
+        }
+        return expired;
+    }
+
+    /**
+     * 목록을 읽은 뒤 승인이 도착했을 수 있다. 상태를 다시 확인하는 것이 그 창을 닫는다 —
+     * 이미 APPROVED면 여기서 손대지 않는다.
+     */
+    private int expireIfStillReady(Long chargeId) {
+        Boolean expired = transactionTemplate.execute(status -> {
+            PointCharge charge = loadCharge(chargeId);
+            if (charge.getStatus() != ChargeStatus.READY) {
+                return false;
+            }
+            charge.fail();
+            log.info("승인 기한이 지나 방치된 충전을 닫는다: charge={}, created={}",
+                    chargeId, charge.getCreatedAt());
+            return true;
+        });
+        return Boolean.TRUE.equals(expired) ? 1 : 0;
+    }
+
+    /** 결제창 생성 후 승인 기한이 지났는가. PG 승인 API의 10분 제한에 여유를 둔 값이다. */
+    private boolean isStale(PointCharge charge) {
+        return charge.getCreatedAt().plusMinutes(readyExpireMinutes)
+                .isBefore(LocalDateTime.now(clock));
+    }
+
     /** PY-3의 취소·중단·만료 통보. 이미 승인된 건은 되돌리지 않는다. */
     public void failByPgOrderId(String pgOrderId, String reason) {
         PointCharge found = pointChargeRepository.findByPgOrderId(pgOrderId).orElse(null);
@@ -198,6 +243,14 @@ public class PointChargeService {
             return Settled.of(response(charge));
         }
         if (charge.getStatus() == ChargeStatus.FAILED) {
+            return Settled.failure(ErrorCode.PAYMENT_NOT_APPROVED);
+        }
+        if (isStale(charge)) {
+            // PG에 물어보지 않고 닫는다. 승인 API 자체가 결제창 생성 후 10분까지만 받으므로
+            // 그 배가 지난 요청은 이미 PG에서도 승인될 수 없다.
+            charge.fail();
+            log.warn("승인 기한이 지난 충전이라 닫는다: charge={}, created={}",
+                    charge.getId(), charge.getCreatedAt());
             return Settled.failure(ErrorCode.PAYMENT_NOT_APPROVED);
         }
 

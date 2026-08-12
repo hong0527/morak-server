@@ -40,6 +40,7 @@ public class PauseService {
     private final SessionParticipantRepository sessionParticipantRepository;
     private final WarningRepository warningRepository;
     private final EvictionService evictionService;
+    private final SessionClosingService closingService;
     private final Clock clock;
     private final int pauseLimitSeconds;
 
@@ -47,19 +48,28 @@ public class PauseService {
                         SessionParticipantRepository sessionParticipantRepository,
                         WarningRepository warningRepository,
                         EvictionService evictionService,
+                        SessionClosingService closingService,
                         Clock clock,
                         @Value("${morak.session.pause-limit-minutes}") int pauseLimitMinutes) {
         this.liveSessionRepository = liveSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.warningRepository = warningRepository;
         this.evictionService = evictionService;
+        this.closingService = closingService;
         this.clock = clock;
         this.pauseLimitSeconds = pauseLimitMinutes * SECONDS_PER_MINUTE;
     }
 
-    /** SS-5. 상태 전이는 조건부 UPDATE 한 방으로 끝내고, 실패했을 때만 원인을 캐묻는다. */
+    /**
+     * SS-5. 상태 전이는 조건부 UPDATE 한 방으로 끝내고, 실패했을 때만 원인을 캐묻는다.
+     *
+     * <p>참가 자격을 먼저 확인한다(§0-3). UPDATE보다 쿼리가 한 번 늘지만, 순서를 뒤집으면
+     * 참가자가 아닌 사람이 세션 번호를 훑어 남의 세션이 끝났는지를 알 수 있다.
+     */
     public PauseStartResponse start(Long memberId, Long sessionId) {
-        LiveSession session = findLiveSession(sessionId);
+        LiveSession session = findSession(sessionId);
+        requireParticipant(sessionId, memberId);
+        requireLive(session);
         LocalDateTime now = LocalDateTime.now(clock);
         int updated = sessionParticipantRepository.startPause(session.getId(), memberId, now,
                 ParticipantStatus.ACTIVE, ParticipantStatus.PAUSED);
@@ -75,10 +85,9 @@ public class PauseService {
      * {@code resume()}이 EVICTED를 ACTIVE로 되돌린다.
      */
     public PauseResumeResponse resume(Long memberId, Long sessionId) {
-        LiveSession session = findLiveSession(sessionId);
-        SessionParticipant participant = sessionParticipantRepository
-                .findBySessionIdAndMemberId(sessionId, memberId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_SESSION_PARTICIPANT));
+        LiveSession session = findSession(sessionId);
+        SessionParticipant participant = requireParticipant(sessionId, memberId);
+        requireLive(session);
         if (participant.getStatus() != ParticipantStatus.PAUSED) {
             throw new BusinessException(ErrorCode.PAUSE_NOT_ACTIVE);
         }
@@ -91,18 +100,32 @@ public class PauseService {
             warningRepository.save(Warning.fromPauseOverrun(sessionId, memberId, seq, now));
             log.info("Pause 제한 초과 경고: session={}, member={}, seq={}, 경과 {}초",
                     sessionId, memberId, seq, elapsedSeconds);
-            evictionService.evictIfWarningLimitReached(session, participant, now);
+            // 퇴출도 사람이 빠지는 경로다. 남은 인원이 최소 미만이면 그 자리에서 끝난다(D12).
+            if (evictionService.evictIfWarningLimitReached(sessionId, participant, now) != null) {
+                closingService.closeIfUnderMinimum(sessionId, now);
+            }
         }
         return PauseResumeResponse.of(participant, elapsedSeconds, overrun);
     }
 
-    private LiveSession findLiveSession(Long sessionId) {
-        LiveSession session = liveSessionRepository.findById(sessionId)
+    /**
+     * 없는 세션(404) → 비참가자(403) → 끝난 세션(409). 두 진입점이 이 순서로 검사한다(§0-3) —
+     * 세션 상태를 먼저 보면 참가자가 아닌 사람이 세션 번호를 훑어 남의 세션이 끝났는지를 알 수 있다.
+     */
+    private LiveSession findSession(Long sessionId) {
+        return liveSessionRepository.findById(sessionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.SESSION_NOT_FOUND));
+    }
+
+    private SessionParticipant requireParticipant(Long sessionId, Long memberId) {
+        return sessionParticipantRepository.findBySessionIdAndMemberId(sessionId, memberId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_SESSION_PARTICIPANT));
+    }
+
+    private void requireLive(LiveSession session) {
         if (!session.isLive()) {
             throw new BusinessException(ErrorCode.SESSION_ENDED);
         }
-        return session;
     }
 
     /**

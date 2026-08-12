@@ -73,9 +73,10 @@ public interface SessionParticipantRepository extends JpaRepository<SessionParti
                    @Param("paused") ParticipantStatus paused);
 
     /**
-     * B1의 두 번째 지급 대상 — <b>이미 끝난 세션의 미지급 완주자</b>. 조기 종료(D12)와
-     * {@code room_finished} 웹훅은 종료·완주 마킹까지만 하고 포인트를 만들지 않으므로,
-     * 이 흡수 경로가 없으면 그 완주자들이 영구 미지급으로 남는다.
+     * B1의 두 번째 지급 대상 — <b>이미 끝난 세션의 미지급 완주자</b>. 종료 경로가 셋 다
+     * 지급까지 함께 하도록 통일된 뒤로 이 조회는 안전망이다: 종료 트랜잭션이 지급을 남기지
+     * 못하고 끊긴 경우에만 행이 잡힌다. 그래도 지우지 않는 것은 그 경우의 완주자가 이 경로
+     * 없이는 영구 미지급으로 남기 때문이다.
      *
      * <p>{@code point_awarded = 0}이 미지급의 표식이 될 수 있는 것은 완주 지급액이 최소
      * 60분 세션에서도 100이라 0이 나올 수 없기 때문이다.

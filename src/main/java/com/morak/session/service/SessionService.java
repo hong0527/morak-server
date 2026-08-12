@@ -17,8 +17,10 @@ import com.morak.session.dto.response.MySessionSummaryResponse;
 import com.morak.session.dto.response.SessionDetailResponse;
 import com.morak.session.dto.response.SessionGoalResponse;
 import com.morak.session.dto.response.SessionResultResponse;
+import com.morak.session.entity.Eviction;
 import com.morak.session.entity.LiveSession;
 import com.morak.session.entity.SessionParticipant;
+import com.morak.session.repository.EvictionRepository;
 import com.morak.session.repository.LiveSessionRepository;
 import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.type.ParticipantStatus;
@@ -57,6 +59,7 @@ public class SessionService {
     private final MediaConsentRepository mediaConsentRepository;
     private final StreakDayRepository streakDayRepository;
     private final MemberGoalRepository memberGoalRepository;
+    private final EvictionRepository evictionRepository;
     private final StreakService streakService;
     private final LiveKitTokenProvider liveKitTokenProvider;
 
@@ -66,6 +69,7 @@ public class SessionService {
                           MediaConsentRepository mediaConsentRepository,
                           StreakDayRepository streakDayRepository,
                           MemberGoalRepository memberGoalRepository,
+                          EvictionRepository evictionRepository,
                           StreakService streakService,
                           LiveKitTokenProvider liveKitTokenProvider) {
         this.liveSessionRepository = liveSessionRepository;
@@ -74,6 +78,7 @@ public class SessionService {
         this.mediaConsentRepository = mediaConsentRepository;
         this.streakDayRepository = streakDayRepository;
         this.memberGoalRepository = memberGoalRepository;
+        this.evictionRepository = evictionRepository;
         this.streakService = streakService;
         this.liveKitTokenProvider = liveKitTokenProvider;
     }
@@ -83,14 +88,16 @@ public class SessionService {
         LiveSession session = findSession(sessionId);
         List<SessionParticipant> participants =
                 sessionParticipantRepository.findBySessionIdOrderByIdAsc(sessionId);
-        if (participants.stream().noneMatch(p -> p.getMemberId().equals(memberId))) {
-            throw new BusinessException(ErrorCode.NOT_SESSION_PARTICIPANT);
-        }
+        SessionParticipant me = participants.stream()
+                .filter(participant -> participant.getMemberId().equals(memberId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_SESSION_PARTICIPANT));
         List<Long> memberIds = participants.stream().map(SessionParticipant::getMemberId).toList();
         // 익명 닉네임만 꺼낸다. 실명·SNS 값은 어떤 경우에도 내려가지 않는다.
         Map<Long, String> nicknames = memberRepository.findAllById(memberIds).stream()
                 .collect(Collectors.toMap(Member::getId, Member::getNickname));
-        return SessionDetailResponse.of(session, participants, nicknames, memberId);
+        return SessionDetailResponse.of(session, participants, nicknames, memberId,
+                myEvictionId(me, sessionId, memberId));
     }
 
     /**
@@ -125,7 +132,23 @@ public class SessionService {
         boolean goalAchieved = memberGoalRepository.existsByMemberIdAndStatusAndAchievedAt(
                 memberId, GoalStatus.ACHIEVED, session.getEndedAt());
         return SessionResultResponse.of(session, participants, nicknames, me,
-                streakService.snapshotOn(memberId, completedOn), countedToday, goalAchieved);
+                streakService.snapshotOn(memberId, completedOn), countedToday, goalAchieved,
+                myEvictionId(me, sessionId, memberId));
+    }
+
+    /**
+     * 이의 신청(AP-1)에 들어갈 퇴출 번호. 퇴출된 본인에게만 값이 있다.
+     *
+     * <p>퇴출이 아닌 참가자에게는 조회조차 하지 않는다. {@code uk_eviction} 덕에 결과가
+     * 0행인 것이 확실하고, 화면 대부분은 퇴출과 무관하다.
+     */
+    private Long myEvictionId(SessionParticipant me, Long sessionId, Long memberId) {
+        if (me.getStatus() != ParticipantStatus.EVICTED) {
+            return null;
+        }
+        return evictionRepository.findBySessionIdAndMemberId(sessionId, memberId)
+                .map(Eviction::getId)
+                .orElse(null);
     }
 
     /**
@@ -136,10 +159,12 @@ public class SessionService {
      */
     public LivekitTokenResponse issueToken(Long memberId, Long sessionId) {
         LiveSession session = findSession(sessionId);
+        // 참가 자격이 세션 상태보다 먼저다(§0-3). 뒤집으면 참가자가 아닌 사람이 세션 번호를
+        // 훑어 남의 세션이 끝났는지를 알 수 있다.
+        SessionParticipant participant = findParticipant(sessionId, memberId);
         if (!session.isLive()) {
             throw new BusinessException(ErrorCode.SESSION_ENDED);
         }
-        SessionParticipant participant = findParticipant(sessionId, memberId);
         if (participant.getStatus() == ParticipantStatus.EVICTED) {
             throw new BusinessException(ErrorCode.ALREADY_EVICTED);
         }
