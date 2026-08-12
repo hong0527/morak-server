@@ -1,5 +1,9 @@
 # 운영 전용. 비밀값과 DB 접속 정보는 환경변수로만 주입한다.
 # 이 파일에 실제 값을 적지 않는다 — 공개 저장소에 커밋되기 때문이다.
+#
+# 기동에 반드시 필요한 환경변수 6종(base yml이 폴백 없이 참조한다):
+# MORAK_JWT_SECRET, MORAK_SOCIAL_HASH_PEPPER, MORAK_LIVEKIT_HOST,
+# MORAK_LIVEKIT_API_KEY, MORAK_LIVEKIT_API_SECRET, MORAK_PG_SECRET_KEY
 spring:
   datasource:
     url: ${MORAK_DB_URL}

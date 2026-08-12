@@ -38,9 +38,9 @@ public class MatchEvent {
     @Column(name = "member_id", nullable = false)
     private Long memberId;
 
-    /** 대기 취소·만료 이벤트는 소속 그룹이 없어 NULL이다. */
-    @Column(name = "group_id")
-    private Long groupId;
+    /** 성사 이벤트에만 값이 있다. 대기 취소·만료는 배정된 세션이 없어 NULL이다. */
+    @Column(name = "session_id")
+    private Long sessionId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
@@ -49,15 +49,16 @@ public class MatchEvent {
     @Column(name = "occurred_at", nullable = false)
     private LocalDateTime occurredAt;
 
-    private MatchEvent(Long memberId, Long groupId, MatchEventType type, LocalDateTime occurredAt) {
+    private MatchEvent(Long memberId, Long sessionId, MatchEventType type,
+                       LocalDateTime occurredAt) {
         this.memberId = memberId;
-        this.groupId = groupId;
+        this.sessionId = sessionId;
         this.type = type;
         this.occurredAt = occurredAt;
     }
 
-    public static MatchEvent occurred(MatchEventType type, Long memberId, Long groupId,
+    public static MatchEvent occurred(MatchEventType type, Long memberId, Long sessionId,
                                       LocalDateTime occurredAt) {
-        return new MatchEvent(memberId, groupId, type, occurredAt);
+        return new MatchEvent(memberId, sessionId, type, occurredAt);
     }
 }

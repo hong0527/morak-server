@@ -1,6 +1,5 @@
 package com.morak.match.entity;
 
-import com.morak.common.type.GoalCategory;
 import com.morak.match.type.MatchRequestStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -18,7 +17,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 /**
- * 매칭 대기 요청.
+ * 매칭 대기 요청. 매칭 조건은 {@code targetMinutes} 하나뿐이다 — 구 스키마의 분야·기간은 폐기됐다.
  *
  * <p>불변식: {@code activeMemberId}는 status가 WAITING일 때만 {@code memberId}와 같고,
  * 그 외 상태에서는 반드시 NULL이다. {@code uk_mr_active}가 이 컬럼에 걸려 있어
@@ -39,7 +38,7 @@ import lombok.NoArgsConstructor;
         indexes = {
                 @Index(
                         name = "idx_mr_queue",
-                        columnList = "status, category, daily_target_minutes, period_days, requested_at"),
+                        columnList = "status, target_minutes, requested_at"),
                 @Index(
                         name = "idx_mr_expire",
                         columnList = "status, expires_at")
@@ -55,15 +54,9 @@ public class MatchRequest {
     @Column(name = "member_id", nullable = false)
     private Long memberId;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
-    private GoalCategory category;
-
-    @Column(name = "daily_target_minutes", nullable = false)
-    private int dailyTargetMinutes;
-
-    @Column(name = "period_days", nullable = false)
-    private int periodDays;
+    /** 60 | 120 | 180 | 240. 이 값이 매칭 조건의 전부다. */
+    @Column(name = "target_minutes", nullable = false)
+    private int targetMinutes;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -76,33 +69,36 @@ public class MatchRequest {
     @Column(name = "requested_at", nullable = false)
     private LocalDateTime requestedAt;
 
+    /** 만료 "예정" 시각이라 요청 생성 시점에 미리 채운다. B2는 이 값만 보고 판정한다. */
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;
 
-    @Column(name = "matched_group_id")
-    private Long matchedGroupId;
+    /**
+     * 성사된 세션. MT-2 폴링이 MATCHED와 함께 sessionId를 돌려줘야 하는데, 이 값이 없으면
+     * 회원의 활성 세션을 역으로 뒤져야 하고 세션이 끝난 뒤에는 그 경로가 사라진다.
+     */
+    @Column(name = "matched_session_id")
+    private Long matchedSessionId;
 
-    private MatchRequest(Long memberId, GoalCategory category, int dailyTargetMinutes, int periodDays,
+    private MatchRequest(Long memberId, int targetMinutes,
                          LocalDateTime requestedAt, LocalDateTime expiresAt) {
         this.memberId = memberId;
-        this.category = category;
-        this.dailyTargetMinutes = dailyTargetMinutes;
-        this.periodDays = periodDays;
+        this.targetMinutes = targetMinutes;
         this.status = MatchRequestStatus.WAITING;
         this.activeMemberId = memberId;
         this.requestedAt = requestedAt;
         this.expiresAt = expiresAt;
     }
 
-    public static MatchRequest request(Long memberId, GoalCategory category, int dailyTargetMinutes,
-                                       int periodDays, LocalDateTime requestedAt, LocalDateTime expiresAt) {
-        return new MatchRequest(memberId, category, dailyTargetMinutes, periodDays, requestedAt, expiresAt);
+    public static MatchRequest request(Long memberId, int targetMinutes,
+                                       LocalDateTime requestedAt, LocalDateTime expiresAt) {
+        return new MatchRequest(memberId, targetMinutes, requestedAt, expiresAt);
     }
 
-    /** 매칭 성사(MT-1). 그룹 배정과 활성 해제를 함께 한다. */
-    public void matched(Long groupId) {
+    /** 매칭 성사(MT-1). 세션 배정과 활성 해제를 함께 한다. */
+    public void matched(Long sessionId) {
         this.status = MatchRequestStatus.MATCHED;
-        this.matchedGroupId = groupId;
+        this.matchedSessionId = sessionId;
         this.activeMemberId = null;
     }
 

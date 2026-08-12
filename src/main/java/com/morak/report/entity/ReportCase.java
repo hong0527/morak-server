@@ -27,6 +27,10 @@ import lombok.NoArgsConstructor;
  *
  * <p>종결된 케이스는 재오픈하지 않는다. 재검토가 필요하면 새 케이스를 만든다.
  * 재오픈을 허용하는 순간 uk_rc_open 충돌 경로가 되살아나기 때문에 reopen 메서드를 두지 않는다.
+ *
+ * <p>지연(overdue)은 저장하지 않고 조회 시점에 파생한다(미종결 AND {@code slaDueAt < now}).
+ * 저장 플래그는 그것을 세우는 배치가 밀리면 이미 기한을 넘긴 케이스가 큐에서 정상으로 보인다.
+ * {@code appeal_case}도 같은 규칙이라 두 큐의 지연 판정이 하나의 식을 쓴다.
  */
 @Entity
 @Table(
@@ -36,7 +40,7 @@ import lombok.NoArgsConstructor;
                 columnNames = {"target_type", "open_target_id"}),
         indexes = @Index(
                 name = "idx_rc_console",
-                columnList = "status, severity, overdue, sla_due_at"))
+                columnList = "status, severity, sla_due_at"))
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ReportCase {
@@ -56,9 +60,9 @@ public class ReportCase {
     @Column(name = "open_target_id")
     private Long openTargetId;
 
-    /** POST 신고는 게시판이 앱 전체 공개라 소속 그룹이 없을 수 있다. */
-    @Column(name = "group_id")
-    private Long groupId;
+    /** 신고가 발생한 세션. 관리자가 참가자·경고 로그로 맥락을 열 때 쓴다. */
+    @Column(name = "session_id")
+    private Long sessionId;
 
     /** 신고 시점의 표시명 스냅샷. 이후 닉네임이 바뀌어도 관리자가 무엇을 봤는지 남아야 한다. */
     @Column(name = "target_nickname", nullable = false, length = 30)
@@ -75,35 +79,31 @@ public class ReportCase {
     @Column(name = "sla_due_at", nullable = false)
     private LocalDateTime slaDueAt;
 
-    @Column(nullable = false)
-    private boolean overdue;
-
     @Column(name = "restriction_review", nullable = false)
     private boolean restrictionReview;
 
     @Column(name = "received_at", nullable = false)
     private LocalDateTime receivedAt;
 
-    private ReportCase(ReportTargetType targetType, Long targetId, Long groupId,
+    private ReportCase(ReportTargetType targetType, Long targetId, Long sessionId,
                        String targetNickname, ReportSeverity severity, LocalDateTime slaDueAt,
                        LocalDateTime receivedAt) {
         this.targetType = targetType;
         this.targetId = targetId;
         this.openTargetId = targetId;
-        this.groupId = groupId;
+        this.sessionId = sessionId;
         this.targetNickname = targetNickname;
         this.severity = severity;
         this.status = ReportStatus.PENDING;
         this.slaDueAt = slaDueAt;
-        this.overdue = false;
         this.restrictionReview = false;
         this.receivedAt = receivedAt;
     }
 
-    public static ReportCase open(ReportTargetType targetType, Long targetId, Long groupId,
+    public static ReportCase open(ReportTargetType targetType, Long targetId, Long sessionId,
                                   String targetNickname, ReportSeverity severity,
                                   LocalDateTime slaDueAt, LocalDateTime receivedAt) {
-        return new ReportCase(targetType, targetId, groupId, targetNickname, severity,
+        return new ReportCase(targetType, targetId, sessionId, targetNickname, severity,
                 slaDueAt, receivedAt);
     }
 
@@ -135,12 +135,12 @@ public class ReportCase {
         this.slaDueAt = newDueAt;
     }
 
-    /** B3가 SLA를 넘긴 케이스를 표시한다. 관리자 콘솔 정렬과 알림의 근거가 된다. */
-    public void markOverdue() {
-        this.overdue = true;
+    /** 저장 컬럼이 아니라 조회 시점 계산이다. 마킹 배치가 없는 이유는 클래스 주석 참조. */
+    public boolean isOverdue(LocalDateTime now) {
+        return this.status == ReportStatus.PENDING && this.slaDueAt.isBefore(now);
     }
 
-    /** B3에서 HIGH 누적이 기준을 넘었을 때 이용 제한 검토 대상으로 올린다. */
+    /** AD-3이 신고를 기각할 때 신고자를 이용 제한 검토 대상으로 올린다. */
     public void flagRestrictionReview() {
         this.restrictionReview = true;
     }

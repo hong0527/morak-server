@@ -11,6 +11,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
 import java.time.LocalDateTime;
+import java.util.Comparator;
+import java.util.List;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -84,5 +86,44 @@ public class Sanction {
     /** 만료 경계는 endsAt 시각에 제재가 풀리도록 열린 구간으로 본다. */
     public boolean isEffectiveAt(LocalDateTime now) {
         return !this.startsAt.isAfter(now) && (this.endsAt == null || this.endsAt.isAfter(now));
+    }
+
+    /**
+     * 유효 제재 목록의 대표 종류. 영구가 하나라도 섞여 있으면 영구다.
+     *
+     * <p>인터셉터(403 응답)와 AU-2(내 정보)가 같은 값을 내보내야 해서 계산을 한 곳에 둔다.
+     * 빈 목록은 "제재 없음"이지 "TEMP 제재"가 아니므로 호출부가 먼저 걸러야 한다.
+     */
+    public static SanctionType representativeType(List<Sanction> effectiveSanctions) {
+        requireNotEmpty(effectiveSanctions);
+        boolean hasPermanent = effectiveSanctions.stream()
+                .anyMatch(sanction -> sanction.getType() == SanctionType.PERMANENT);
+        return hasPermanent ? SanctionType.PERMANENT : SanctionType.TEMP;
+    }
+
+    /**
+     * 유효 제재 목록의 대표 종료 시각. 영구 제재가 하나라도 섞여 있으면 끝나지 않으므로 null,
+     * 기간형만 있으면 가장 늦게 끝나는 시각이다.
+     *
+     * <p>여기서 null은 "영구 제재라 끝이 없다"는 뜻 하나뿐이다. 빈 목록에도 null을 돌려주면
+     * 제재가 없는 회원과 영구 제재 회원이 같은 값으로 보인다 — 그래서 빈 목록은 거부한다.
+     */
+    public static LocalDateTime latestEndsAt(List<Sanction> effectiveSanctions) {
+        requireNotEmpty(effectiveSanctions);
+        boolean hasPermanent = effectiveSanctions.stream()
+                .anyMatch(sanction -> sanction.getEndsAt() == null);
+        if (hasPermanent) {
+            return null;
+        }
+        return effectiveSanctions.stream()
+                .map(Sanction::getEndsAt)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
+    }
+
+    private static void requireNotEmpty(List<Sanction> effectiveSanctions) {
+        if (effectiveSanctions.isEmpty()) {
+            throw new IllegalArgumentException("유효 제재가 없는 목록이다");
+        }
     }
 }

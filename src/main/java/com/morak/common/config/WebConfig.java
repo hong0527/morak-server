@@ -18,8 +18,9 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        // 제외 목록은 §0-2 ①의 JWT 면제 경로. 경로만으로 못 거르는 GET /api/proofs/*/media/raw는
-        // 메서드 구분이 필요해 AuthInterceptor의 예외 표에서 처리한다.
+        // 제외 목록은 §0-2 ①의 JWT 면제 경로. 웹훅 2경로(POST /api/webhooks/livekit,
+        // POST /api/webhooks/payment)는 메서드 구분이 필요해 AuthInterceptor의 예외 표에서
+        // 처리하고, 각 컨트롤러가 서명을 검증한다.
         registry.addInterceptor(authInterceptor)
                 .addPathPatterns("/api/**")
                 .excludePathPatterns("/api/auth/**", "/api/dev/**", "/h2-console/**", "/error");

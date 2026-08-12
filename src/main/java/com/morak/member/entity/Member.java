@@ -77,6 +77,18 @@ public class Member {
     @Column(nullable = false, length = 20)
     private MemberStatus status;
 
+    /** 조회용 캐시. 진실은 point_ledger의 delta 합이고, 어긋나면 원장이 옳다. */
+    @Column(name = "point_balance", nullable = false)
+    private int pointBalance;
+
+    /** 조회용 캐시. 진실은 streak_day이고 언제든 재계산할 수 있다. 판정 근거로 쓰지 않는다. */
+    @Column(name = "current_streak", nullable = false)
+    private int currentStreak;
+
+    /** 마지막 완주일. 연속 판정의 기준점이라 시각이 아니라 날짜다. */
+    @Column(name = "last_completed_on")
+    private LocalDate lastCompletedOn;
+
     @Column(name = "withdraw_requested_at")
     private LocalDateTime withdrawRequestedAt;
 
@@ -99,6 +111,8 @@ public class Member {
         this.role = MemberRole.PARTICIPANT;
         this.ageVerification = AgeVerification.REQUIRED;
         this.status = MemberStatus.ACTIVE;
+        this.pointBalance = 0;
+        this.currentStreak = 0;
         this.createdAt = now;
     }
 
@@ -108,8 +122,8 @@ public class Member {
     }
 
     /**
-     * 생년월일을 확인해 연령 확인 상태를 확정한다. 14세 미만이면 계정을 지우는 게 아니라
-     * UNDER_AGE로 남겨 전역 게이트 ⑤가 이후 API를 차단한다.
+     * 생년월일을 확인해 연령 확인 상태를 확정한다. 만 14세 미만은 여기로 오지 않는다 —
+     * 계정 자체를 만들지 않으므로 그 상태를 표현할 enum 값도 없다(★D7).
      */
     public void verifyAge(LocalDate birthDate, AgeVerification result) {
         this.birthDate = birthDate;

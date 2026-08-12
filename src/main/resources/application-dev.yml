@@ -16,7 +16,14 @@ morak:
   jwt:
     secret: morak-local-dev-secret-key-please-change-me-32b
   security:
-    media-token-secret: morak-local-media-token-secret
     social-hash-pepper: morak-local-social-hash-pepper
   dev:
     enabled: true        # 개발용 소셜 로그인(DevSocialClient) 활성화
+  # base yml이 폴백 없는 ${...}로 참조하므로 dev에도 값이 있어야 기동한다.
+  # 실서버 연동은 12단계이고, 그 전까지는 토큰 서명 형식 검증에만 쓰인다.
+  livekit:
+    host: ws://localhost:7880
+    api-key: devkey
+    api-secret: morak-local-livekit-secret-please-change-me
+  pg:
+    secret-key: morak-local-pg-test-secret

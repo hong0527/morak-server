@@ -1,6 +1,5 @@
 package com.morak.match.entity;
 
-import com.morak.common.type.GoalCategory;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -16,6 +15,9 @@ import lombok.NoArgsConstructor;
  * 회원 행은 가입 트랜잭션에서 동반 INSERT한다. 존재하지 않는 행을 FOR UPDATE로 잠그면
  * 갭 락이 없어 동시 진입한 두 트랜잭션이 모두 0행을 보고 INSERT를 시도하며, 그 경합은
  * 같은 트랜잭션 안에서 복구할 수 없다(H2 실측).
+ *
+ * <p>조건 행은 목표 시간 4종(60·120·180·240)뿐이다. 매칭 키가 시간 단일 축으로 줄면서
+ * 구 스키마의 72개(분야×시간×기간)가 4개가 됐다(D8).
  *
  * <p>키 문자열 조립은 이 클래스에만 둔다. 형식이 한 글자라도 어긋나면 서로 다른 행을
  * 잠그게 되어 잠금이 무력화된다.
@@ -38,15 +40,15 @@ public class MatchLock {
         return new MatchLock(memberKey(memberId));
     }
 
-    public static MatchLock forCondition(GoalCategory category, int dailyTargetMinutes, int periodDays) {
-        return new MatchLock(conditionKey(category, dailyTargetMinutes, periodDays));
+    public static MatchLock forCondition(int targetMinutes) {
+        return new MatchLock(conditionKey(targetMinutes));
     }
 
     public static String memberKey(Long memberId) {
         return "member:" + memberId;
     }
 
-    public static String conditionKey(GoalCategory category, int dailyTargetMinutes, int periodDays) {
-        return "match:" + category.name() + ":" + dailyTargetMinutes + ":" + periodDays;
+    public static String conditionKey(int targetMinutes) {
+        return "match:" + targetMinutes;
     }
 }
