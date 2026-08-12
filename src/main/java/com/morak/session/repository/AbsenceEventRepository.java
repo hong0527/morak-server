@@ -18,4 +18,7 @@ public interface AbsenceEventRepository extends JpaRepository<AbsenceEvent, Long
      */
     Optional<AbsenceEvent> findFirstBySessionIdAndMemberIdOrderByIdDesc(Long sessionId,
                                                                         Long memberId);
+
+    /** 탈퇴 파기(B4)가 회원의 자리비움 관측 기록을 지운다. */
+    void deleteByMemberId(Long memberId);
 }

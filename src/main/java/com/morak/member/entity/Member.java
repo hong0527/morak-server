@@ -203,6 +203,12 @@ public class Member {
         this.birthDate = null;
         this.status = MemberStatus.DELETED;
         this.deletedAt = now;
+        // Streak 캐시도 함께 비운다. 진실인 streak_day를 B4가 지우는데 캐시만 남기면 "이 사람이
+        // 이 날 완주했다"는 기록이 회원 행에 그대로 남아, 파기했다고 말한 것이 파기되지 않는다.
+        this.currentStreak = 0;
+        this.lastCompletedOn = null;
+        // point_balance는 건드리지 않는다. 원장(point_ledger)을 통째로 남기므로 0으로 덮으면
+        // "잔액 = 원장 합"이 깨진다. 잔액은 개인 기록이 아니라 남은 원장의 파생값이다.
     }
 
     public boolean isActive() {

@@ -33,4 +33,10 @@ public interface MatchBlockRepository extends JpaRepository<MatchBlock, Long> {
      * 뒤에 온 트랜잭션을 되돌린다. 차단이 한 행도 없이 끝나는 경우는 그래서 없다.
      */
     boolean existsByMemberIdAndBlockedMemberId(Long memberId, Long blockedMemberId);
+
+    /**
+     * 탈퇴 파기(B4). 차단은 방향이 있는 2행이라 양쪽을 함께 지운다 — 한 방향만 지우면
+     * 남은 행이 탈퇴한 회원을 가리킨 채 상대의 후보 집합을 계속 깎는다.
+     */
+    void deleteByMemberIdOrBlockedMemberId(Long memberId, Long blockedMemberId);
 }

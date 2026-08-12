@@ -38,8 +38,8 @@ public class DevBatchController {
     public DevBatchResponse run(@PathVariable String name) {
         DevBatch batch = batches.get(name.toUpperCase(Locale.ROOT));
         if (batch == null) {
-            // 아직 만들지 않은 배치(B1·B4)와 오타를 구분하지 않는다. 어느 쪽이든 이 서버에
-            // 그 이름의 배치는 없다.
+            // 폐지된 배치(B3)와 오타를 구분하지 않는다. 어느 쪽이든 이 서버에 그 이름의
+            // 배치는 없다.
             throw new BusinessException(ErrorCode.ENDPOINT_NOT_FOUND);
         }
         return new DevBatchResponse(batch.name(), batch.run());

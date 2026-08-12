@@ -250,7 +250,7 @@ morak:
 |---|---|---|---|---|
 | **member** | ACTIVE | 가입(AU-1) 또는 AU-5 철회 | AU-4 → WITHDRAW_PENDING | `withdraw_requested_at`, `delete_scheduled_at`(+30일), 활성 match_request CANCELLED, 진행 세션 참가자 `LEFT(WITHDRAWAL)` |
 | | WITHDRAW_PENDING | AU-4 | AU-5·재로그인 → ACTIVE / B4(유예 30일 경과) → DELETED | 철회 시 시각 컬럼 NULL / 삭제 시 익명화 |
-| | DELETED | B4 | (종점) | `provider_user_id='deleted:{id}'`, 닉네임 치환, `birth_date` NULL, media_consent 삭제, 제재 이력자면 blocked_social_hash 등재. 커머스 기록(store_order·point_charge)은 파기 예외 |
+| | DELETED | B4 | (종점) | `provider_user_id='deleted:{id}'`, 닉네임 치환, `birth_date` NULL, media_consent 삭제, 제재 이력자면 blocked_social_hash 등재. 커머스 기록(store_order·point_charge·point_ledger)은 파기 예외 |
 | **member_goal** | ACTIVE | AU-7 설정 | Streak가 `period_days` 도달 → ACHIEVED / AU-7 재설정 → CANCELLED | ACHIEVED 시 `achieved_at`, `point_ledger(GOAL_ACHIEVED)`, 뱃지 부여 (★D3) |
 | | ACHIEVED | B1 목표 달성 검사 | AU-7 재설정 → 새 ACTIVE 행 생성 | (종점) |
 | | CANCELLED | AU-7 재설정·탈퇴 | (종점) | — |
@@ -1721,7 +1721,7 @@ UPDATE session_participant
 
 **공통**: 모든 배치는 `@Scheduled` + DEV-4 수동 트리거 쌍을 가진다. 재실행이 안전해야 한다.
 
-B4의 파기 대상에서 커머스 기록(`store_order`, `point_charge`, 관련 `point_ledger`)은 제외한다. 전자상거래법상 보존 의무가 있어 개인 식별자만 익명화하고 거래 기록 자체는 남긴다(보존 기간 값은 open-decisions).
+B4의 파기 대상에서 커머스 기록(`store_order`, `point_charge`, `point_ledger` 전체)은 제외한다. 전자상거래법상 보존 의무가 있어 개인 식별자만 익명화하고 거래 기록 자체는 남긴다(보존 기간 값은 open-decisions). 원장을 거래분만 골라 남기지 않는 이유는 db-schema '파기·보존 정책'에 있다 — 일부만 지우면 남은 줄의 `balance_after`와 주문의 결제 근거가 함께 무너진다.
 
 **SLA overdue 마킹 배치(구 B3)는 폐지했다.** `overdue`는 신고 케이스·이의 모두 저장 컬럼이 아니라 조회 시점의 파생값(`status` 미종결 AND `sla_due_at < now`)이므로, 이를 주기적으로 계산해 컬럼에 써 두는 배치가 존재할 이유가 없다. 배치가 도는 사이 실제 상태와 컬럼이 어긋나는 구간도 함께 사라진다. `sla_due_at`은 접수 시점에 한 번 계산해 저장한다.
 

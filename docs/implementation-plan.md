@@ -848,11 +848,13 @@ Q5 확정 시 재실측: 신고 시 세션 처리 정책.
 B4 대상: `delete_scheduled_at < now`인 WITHDRAW_PENDING. 처리 내용은 익명화 + DELETED 전이 + 동반 3종:
 ①PERMANENT 제재 이력자만 `blocked_social_hash` 등재 ②`media_consent` 삭제 ③진행 중 세션 참가 LEFT(WITHDRAWAL).
 
+동반 삭제 대상은 이 셋이 전부가 아니다. **지우는 테이블과 남기는 테이블의 목록은 db-schema '파기·보존 정책' 표가 정본이고**(`member_agreement`·`member_goal`·`streak_day`·`match_request`·`match_block`·`match_lock`·`absence_event`·`warning` 삭제, `session_participant.goal_text`만 비움), 여기 셋은 그 표에서 다른 단계와 얽히는 항목만 따로 적은 것이다.
+
 ### 이 단계의 함정
 - **익명화는 NULL 세팅이 아니라 치환이다**: `provider_user_id='deleted:{id}'`, 닉네임 '탈퇴회원', `birth_date`만 NULL. NOT NULL 제약과 `uk_member_provider`(같은 소셜 계정 재가입) 때문에 값 치환이어야 한다.
 - **`blocked_social_hash` 등재는 PERMANENT 제재 이력자만.** TEMP까지 등재하면 일시 제재가 영구 재가입 차단으로 승격된다. 해시는 HMAC(pepper=환경변수) — pepper 없는 sha256은 역산 가능하다.
 - **커머스 기록은 파기 예외 대상이다**(전자상거래법 보존 의무). `store_order`·`point_charge`는 회원이 익명화돼도 남긴다. 보존 기간 값은 팀 확정 대기 — 우선 삭제하지 않는 것으로 진행하고 확정 시 별도 파기 배치를 검토한다.
-- **`point_ledger`도 남긴다.** 커머스 기록과 연결된 원장을 지우면 주문의 근거가 사라진다.
+- **`point_ledger`는 사유를 가리지 않고 통째로 남긴다.** 커머스 기록과 연결된 원장을 지우면 주문의 근거가 사라지고, 일부만 남기면 남은 줄의 `balance_after`가 실제 잔액과 어긋난다. 이 결정 때문에 `member.point_balance`도 0으로 덮지 않는다(db-schema '파기·보존 정책' 개정 근거).
 - **재로그인 복구(RESTORED)는 1단계 AU-1에 이미 있다.** B4가 먼저 지나갔으면 복구 불가(DELETED는 종점)라는 경계 실측이 이 단계 몫이다.
 - **세션 영상은 저장하지 않으므로**(D17) 미디어 파기 배치가 없다. 구 B5는 소멸했다.
 

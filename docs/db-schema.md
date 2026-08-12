@@ -102,6 +102,7 @@ CREATE TABLE member (
 - `current_streak`는 `streak_day`에서 재계산 가능한 파생값이다. 조회 성능용 캐시일 뿐 판정 근거가 아니다.
 - 만 14세 미만 회원 행은 존재하지 않는다. AU-3에서 미만 판정 시 계정을 삭제한다(★D7 — 구 코드의 `AgeVerification.UNDER_AGE` 유지 방식에서 변경. `Member.verifyAge()` 수정 대상).
 - B4 삭제 방식은 익명화다: `provider_user_id='deleted:{id}'`, `nickname='탈퇴회원'`, `birth_date=NULL`. 컬럼을 NULL로 비우는 게 아니다(NOT NULL 제약 + `uk_member_provider` 재가입 충돌 방지).
+- 익명화 후에도 `point_balance`는 위 불변식을 그대로 지킨다(원장을 남기므로). 반면 `current_streak`·`last_completed_on`은 진실인 `streak_day`가 함께 지워지므로 0·NULL로 비운다.
 
 ```sql
 CREATE TABLE member_agreement (
@@ -927,25 +928,31 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 
 | 테이블 | 처리 |
 |---|---|
-| member | 익명화 — `provider_user_id='deleted:{id}'`, `nickname='탈퇴회원'`, `sns_nickname`·`sns_profile_image_url`·`birth_date`=NULL, `status='DELETED'`, `deleted_at`=now |
+| member | 익명화 — `provider_user_id='deleted:{id}'`, `nickname='탈퇴회원'`, `sns_nickname`·`sns_profile_image_url`·`birth_date`=NULL, `status='DELETED'`, `deleted_at`=now, `current_streak`=0·`last_completed_on`=NULL |
 | media_consent | 행 삭제 |
 | member_agreement | 행 삭제 |
 | member_goal | 행 삭제 |
 | streak_day | 행 삭제 |
 | match_request | 활성 요청 종료 후 행 삭제 |
 | match_block | 행 삭제(양방향 모두) |
+| match_lock | 회원 잠금 행(`member:{id}`) 삭제. 잠글 대상이 없어진 행이라 남기면 고아가 된다 |
 | session_participant | `goal_text`=NULL로 비운다. 행 자체는 다른 참가자의 세션 이력 정합성 때문에 남긴다 |
 | absence_event, warning | 행 삭제 |
 
+`current_streak`·`last_completed_on`을 함께 비우는 것은 익명화 규칙의 연장이다. 이 둘의 진실인 `streak_day`를 지우면서 캐시만 남기면 "이 사람이 이 날 완주했다"는 기록이 회원 행에 그대로 남아, 파기했다고 말한 것이 파기되지 않는다.
+
 **파기 예외 — 커머스 기록**
 
-`store_order`, `point_charge`, 그리고 `point_ledger` 중 거래분(`reason IN ('CHARGE','ORDER_SPEND','ORDER_CANCEL')`)은 전자상거래법상 보존 대상이라 파기하지 않는다. 대신 다음을 지킨다.
+`store_order`, `point_charge`, `point_ledger`는 전자상거래법상 보존 대상이라 파기하지 않는다. 대신 다음을 지킨다.
 
 - 행은 남기되 `member_id`가 가리키는 `member` 행이 이미 익명화되어 있으므로 개인 식별로 이어지지 않는다.
 - 보존 기간이 지난 뒤에는 `member_id`를 익명 식별자로 치환하거나 행을 파기한다. **구체적 보존 연한은 `docs/open-decisions.md`에서 확정한다**(법무 확인 대기).
-- 거래분이 아닌 원장(`WELCOME`, `SESSION_COMPLETE`, `GOAL_ACHIEVED`, `EVICTION_PENALTY`, `APPEAL_REFUND`)은 보존 근거가 없으므로 B4가 함께 삭제한다. 이때 남는 거래분과 `member.point_balance`가 어긋나는데, 탈퇴 회원의 잔액은 의미가 없으므로 0으로 고정한다.
+- **원장은 거래분만 골라 남기지 않고 통째로 남긴다.** 거래분(`CHARGE`·`ORDER_SPEND`·`ORDER_CANCEL`)만 남기면 `balance_after`가 실제 잔액과 어긋나는 줄이 생기고, 주문의 근거가 된 적립(`SESSION_COMPLETE` 등)이 사라져 보존한 주문 기록만으로는 무엇으로 결제했는지 읽을 수 없다. 개인 식별자는 이미 회원 행에서 지웠으므로 남은 원장은 금액과 시각뿐이다.
+- 같은 이유로 `member.point_balance`는 0으로 덮지 않는다. 잔액은 개인 기록이 아니라 남은 원장의 합이고, 덮으면 "잔액 = 원장 합" 불변식이 탈퇴 회원에서만 깨진다.
 
 `eviction`·`appeal_case`·`report_case`·`report`·`report_history`·`sanction`은 분쟁 대응 근거라 유지한다. 신고 화면은 `report_case.target_nickname` 스냅샷으로 읽는다.
+
+`match_event`도 유지한다. 집계 전용 append-only 로그라 UPDATE·DELETE 경로 자체가 없고(위 불변식), 남는 값이 회원 번호와 시각·유형뿐이라 익명화된 회원 행 너머로 개인을 가리키지 않는다. 여기서 지우면 매칭 완료율의 과거 지표가 탈퇴 건수만큼 조용히 달라진다.
 
 `blocked_social_hash`는 탈퇴 시 **등재하는** 쪽이다(PERMANENT 이력자 한정). 파기 대상이 아니다.
 

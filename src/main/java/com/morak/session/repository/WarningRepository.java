@@ -16,4 +16,11 @@ public interface WarningRepository extends JpaRepository<Warning, Long> {
      * 오래 쓴 계정의 전량을 상세 응답에 담을 이유가 없다.
      */
     List<Warning> findTop20ByMemberIdOrderByIdDesc(Long memberId);
+
+    /**
+     * 탈퇴 파기(B4)가 회원의 경고 이력을 지운다. 경고는 세션 스코프라(D11) 계정을 떠나면
+     * 남을 근거가 없다 — 퇴출과 그 이의({@code eviction}·{@code appeal_case})는 분쟁 대응
+     * 근거라 남기는 것과 기준이 갈린다.
+     */
+    void deleteByMemberId(Long memberId);
 }

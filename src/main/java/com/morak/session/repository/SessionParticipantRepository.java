@@ -95,6 +95,12 @@ public interface SessionParticipantRepository extends JpaRepository<SessionParti
     Page<SessionParticipant> findByMemberId(Long memberId, Pageable pageable);
 
     /**
+     * 탈퇴 파기(B4)가 회원의 참가 행 전부를 훑어 '오늘 할 일'을 비운다. 행 자체는 남기므로
+     * 페이지가 아니라 전량이어야 한다 — 한 페이지만 비우면 나머지 세션에 본인이 쓴 글이 남는다.
+     */
+    List<SessionParticipant> findByMemberId(Long memberId);
+
+    /**
      * AD-2가 신고 대상자의 최근 참여를 훑는다. 관리자 상세는 페이지가 아니라 한 화면이라
      * 개수를 여기서 자른다 — 판단에 쓰는 것은 최근 이력이다.
      */

@@ -28,4 +28,7 @@ public interface MemberGoalRepository extends JpaRepository<MemberGoal, Long> {
      */
     boolean existsByMemberIdAndStatusAndAchievedAt(Long memberId, GoalStatus status,
                                                    LocalDateTime achievedAt);
+
+    /** 탈퇴 파기(B4)가 회원의 목표 이력을 함께 지운다. */
+    void deleteByMemberId(Long memberId);
 }

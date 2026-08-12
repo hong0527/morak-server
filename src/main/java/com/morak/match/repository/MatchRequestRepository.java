@@ -83,4 +83,10 @@ public interface MatchRequestRepository extends JpaRepository<MatchRequest, Long
     int releaseWaiting(@Param("ids") Collection<Long> ids,
                        @Param("terminal") MatchRequestStatus terminal,
                        @Param("waiting") MatchRequestStatus waiting);
+
+    /**
+     * 탈퇴 파기(B4)가 회원의 매칭 요청 이력을 지운다. 활성 요청은 AU-4가 이미 종료시킨 뒤라
+     * 여기서 지우는 것은 종결된 행뿐이다.
+     */
+    void deleteByMemberId(Long memberId);
 }
