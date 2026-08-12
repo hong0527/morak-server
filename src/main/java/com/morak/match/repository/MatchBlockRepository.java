@@ -24,4 +24,13 @@ public interface MatchBlockRepository extends JpaRepository<MatchBlock, Long> {
                AND mb.blockedMemberId IN :memberIds
             """)
     List<MatchBlock> findWithin(@Param("memberIds") Collection<Long> memberIds);
+
+    /**
+     * RP-1이 등재 전에 확인한다. 종결된 케이스의 상대를 다시 신고하는 경로가 있어
+     * (재검토는 새 케이스다) 같은 쌍이 두 번 들어올 수 있기 때문이다.
+     *
+     * <p>이것은 편의 검사이지 방어선이 아니다 — 동시 신고 두 건이 함께 통과하면 uk_mb가
+     * 뒤에 온 트랜잭션을 되돌린다. 차단이 한 행도 없이 끝나는 경우는 그래서 없다.
+     */
+    boolean existsByMemberIdAndBlockedMemberId(Long memberId, Long blockedMemberId);
 }

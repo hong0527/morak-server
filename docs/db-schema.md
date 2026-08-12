@@ -722,7 +722,7 @@ CREATE TABLE report_case (
 | target_type | 구 스키마의 POST가 빠지고 SESSION이 들어왔다 |
 | open_target_id | 미처리 동안만 target_id를 담는 그림자 컬럼. UNIQUE의 재료 |
 | session_id | 구 스키마 group_id를 대체. 관리자가 맥락(참가자·경고 로그)을 열 때 쓴다 |
-| target_nickname | 신고 시점 스냅샷. 익명화 이후에도 케이스를 읽을 수 있게 한다 |
+| target_nickname | 신고 시점 스냅샷. 익명화 이후에도 케이스를 읽을 수 있게 한다. SESSION 신고는 대상이 개인이 아니라 표시명이 없으므로 `"세션 {id}"`를 넣는다 |
 | sla_due_at | 처리 기한. 큐 정렬 키이자 overdue 판정 기준. 저장 플래그는 두지 않는다 |
 | restriction_review | AD-3이 신고를 기각할 때 신고자에게 세우는 검토 플래그. 배치가 아니라 관리자 처리 경로가 쓴다. **v1에는 조회 경로가 없다** — 후속 제재 검토는 DB 직접 조회로 한다 |
 
@@ -783,6 +783,7 @@ CREATE TABLE report_history (
 **불변식**
 - append-only다. 기록된 처리 이력은 수정·삭제하지 않는다.
 - `report_case.status`가 바뀔 때마다 이 테이블에 행이 하나 늘어난다. 이력 없는 상태 변경 경로를 만들지 않는다.
+- **접수(RP-1)는 여기 행을 만들지 않는다.** 케이스 생성은 상태 변경이 아니고, `admin_id`가 NOT NULL인데 접수 시점에는 처리한 관리자가 없다. 그래서 미처리 케이스의 AD-2 `history`는 빈 배열이다.
 
 ```sql
 CREATE TABLE sanction (

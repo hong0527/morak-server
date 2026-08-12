@@ -89,6 +89,12 @@ public interface SessionParticipantRepository extends JpaRepository<SessionParti
     Page<SessionParticipant> findByMemberId(Long memberId, Pageable pageable);
 
     /**
+     * AD-2가 신고 대상자의 최근 참여를 훑는다. 관리자 상세는 페이지가 아니라 한 화면이라
+     * 개수를 여기서 자른다 — 판단에 쓰는 것은 최근 이력이다.
+     */
+    List<SessionParticipant> findTop20ByMemberIdOrderByIdDesc(Long memberId);
+
+    /**
      * SS-9 세션 상태 필터. {@code status IS NULL}을 한 쿼리에 섞지 않고 메서드를 나눈 이유는
      * 파라미터가 null인 enum 비교가 드라이버마다 다르게 풀려서다 — 조건이 조용히 빠지면
      * 필터가 걸린 줄 알고 전체를 받는다.

@@ -1819,10 +1819,13 @@ components:
           format: int64
           description: 신고 식별자는 전역에서 `caseId`로 통일합니다
         severity:
-          $ref: '#/components/schemas/ReportSeverity'
+          allOf:
+          - $ref: '#/components/schemas/ReportSeverity'
+          description: 이번 신고 사유의 등급이 아니라 병합 후 케이스의 등급입니다
         receivedAt:
           type: string
           format: date-time
+          description: 이번 신고의 접수 시각입니다(병합된 케이스의 접수 시각이 아닙니다)
         blockedMemberId:
           type: integer
           format: int64
@@ -1853,9 +1856,11 @@ components:
         targetNickname:
           type: string
           nullable: true
-          description: 접수 시점의 대상 표시명 스냅샷
+          description: 접수 시점의 대상 표시명 스냅샷. SESSION 신고는 `"세션 {id}"`입니다
         reasonCode:
-          $ref: '#/components/schemas/ReportReasonCode'
+          allOf:
+          - $ref: '#/components/schemas/ReportReasonCode'
+          description: 케이스를 연 첫 신고의 사유입니다. report_case에는 사유 컬럼이 없습니다
         severity:
           $ref: '#/components/schemas/ReportSeverity'
         status:
@@ -2033,6 +2038,7 @@ components:
             $ref: '#/components/schemas/ReportTargetWarning'
         history:
           type: array
+          description: AD-3 처리 이력만 담습니다. 접수(RP-1)는 report_history에 행을 만들지 않으므로 미처리 케이스는 빈 배열입니다
           items:
             $ref: '#/components/schemas/ReportHistoryItem'
       example:
@@ -2061,11 +2067,7 @@ components:
         - sessionId: 5490
           seq: 1
           createdAt: '2026-08-11T20:14:00+09:00'
-        history:
-        - adminId: 7
-          status: PENDING
-          reviewNote: null
-          processedAt: '2026-08-12T10:12:00+09:00'
+        history: []
     SanctionInput:
       type: object
       description: '`type=PERMANENT`면 `days`를 받지 않습니다'
@@ -3983,7 +3985,8 @@ paths:
       operationId: getAdminReports
       description: "운영자 처리 큐입니다.\n\n- **`overdue`는 저장 컬럼이 아니라 조회 시점의 파생값입니다** — 처리\
         \ 대기 상태이면서 SLA 기한이 지난 케이스.\n  `overdue=true` 필터도 같은 조건을 붙이는 것이며 마킹 배치가 없으므로\
-        \ 조회 시각이 곧 판정 시각입니다.\n- SLA는 고위험 24시간, 일반 72시간입니다.\n"
+        \ 조회 시각이 곧 판정 시각입니다.\n- SLA는 고위험 24시간, 일반 72시간입니다.\n- 정렬은\
+        \ `slaDueAt` 오름차순(동률은 `caseId` 오름차순)입니다.\n"
       parameters:
       - name: status
         in: query

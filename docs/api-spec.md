@@ -1420,12 +1420,12 @@ UPDATE session_participant
 
 절차
 
-1. 자격: 요청자와 대상이 같은 세션 참가 이력을 가져야 한다. 아니면 403 `NOT_SESSION_PARTICIPANT`. 대상 회원·세션이 없으면 404 `TARGET_NOT_FOUND`
+1. 자격: 요청자와 대상이 같은 세션 참가 이력을 가져야 한다. 아니면 403 `NOT_SESSION_PARTICIPANT`. 대상 회원·세션이 없으면 404 `TARGET_NOT_FOUND`. 자기 자신은 신고할 수 없다 — 400 `VALIDATION_FAILED`
 2. 케이스 병합: 동일 `(target_type, target_id)`의 `PENDING` 케이스가 있으면 신고자만 추가하고, 없으면 새 케이스를 만든다. 같은 케이스에 이미 신고했으면 409 `DUPLICATE_REPORT`
-   - `target_nickname`: 대상 표시명 스냅샷
+   - `target_nickname`: 대상 표시명 스냅샷. `targetType=SESSION`은 대상이 개인이 아니라 표시명이 없으므로 `"세션 {sessionId}"`를 스냅샷으로 넣는다(컬럼이 NOT NULL이고 AD-1 목록이 이 값을 읽는다)
    - `severity`: `SEXUAL_CONTENT`·`VIOLENT_THREAT`·`INAPPROPRIATE_SCREEN` → `HIGH`, `AD_SPAM`·`ETC` → `NORMAL`
    - `sla_due_at` = 접수 시각 + `report.sla-hours.{high|normal}`
-   - 병합 시 더 높은 severity가 오면 케이스를 상향하고 `sla_due_at`을 재계산한다
+   - 병합 시 더 높은 severity가 오면 케이스를 상향하고 `sla_due_at`을 재계산한다. **재계산의 기준 시각은 케이스 접수 시각이지 합류 시각이 아니다** — 합류 시각으로 잡으면 신고가 들어올 때마다 기한이 뒤로 밀려 오래된 케이스일수록 늦게 처리된다
 3. **재매칭 차단**: `match_block`에 양방향 2행 INSERT (`(신고자, 대상)`, `(대상, 신고자)`, `source=REPORT`). UNIQUE(member_id, blocked_member_id)로 중복 신고 시에도 2행을 넘지 않는다. 이 차단은 영구이며 해제 API가 없다
 4. **아무도 세션에서 나가지 않는다** (★D6 — 잠정, 팀 확인 대기, open-decisions Q5). 신고자도 피신고자도 세션에 남는다. 상호 비노출(해당 참가자 타일 가리기)은 클라이언트가 처리한다
    - 구 v1.0의 "신고자 즉시 퇴장(REPORT_EXIT)"은 폐기했다. 라이브 세션은 시간 단위이고 완주 판정이 세션 종료 시각 기준이므로, 신고했다는 이유로 나가면 그 세션 완주를 잃는다
@@ -1445,7 +1445,9 @@ UPDATE session_participant
 
 `targetType=SESSION`이면 `"blockedMemberId": null`(차단 대상 개인이 특정되지 않는다).
 
-발생 에러: 409 `DUPLICATE_REPORT` / 404 `TARGET_NOT_FOUND` / 403 `NOT_SESSION_PARTICIPANT` / 400 `VALIDATION_FAILED`
+`severity`는 이번 신고 사유의 등급이 아니라 **병합 후 케이스의 등급**이다. NORMAL 사유로 합류해도 케이스가 HIGH면 HIGH가 나간다 — 클라이언트가 보는 것은 접수된 신고의 처리 우선순위다. `receivedAt`은 반대로 **이번 신고의 접수 시각**이다(케이스 접수 시각이 아니다).
+
+발생 에러: 409 `DUPLICATE_REPORT` / 404 `TARGET_NOT_FOUND` / 403 `NOT_SESSION_PARTICIPANT` / 400 `VALIDATION_FAILED`(자기 자신 신고, `targetType`별 필드 위반, `detail` 500자 초과)
 
 게이트: ② ✓ · ④ ✓ · ⑤ **미적용**(안전 도구는 막지 않는다)
 
@@ -1468,7 +1470,13 @@ UPDATE session_participant
 }
 ```
 
-**`overdue`는 저장 컬럼이 아니라 조회 시점의 파생값이다** — `status = PENDING AND sla_due_at < now`. `overdue=true` 필터도 같은 조건을 WHERE 절에 붙이는 것이며, 별도 플래그 컬럼을 읽지 않는다. `(status, sla_due_at)` 인덱스로 처리한다. 마킹 배치가 없으므로 조회 시각이 곧 판정 시각이고, 배치 주기만큼 실제와 어긋나는 구간이 존재하지 않는다.
+**`overdue`는 저장 컬럼이 아니라 조회 시점의 파생값이다** — `status = PENDING AND sla_due_at < now`. `overdue=true` 필터도 같은 조건을 WHERE 절에 붙이는 것이며, 별도 플래그 컬럼을 읽지 않는다. `(status, sla_due_at)` 인덱스로 처리한다. 마킹 배치가 없으므로 조회 시각이 곧 판정 시각이고, 배치 주기만큼 실제와 어긋나는 구간이 존재하지 않는다. `overdue=false`는 그 식의 부정이므로 종결된 케이스도 포함한다.
+
+정렬은 `sla_due_at` 오름차순(동률은 `caseId` 오름차순)이다 — 기한이 임박한 케이스가 위로 온다.
+
+`reasonCode`는 `report_case`의 컬럼이 아니다. 사유는 개별 신고에만 있고 한 케이스에 여러 사유가 섞이므로, **케이스를 연 첫 신고의 사유**를 대표로 내보낸다. 병합 과정에서 `severity`가 상향되면 대표 사유와 등급이 어긋나 보일 수 있는데 그때 옳은 것은 등급이다.
+
+`q`는 `targetNickname` 부분 일치다.
 
 발생 에러: 403 `FORBIDDEN_ROLE`
 
@@ -1499,13 +1507,17 @@ UPDATE session_participant
   "targetWarnings": [
     {"sessionId": 5490, "seq": 1, "createdAt": "2026-08-11T20:14:00+09:00"}
   ],
-  "history": [
-    {"adminId": 7, "status": "PENDING", "reviewNote": null, "processedAt": "2026-08-12T10:12:00+09:00"}
-  ]
+  "history": []
 }
 ```
 
 `reporters[].detail`은 신고자 신원을 노출하지 않는다. 세션 영상은 저장하지 않으므로 열람 대상이 없다 — 판단 근거는 세션 이력·경고 로그·신고 사유다.
+
+`history`는 **AD-3 처리 이력만** 담는다. 접수(RP-1)는 `report_history`에 행을 만들지 않으므로 미처리 케이스는 빈 배열이다 — `report_history.admin_id`가 NOT NULL인데 접수 시점에는 처리한 관리자가 없고, 상태가 바뀐 것도 아니라 남길 이력이 없다.
+
+`targetType=SESSION` 케이스는 대상자가 특정되지 않아 `target.memberId`가 null이고 `targetSessions`·`targetWarnings`가 빈 배열이다. 그 케이스의 판단 근거는 `reporters`뿐이다.
+
+`targetSessions`·`targetWarnings`는 최근 20건까지다(상세는 페이지가 아니라 한 화면이다).
 
 발생 에러: 404 `REPORT_NOT_FOUND` / 403 `FORBIDDEN_ROLE`
 
@@ -1521,7 +1533,8 @@ UPDATE session_participant
 
 - `PENDING`만 변경 가능하다. 그 외 409 `ALREADY_PROCESSED`. **재오픈 불가**(재검토는 새 케이스로 만든다)
 - `status=REJECTED`(기각) 확정 시 신고자에게 `restriction_review` 플래그를 세운다. 반복 허위 신고자를 제재 검토 대상으로 남기기 위한 장치다. **이것이 `restriction_review`를 세우는 유일한 경로다** — SLA 초과를 근거로 자동 마킹하지 않는다. 처리가 늦은 것은 운영 측 사정이지 신고자의 잘못이 아니며, 지연의 가시성은 AD-1의 `overdue` 필터가 담당한다
-- `status=SANCTIONED`면 `sanction` 필수. 제재 적용은 AD-4와 동일한 단일 서비스 메서드를 호출해 한 트랜잭션에서 처리한다
+- `status=SANCTIONED`면 `sanction` 필수. 제재 적용은 AD-4와 동일한 단일 서비스 메서드를 호출해 한 트랜잭션에서 처리한다. `targetType=SESSION` 케이스는 제재 대상 개인이 없으므로 `SANCTIONED`로 확정할 수 없다 — 400 `VALIDATION_FAILED`
+- `status`에 `PENDING`을 보내는 것은 상태를 되돌리는 요청이라 400 `VALIDATION_FAILED`다. `SANCTIONED`가 아닌데 `sanction`을 함께 보내는 것도 같다
 - 종결 시 `open_target_id=NULL`
 
 응답 200
@@ -1544,7 +1557,7 @@ UPDATE session_participant
 {"type": "TEMP", "days": 7, "caseId": 1204}
 ```
 
-`type=PERMANENT`면 `days`를 받지 않는다(`ends_at=NULL`).
+`type=PERMANENT`면 `days`를 받지 않는다(`ends_at=NULL`). `TEMP`는 `days`가 필수이고 1~3650이다. `caseId`는 생략 가능하며(단독 제재) 보낼 경우 실재하는 케이스여야 한다.
 
 응답 201
 
@@ -1558,7 +1571,9 @@ UPDATE session_participant
 2. 진행 중 `session_participant` → `LEFT`, `left_reason=SANCTION` + LiveKit `RemoveParticipant`
 3. 활성 `WAITING` 매칭 요청 → `CANCELLED` + `active_member_id=NULL`
 
-발생 에러: 400 `VALIDATION_FAILED` / 403 `FORBIDDEN_ROLE`
+발생 에러: 400 `VALIDATION_FAILED`(`type`·`days` 조합 위반, 없는 `memberId`, 없는 `caseId`) / 403 `FORBIDDEN_ROLE`
+
+**없는 회원·없는 케이스도 404가 아니라 400이다.** 이 API의 자원은 새로 만드는 제재이지 경로에 적힌 회원이 아니고, 관리자 콘솔이 회원 번호를 훑어 존재 여부를 알아내는 경로를 만들지 않는다.
 
 게이트: ③ ADMIN · ② ✓
 
