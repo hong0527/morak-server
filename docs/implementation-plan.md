@@ -897,17 +897,55 @@ B4 대상: `delete_scheduled_at < now`인 WITHDRAW_PENDING. 처리 내용은 익
 - **MySQL `DECIMAL` 반올림·`utf8mb4` 인덱스 상한(191)은 db-schema.md에 반영돼 있다** — ddl-auto가 아니라 스크립트를 쓰는 이유다.
 - **H2와 MySQL의 잠금 구현이 다르다.** 2단계 동시성 게이트를 반드시 다시 돌린다.
 - 카카오 검증 실패는 401 `INVALID_SOCIAL_TOKEN` 그대로 — `DevSocialClient`가 빈 코드로 이 경로를 재현하게 만들어 둔 것이 여기서 회귀 테스트가 된다.
+- **지금 운영 프로필은 뜨지 않는다.** `SocialClient`·`PgClient`의 구현이 `DevSocialClient`·`DevPgClient`뿐이고 둘 다 `@Profile("dev")`라, prod에서는 `AuthService`가 `No qualifying bean of type 'SocialClient'`로 죽는다(11단계 시점 실측). 작업 순서 1(`KakaoSocialClient`)과 PG 실구현이 들어와야 비로소 기동 자체가 가능하다 — 위 안전장치 실측은 이 두 자리에 임시 스텁을 끼워 측정한 것이고, 그 스텁은 저장소에 없다.
+- **MySQL 드라이버 의존성이 `build.gradle`에 없다.** `runtimeOnly 'com.mysql:mysql-connector-j'`를 넣기 전에는 `MORAK_DB_URL`을 MySQL로 바꿔도 드라이버를 못 찾는다. H2는 `runtimeOnly`로 들어가 있어 개발에서는 드러나지 않는다.
 
 ### 완료 게이트
 1. 카카오 실계정 e2e: 로그인 → 목표 설정 → 매칭 → 세션 입장 → 완주 → 포인트 1회전
 2. 실기기 2대 이상으로 LiveKit 세션 입장·자리비움 경고·Pause 실측
-3. 운영 프로필 기동: 환경변수 미설정 → 기동 실패 실측 / 설정 후 기동 → `/api/dev/clock`·`/api/dev/batches/B1`·`/api/dev/sessions/seed` 각각 404
+3. 운영 프로필 기동: 환경변수 미설정 → 기동 실패 실측 / 설정 후 기동 → `/api/dev/clock`·`/api/dev/batches/B1`·`/api/dev/sessions/seed` 각각 404 — **아래 실측표로 통과**(단, 실구현이 아닌 스텁 위에서 측정했으므로 `KakaoSocialClient` 투입 후 1회 재확인)
 4. MySQL 6스레드 동시 매칭 → 정확 6인(2단계 게이트 재실행)
 5. 전 배치(B1·B2·B4) MySQL에서 1회씩 트리거 → 멱등 확인
+6. MySQL 스키마 생성 후 테이블 24·UNIQUE 17을 이름으로 대조 — H2 실측치와 같은지 확인한다. 다르면 그 자리가 곧 개발/운영이 갈리는 지점이다
 
 ### 강의 포인트
 1. **개발/운영 환경 차이** — H2 통과가 MySQL 통과를 보장하지 않는 이유(잠금·격리 수준 구현 차이).
 2. **인터페이스를 만들어 둔 자리가 회수되는 순간.** `SocialClient`가 왜 CLAUDE.md §4-1의 "구현이 실제로 2개인 경우"에 해당하는지가 여기서 증명된다.
+3. **폴백을 두지 않은 값만 기동을 막는다.** `@Value("${...}")`는 값이 없으면 컨텍스트가 죽지만, `@ConfigurationProperties`로 바인딩되는 `spring.datasource.*`는 미해석 플레이스홀더를 문자열 그대로 통과시킨다. 같은 `${...}` 문법인데 실패 시점과 메시지가 다르다 — 아래 실측표가 그 차이다.
+4. **`ddl-auto=validate`가 지켜 주지 않는 것.** 컬럼 유무는 잡지만 UNIQUE 제약과 인덱스는 보지 않는다. 멱등과 중복 지급 방어를 UNIQUE에 걸어 둔 설계에서는, validate 통과가 곧 안전이 아니다.
+
+### 운영 프로필 안전장치 실측 (2026-08-13, 로컬)
+
+운영 MySQL이 아직 없어 **파일 H2를 운영 데이터소스로 가장해** 측정했다. 환경변수 해석·프로필별 빈 등록·404 응답은 DB 종류와 무관하므로 그대로 유효하다. 반면 마지막 두 줄(`ddl-auto=validate` 동작)과 스키마 수치는 H2 기준이라 MySQL 전환 때 다시 확인해야 한다.
+
+| 확인 | 결과 |
+| --- | --- |
+| 환경변수 6종 각각을 하나씩 제거 후 기동 | 6종 모두 기동 실패. `Could not resolve placeholder '<이름>'` — 폴백이 없음이 실측으로 확인됐다 |
+| 6종 전부 채우고 기동 | 정상 기동 |
+| `POST /api/dev/clock`·`GET /api/dev/clock` | 404 `ENDPOINT_NOT_FOUND` |
+| `POST /api/dev/batches/B1`·`B2`·`B4` | 각각 404 `ENDPOINT_NOT_FOUND` |
+| `POST /api/dev/sessions/seed` | 404 `ENDPOINT_NOT_FOUND` |
+| `GET /h2-console`·`/h2-console/` | 404. 콘솔이 매핑 자체를 갖지 않는다 |
+| 404 응답 본문 | 전부 우리 규격 — `{"error":{"code":"ENDPOINT_NOT_FOUND","message":"존재하지 않는 경로입니다.","details":{}}}` |
+| 대조: `GET /api/members/me` | 401 `UNAUTHORIZED`. 전 경로가 404인 게 아니라 dev 경로만 사라진 것이다 |
+| `ddl-auto=validate` + 컬럼 1개 제거 | 기동 실패. `Schema validation: missing column [session_id] in table [streak_day]` |
+| `ddl-auto=validate` + `uk_streak_day` 제거 | **정상 기동.** validate는 UNIQUE 제약을 보지 않는다 |
+
+스키마 실측(H2, `ddl-auto=update` 생성): 테이블 24 · PK 24 · UNIQUE 17 · **FK 0** · 인덱스 항목 57. DEFAULT 절이 붙은 컬럼 0개, enum 컬럼은 네이티브 `ENUM`. `db-schema.md` 개발 주의 절의 서술과 일치한다.
+
+`MORAK_DB_URL`·`MORAK_DB_USERNAME`·`MORAK_DB_PASSWORD`도 없으면 기동은 실패하지만 **원인 메시지가 다르다** — 각각 `'url' must start with "jdbc"`, `Wrong user name or password`다. 미해석 플레이스홀더가 문자열로 흘러 들어가 뒤늦게 터지기 때문이다. 배포 중 이 메시지를 보면 DB 문제가 아니라 환경변수 누락을 먼저 의심한다.
+
+### 배포 전 확인표
+
+1. **환경변수 6종**을 배포 환경에 등록했는가 — `MORAK_JWT_SECRET`(32자 이상) · `MORAK_SOCIAL_HASH_PEPPER` · `MORAK_LIVEKIT_HOST` · `MORAK_LIVEKIT_API_KEY` · `MORAK_LIVEKIT_API_SECRET` · `MORAK_PG_SECRET_KEY`. DB 3종(`MORAK_DB_URL`·`MORAK_DB_USERNAME`·`MORAK_DB_PASSWORD`)까지 합쳐 9종이다
+2. **`MORAK_SOCIAL_HASH_PEPPER`는 한 번 정하면 바꿀 수 없다.** `blocked_social_hash`가 이 pepper로 HMAC을 걸어 저장돼 있어, 값을 바꾸면 기존 차단 해시가 전부 매칭되지 않는다 — 재가입 차단이 조용히 풀린다. 교체하려면 원본 소셜 ID가 필요한데 그건 파기 대상이라 남아 있지 않다
+3. **LiveKit 운영 키 발급** + 웹훅 URL 등록. 웹훅은 인증 제외 경로(`POST /api/webhooks/livekit`)이므로 서명 검증이 유일한 방어선이다
+4. **PG 키**: 토스 테스트 유지인지 운영 전환인지 확정. 운영 전환 시 웹훅 서명 규약이 우리가 임시로 정한 것과 달라지므로 `PaymentWebhookService`와 `api-spec.md` PY-3 절을 함께 고친다
+5. **MySQL 스키마는 `db-schema.md`의 DDL 스크립트로 만든다**(`ddl-auto=update` 금지). 생성 후 UNIQUE 17개를 이름으로 직접 확인한다 — validate는 이걸 잡아 주지 않는다. 특히 `uk_streak_day`(B1 멱등) · `uk_pl_dedup`(중복 지급) · `uk_pc_tid`(충전 중복) · `uk_mr_active`(대기 1건)
+6. **FK를 실제로 걸지 결정한다.** 개발 스키마에는 0개이고 참조 무결성은 애플리케이션이 지킨다. 운영에 거는 쪽을 택하면 11단계 파기 배치의 삭제 순서가 FK 순서에 묶인다
+7. **`RemoveParticipant` 미구현 2곳**: `EvictionService`(TODO 주석 있음)와 `SessionExitService`의 LEFT 경로(주석 없음). 서버는 상태만 바꾸고 LiveKit 방에서 실제로 내보내지 않는다 — 퇴출된 참가자의 미디어가 계속 흐른다
+8. **커머스 데이터 보존 연한을 확정한다.** 11단계 파기 배치가 이 값을 기준으로 지운다. 전자상거래법 기준을 팀이 확인해 넣는다
+9. `SPRING_PROFILES_ACTIVE=prod`가 실제로 적용됐는지 기동 로그로 확인 — 프로필이 빠지면 base의 `default: dev`가 먹어 dev로 뜬다
 
 ---
 
