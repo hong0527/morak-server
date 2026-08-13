@@ -2,7 +2,7 @@ package com.morak.common.error;
 
 import java.util.Map;
 
-// 에러 공통 포맷: {"error":{"code","message","details"}} (API명세서 v0.3 §0)
+// 에러 공통 포맷: {"error":{"code","message","details"}} (API명세서 §0-1)
 public record ErrorResponse(ErrorBody error) {
 
     public record ErrorBody(String code, String message, Map<String, Object> details) {
