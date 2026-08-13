@@ -40,6 +40,18 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Member {
 
+    /**
+     * 소셜 식별자 컬럼 길이. 191은 utf8mb4 인덱스 키 길이 상한이다.
+     *
+     * <p>public인 이유는 가입 경로(AuthService)가 이 길이를 넘는 식별자를 거절해야 하기
+     * 때문이다 — 식별자는 닉네임과 달리 잘라 저장하면 앞부분이 같은 다른 계정과 한 행으로
+     * 합쳐져 남의 계정으로 로그인된다.
+     */
+    public static final int PROVIDER_USER_ID_MAX_LENGTH = 191;
+
+    private static final int SNS_NICKNAME_MAX_LENGTH = 50;
+    private static final int SNS_PROFILE_IMAGE_URL_MAX_LENGTH = 500;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -48,18 +60,17 @@ public class Member {
     @Column(nullable = false, length = 20)
     private SocialProvider provider;
 
-    /** 191자 제한은 utf8mb4 인덱스 키 길이 상한 때문이다. */
-    @Column(name = "provider_user_id", nullable = false, length = 191)
+    @Column(name = "provider_user_id", nullable = false, length = PROVIDER_USER_ID_MAX_LENGTH)
     private String providerUserId;
 
     /** 타인에게 보이는 유일한 이름. 서버가 생성한다. */
     @Column(nullable = false, length = 30)
     private String nickname;
 
-    @Column(name = "sns_nickname", length = 50)
+    @Column(name = "sns_nickname", length = SNS_NICKNAME_MAX_LENGTH)
     private String snsNickname;
 
-    @Column(name = "sns_profile_image_url", length = 500)
+    @Column(name = "sns_profile_image_url", length = SNS_PROFILE_IMAGE_URL_MAX_LENGTH)
     private String snsProfileImageUrl;
 
     @Enumerated(EnumType.STRING)
@@ -106,8 +117,12 @@ public class Member {
         this.provider = provider;
         this.providerUserId = providerUserId;
         this.nickname = nickname;
-        this.snsNickname = snsNickname;
-        this.snsProfileImageUrl = snsProfileImageUrl;
+        // 소셜이 주는 값의 길이는 우리가 정할 수 없고, 컬럼을 넘으면 가입 INSERT가 통째로
+        // 터진다. 본인 확인용 보조 정보 때문에 가입이 실패하면 안 되므로 여기서 값을 맞춘다 —
+        // 자르는 자리를 호출부마다 두면 언젠가 한 곳이 빠진다.
+        this.snsNickname = truncate(snsNickname, SNS_NICKNAME_MAX_LENGTH);
+        this.snsProfileImageUrl = dropIfTooLong(snsProfileImageUrl,
+                SNS_PROFILE_IMAGE_URL_MAX_LENGTH);
         this.role = MemberRole.PARTICIPANT;
         this.ageVerification = AgeVerification.REQUIRED;
         this.status = MemberStatus.ACTIVE;
@@ -213,5 +228,29 @@ public class Member {
 
     public boolean isActive() {
         return this.status == MemberStatus.ACTIVE;
+    }
+
+    /**
+     * UTF-16 단위 상한으로 자르되 서로게이트 쌍 가운데는 자르지 않는다 — 반쪽만 남으면 깨진
+     * 문자가 저장된다. UTF-16 단위 수 ≥ 코드포인트 수이므로 이 결과는 코드포인트로 세는
+     * 컬럼(MySQL utf8mb4)에도, UTF-16 단위로 세는 컬럼(H2)에도 들어간다.
+     */
+    private static String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        int end = maxLength;
+        if (Character.isHighSurrogate(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(0, end);
+    }
+
+    /**
+     * URL은 닉네임과 달리 자르지 않는다. 잘린 URL은 열리지 않는 주소라 저장할 의미가 없고,
+     * 멀쩡한 값처럼 보여 쓰는 쪽을 속인다. NULL 허용 컬럼이므로 버리는 쪽이 정직하다.
+     */
+    private static String dropIfTooLong(String url, int maxLength) {
+        return url == null || url.length() <= maxLength ? url : null;
     }
 }

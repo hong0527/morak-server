@@ -38,6 +38,7 @@ public class AppealService {
     private final EvictionRepository evictionRepository;
     private final Clock clock;
     private final int slaHours;
+    private final int fileDeadlineDays;
 
     public AppealService(AppealCaseRepository appealCaseRepository,
                          EvictionRepository evictionRepository,
@@ -45,11 +46,13 @@ public class AppealService {
                          // 이의에는 신고 같은 등급 구분이 없다. 24시간은 피해자가 계속
                          // 노출되는 고위험 신고의 기한이고, 이의는 이미 벌어진 퇴출을
                          // 검토하는 일이라 일반 기한을 쓴다(명세 AP-1 부수효과).
-                         @Value("${morak.report.sla-hours.normal}") int slaHours) {
+                         @Value("${morak.report.sla-hours.normal}") int slaHours,
+                         @Value("${morak.appeal.file-deadline-days}") int fileDeadlineDays) {
         this.appealCaseRepository = appealCaseRepository;
         this.evictionRepository = evictionRepository;
         this.clock = clock;
         this.slaHours = slaHours;
+        this.fileDeadlineDays = fileDeadlineDays;
     }
 
     public AppealCreateResponse file(Long memberId, Long evictionId, AppealCreateRequest request) {
@@ -58,10 +61,18 @@ public class AppealService {
         if (!eviction.getMemberId().equals(memberId)) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
+        // 재전송이 기한 초과보다 먼저다 — 접수에 성공한 클라이언트의 재시도가 기한이 지난 뒤
+        // 도착해도 "이미 접수됨"을 보고 조용히 끝나야 한다(SS-4의 409 우선과 같은 논리).
         if (appealCaseRepository.existsByEvictionId(evictionId)) {
             throw new BusinessException(ErrorCode.APPEAL_ALREADY_FILED);
         }
         LocalDateTime now = LocalDateTime.now(clock);
+        // 기한의 기산점은 세션 종료가 아니라 퇴출 시각이다. 당사자는 퇴출 응답(SS-4)으로 그
+        // 순간 통지받고, 세션 종료 기준이면 세션이 길수록 기한이 늘어나는 우연이 생긴다.
+        // 정각까지는 접수한다 — 경계 처리 방향은 제재 종료·충전 만료·탈퇴 파기와 같다.
+        if (now.isAfter(eviction.getCreatedAt().plusDays(fileDeadlineDays))) {
+            throw new BusinessException(ErrorCode.APPEAL_DEADLINE_PASSED);
+        }
         AppealCase appeal = AppealCase.file(evictionId, memberId, request.reasonText(), now,
                 now.plusHours(slaHours));
         try {

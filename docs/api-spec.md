@@ -1136,6 +1136,8 @@ UPDATE session_participant
 
 `reasonText`는 필수이며 최대 200자다. 빈 문자열·누락·초과는 400 `VALIDATION_FAILED`. 관리자가 AD-6에서 판단할 유일한 사용자 측 근거이므로 선택 항목으로 두지 않는다. 관리자는 이 진술을 AD-9 상세로 본다.
 
+**신청 기한은 퇴출 시각부터 3일이다**(`appeal.file-deadline-days`). 기산점이 세션 종료가 아니라 퇴출 시각인 이유: 당사자는 퇴출 응답(SS-4)으로 그 순간 통지받고, 세션 종료 기준이면 세션이 길수록 기한이 늘어나는 우연이 생긴다. 정각까지는 접수한다(`now > evicted_at + 3일`일 때만 409 `APPEAL_DEADLINE_PASSED`) — 경계 포함 방향은 제재 종료·충전 만료·탈퇴 파기와 같이 사용자에게 유리한 쪽이다. 같은 퇴출 건의 재전송은 기한이 지난 뒤 도착해도 `APPEAL_ALREADY_FILED`가 먼저다 — 접수에 성공한 클라이언트의 재시도가 기한 초과로 읽히면 안 된다.
+
 응답 201
 
 ```json
@@ -1149,7 +1151,7 @@ UPDATE session_participant
 }
 ```
 
-발생 에러: 403 `FORBIDDEN`(타인의 퇴출 건이거나 존재하지 않는 `evictionId` — 존재 여부를 노출하지 않기 위해 404가 아니라 403으로 통일한다) / 409 `APPEAL_ALREADY_FILED`(퇴출 1건당 1회) / 400 `VALIDATION_FAILED`
+발생 에러: 403 `FORBIDDEN`(타인의 퇴출 건이거나 존재하지 않는 `evictionId` — 존재 여부를 노출하지 않기 위해 404가 아니라 403으로 통일한다) / 409 `APPEAL_ALREADY_FILED`(퇴출 1건당 1회) / 409 `APPEAL_DEADLINE_PASSED`(퇴출 시각부터 3일 초과) / 400 `VALIDATION_FAILED`
 
 게이트: ② ✓ · ④ **예외** · ⑤ ✓ · 소유권 본인 eviction
 
@@ -1896,6 +1898,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 신고·운영 | REPORT_NOT_FOUND | 404 | AD-2, AD-3 | 없는 케이스 |
 | 신고·운영 | ALREADY_PROCESSED | 409 | AD-3, AD-6 | 이미 종결된 케이스·이의 |
 | 신고·운영 | **APPEAL_ALREADY_FILED** | 409 | AP-1 | 퇴출 1건당 1회 초과 |
+| 신고·운영 | **APPEAL_DEADLINE_PASSED** | 409 | AP-1 | 퇴출 시각부터 3일 초과 |
 | 신고·운영 | **APPEAL_NOT_FOUND** | 404 | AD-6, AD-9 | 없는 이의 |
 
 굵은 코드는 v2.0 신설 또는 개명이다.
@@ -1937,7 +1940,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 
 **신설**
 
-METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_REQUIRED, GOAL_ALREADY_ACTIVE, REMATCH_COOLDOWN, DUPLICATE_ABSENCE_EVENT, ABSENCE_RATE_LIMITED, ALREADY_EVICTED, PAUSE_ALREADY_USED, PAUSE_NOT_ACTIVE, INVALID_WEBHOOK_SIGNATURE, INSUFFICIENT_POINT, PRODUCT_NOT_FOUND, OUT_OF_STOCK, DUPLICATE_ORDER, ORDER_NOT_FOUND, CHARGE_NOT_FOUND, PAYMENT_AMOUNT_MISMATCH, PAYMENT_NOT_APPROVED, APPEAL_ALREADY_FILED, APPEAL_NOT_FOUND
+METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_REQUIRED, GOAL_ALREADY_ACTIVE, REMATCH_COOLDOWN, DUPLICATE_ABSENCE_EVENT, ABSENCE_RATE_LIMITED, ALREADY_EVICTED, PAUSE_ALREADY_USED, PAUSE_NOT_ACTIVE, INVALID_WEBHOOK_SIGNATURE, INSUFFICIENT_POINT, PRODUCT_NOT_FOUND, OUT_OF_STOCK, DUPLICATE_ORDER, ORDER_NOT_FOUND, CHARGE_NOT_FOUND, PAYMENT_AMOUNT_MISMATCH, PAYMENT_NOT_APPROVED, APPEAL_ALREADY_FILED, APPEAL_DEADLINE_PASSED, APPEAL_NOT_FOUND
 
 신설분은 바로 위 목록이 전부이고, 전체 코드는 §6-1 표의 행 수가 정본이다. `METHOD_NOT_ALLOWED`·`UNSUPPORTED_MEDIA_TYPE`은 3부-A 이후에 추가했다 — 잡지 않으면 전역 `Exception` 핸들러가 500으로 덮어, 프론트가 잘못 부른 요청을 서버 장애로 읽고 재시도한다.
 

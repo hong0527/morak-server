@@ -72,6 +72,9 @@ public enum ErrorCode {
     // AD-3 신고와 AD-6 이의가 함께 쓰는 코드라 문구에 한쪽 자원 이름을 넣지 않는다
     ALREADY_PROCESSED(HttpStatus.CONFLICT, "이미 처리된 건입니다."),
     APPEAL_ALREADY_FILED(HttpStatus.CONFLICT, "이미 이의를 신청했습니다."),
+    // 409인 이유: 요청 자체는 유효하고 권한도 있는데 자원의 시간 상태가 막는 경우라,
+    // 같은 성격의 REMATCH_COOLDOWN·SESSION_ENDED와 나란히 둔다
+    APPEAL_DEADLINE_PASSED(HttpStatus.CONFLICT, "이의 신청 기한이 지났습니다."),
     APPEAL_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 이의입니다.");
 
     private final HttpStatus status;

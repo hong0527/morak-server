@@ -100,6 +100,7 @@ public class AuthService {
         // @Transactional을 나눠 쓰면 같은 빈 안의 자기 호출이라 프록시를 타지 않으므로
         // 프로그래밍 방식 트랜잭션으로 경계를 직접 긋는다.
         SocialUser socialUser = socialClient.fetch(request.provider(), request.authorizationCode());
+        rejectIfIdentifierTooLong(socialUser);
         try {
             return transactionTemplate.execute(status -> loginInternal(request, socialUser));
         } catch (DataIntegrityViolationException e) {
@@ -151,6 +152,18 @@ public class AuthService {
 
         String accessToken = jwtProvider.createToken(member.getId());
         return LoginResponse.from(accessToken, isNewMember, member, loginResult);
+    }
+
+    /**
+     * 컬럼에 들어가지 않는 소셜 식별자는 인증 실패로 끊는다. 닉네임처럼 잘라 저장하면 앞부분이
+     * 같은 다른 식별자와 한 회원으로 합쳐져 남의 계정으로 로그인되므로, 식별자만은 절단이 아니라
+     * 거절이다. 보조 정보(닉네임·프로필 URL)의 길이는 {@link Member}가 생성 시점에 맞춘다.
+     */
+    private void rejectIfIdentifierTooLong(SocialUser socialUser) {
+        if (socialUser.providerUserId() != null
+                && socialUser.providerUserId().length() > Member.PROVIDER_USER_ID_MAX_LENGTH) {
+            throw new BusinessException(ErrorCode.INVALID_SOCIAL_TOKEN);
+        }
     }
 
     private void rejectIfRejoinBlocked(SocialProvider provider, String providerUserId,

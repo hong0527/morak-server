@@ -76,6 +76,11 @@ morak:
       high: 24
       normal: 72
 
+  appeal:
+    # 퇴출 시각부터 이의를 접수하는 기한(AP-1). 정각까지는 접수한다 — 경계 포함 방향은
+    # 제재 종료·충전 만료·탈퇴 파기와 같이 사용자에게 유리한 쪽이다.
+    file-deadline-days: 3
+
   withdrawal:
     grace-days: 30
 

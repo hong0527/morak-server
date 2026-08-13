@@ -3870,6 +3870,7 @@ paths:
       operationId: createAppeal
       description: "AI 3회 경고 퇴출에 대해 운영진 2차 개입을 요청합니다.\n\n- `reasonText`는 필수이며 최대 200자입니다.\
         \ 관리자가 판단할 유일한 사용자 측 근거라 선택 항목으로 두지 않습니다.\n- **퇴출 1건당 1회만 신청할 수 있습니다.**\n\
+        - **신청 기한은 퇴출 시각부터 3일입니다.** 정각까지는 접수하고, 지나면 409 `APPEAL_DEADLINE_PASSED`입니다.\n\
         - 타인의 퇴출 건이거나 존재하지 않는 `evictionId`는 모두 403입니다. 존재 여부를 노출하지 않기 위해 404를 쓰지 않습니다.\n\
         - 신청만으로는 퇴출·포인트 차감이 되돌아가지 않습니다. 원복은 관리자가 인용했을 때만 일어납니다.\n"
       parameters:
@@ -3907,7 +3908,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: '`APPEAL_ALREADY_FILED` 이 퇴출 건에 이미 이의를 신청함'
+          description: '충돌
+
+            · `APPEAL_ALREADY_FILED` 이 퇴출 건에 이미 이의를 신청함 — 기한이 지난 뒤의 재전송에도 이 코드가 먼저입니다
+
+            · `APPEAL_DEADLINE_PASSED` 퇴출 시각부터 3일 초과
+
+            '
           content:
             application/json:
               schema:
