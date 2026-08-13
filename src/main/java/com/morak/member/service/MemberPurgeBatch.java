@@ -33,6 +33,7 @@ public class MemberPurgeBatch implements DevBatch {
 
     private final MemberPurgeService memberPurgeService;
     private final MemberRepository memberRepository;
+    private final BatchGuard batchGuard;
     private final Clock clock;
 
     @Override
@@ -56,7 +57,7 @@ public class MemberPurgeBatch implements DevBatch {
                 MemberStatus.WITHDRAW_PENDING, now);
         int purged = 0;
         for (Member target : targets) {
-            purged += BatchGuard.guarded(log, "탈퇴 파기", target.getId(),
+            purged += batchGuard.guarded(log, "탈퇴 파기", target.getId(),
                     () -> memberPurgeService.purgeWithdrawn(target.getId()));
         }
         if (purged > 0) {

@@ -26,6 +26,7 @@ public class MatchExpireBatch implements DevBatch {
     private static final Logger log = LoggerFactory.getLogger(MatchExpireBatch.class);
 
     private final MatchService matchService;
+    private final BatchGuard batchGuard;
     private final Clock clock;
 
     @Override
@@ -44,7 +45,7 @@ public class MatchExpireBatch implements DevBatch {
         LocalDateTime now = LocalDateTime.now(clock);
         int expired = 0;
         for (int targetMinutes : matchService.findConditionsWithExpired(now)) {
-            expired += BatchGuard.guarded(log, "매칭 만료", targetMinutes,
+            expired += batchGuard.guarded(log, "매칭 만료", targetMinutes,
                     () -> matchService.expireWaiting(targetMinutes, now));
         }
         if (expired > 0) {

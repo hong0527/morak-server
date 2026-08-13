@@ -37,6 +37,7 @@ public class SessionClosingBatch implements DevBatch {
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final EvictionRepository evictionRepository;
+    private final BatchGuard batchGuard;
     private final Clock clock;
 
     @Override
@@ -55,17 +56,17 @@ public class SessionClosingBatch implements DevBatch {
         LocalDateTime now = LocalDateTime.now(clock);
         int processed = 0;
         for (Long sessionId : liveSessionRepository.findIdsToClose(SessionStatus.LIVE, now)) {
-            processed += BatchGuard.guarded(log, "세션 종료", sessionId,
+            processed += batchGuard.guarded(log, "세션 종료", sessionId,
                     () -> closingService.closeDueSession(sessionId));
         }
         for (Long participantId
                 : sessionParticipantRepository.findIdsAwaitingAward(SessionStatus.ENDED)) {
-            processed += BatchGuard.guarded(log, "완주 흡수 지급", participantId,
+            processed += batchGuard.guarded(log, "완주 흡수 지급", participantId,
                     () -> closingService.awardCompletion(participantId));
         }
         for (Long evictionId : evictionRepository.findIdsToSettle(
                 PointReason.EVICTION_PENALTY, PointLedger.refTypeOf(PointReason.EVICTION_PENALTY))) {
-            processed += BatchGuard.guarded(log, "퇴출 패널티 소급", evictionId,
+            processed += batchGuard.guarded(log, "퇴출 패널티 소급", evictionId,
                     () -> closingService.settleEvictionPenalty(evictionId));
         }
         if (processed > 0) {
