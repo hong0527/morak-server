@@ -579,6 +579,7 @@ D8(시간 옵션 4종) 확정 시 재실측: 시드 행과 요청 검증 범위.
 5. SS-7 자율 퇴장 — 참가자 LEFT + `left_reason`
 
 ### 이 단계의 함정
+- **정책값을 `application.yml`에 먼저 넣어야 한다.** 위 네 키가 없으면 `@Value` 주입이 실패해 서비스 빈이 만들어지지 않고, 컴파일은 통과하는데 **기동 자체가 안 된다**. 코드를 다 옮기고 나서 왜 안 뜨는지 찾게 되는 자리다. 3단계의 `reconnect-grace-seconds`·LiveKit 키도 같다.
 - **client_seq 멱등키가 없으면 같은 이벤트를 반복 전송해 남을 퇴출시킬 수 있다.** `UNIQUE(session_id, member_id, client_seq)` 위반은 500이 아니라 409 `DUPLICATE_ABSENCE_EVENT`로 잡는다.
 - **자기 자신의 이벤트만 받는다.** 요청에 `targetMemberId`를 두지 않는다 — 두는 순간 상호 신고 구조가 되고 D4가 무너진다.
 - **레이트리밋은 위조 방어의 두 번째 선.** 같은 회원의 직전 이벤트로부터 `absence-min-interval-seconds`(잠정 5초) 안에 다시 오면 429 `ABSENCE_RATE_LIMITED`. 값이 코드가 아니라 yml에 있는 이유는 정상 클라이언트의 실제 보고 주기를 실기기에서 재본 뒤 조정해야 하기 때문이다 — 너무 좁히면 정상 사용자가 막히고, 너무 넓히면 위조 방어가 무의미해진다.
