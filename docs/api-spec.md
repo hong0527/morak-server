@@ -234,7 +234,7 @@ morak:
 
 **세션 종료는 LiveKit 연결 종료로 감지한다.** 종료 루틴(§5)이 LiveKit 룸을 닫으므로 정시·조기 종료 모두 클라이언트에는 연결 종료로 나타난다. 그 직후 SS-8을 조회하되, **정시 종료는 B1이 매분 돌므로 `endsAt` 도래 후 최대 1분간 세션이 아직 `LIVE`일 수 있다.** 이 창에서 SS-8의 409 `SESSION_NOT_ENDED`는 오류가 아니라 "아직 정산 전"이라는 뜻이다 — 5초 간격으로 재시도한다. 90초를 넘겨도 409면 그때가 이상 상황이다. 종료가 아니라 내 쪽 일시 단절(D13)인지 가르려면: 연결이 끊겼는데 SS-1이 여전히 `LIVE`이고 내 상태가 `ACTIVE`·`PAUSED`면 SS-2를 다시 받아 재접속한다(SS-2는 부수효과가 없어 몇 번을 다시 불러도 안전하다). 앱 자체가 재시작돼 세션 번호를 잃었으면 AU-2의 `activeSession`이 진입점이다.
 
-**매칭 폴링(MT-2).** 권장 주기 3초(잠정 — 팀 확인 대기). 중단 조건은 셋이다 — `MATCHED`(sessionId로 전이), `EXPIRED`(재시도 안내), 404 `NO_ACTIVE_MATCH_REQUEST`(요청이 없음 — 대기 화면을 닫는다). MT-1 응답이 `WAITING`이어도 동시 요청 성사로 이미 `MATCHED`일 수 있으므로 MT-1 직후부터 폴링한다. **만료 판정은 B2가 매분 하므로 `expiresAt`이 지나도 최대 1분간 `WAITING`이 유지된다.** 카운트다운이 0이 되어도 `EXPIRED`를 받을 때까지 대기 상태를 유지한다 — 이 창에서 성사가 배제되지 않는다.
+**매칭 폴링(MT-2).** 권장 주기 3초(잠정 — 팀 확인 대기). 중단 조건은 종결 응답이다 — `MATCHED`(sessionId로 전이), `EXPIRED`(재시도 안내), `CANCELLED`(재요청 버튼 — 본인 취소 또는 탈퇴·제재 회수), 404 `NO_ACTIVE_MATCH_REQUEST`(요청 이력이 전무함 — 대기 화면을 닫는다). MT-1 응답이 `WAITING`이어도 동시 요청 성사로 이미 `MATCHED`일 수 있으므로 MT-1 직후부터 폴링한다. **만료 판정은 B2가 매분 하므로 `expiresAt`이 지나도 최대 1분간 `WAITING`이 유지되고, 이 창의 성사는 계약이다** — 후보 조회(MT-1 7단계)는 `expires_at`을 보지 않는다. 화면이 카운트다운 0에서 "만료"를 미리 그렸더라도 `EXPIRED` 수신 전에 성사가 도착할 수 있으므로, 종결 응답(`EXPIRED`·`MATCHED`)을 받을 때까지 폴링을 유지한다. 404는 요청 이력이 전무한 경우뿐이다(MT-2) — 대기 화면을 닫는다.
 
 ---
 
@@ -623,7 +623,7 @@ morak:
 4. 퇴출 쿨다운 — 최근 `eviction.created_at + 30분`이 아직 지나지 않았으면 409 `REMATCH_COOLDOWN` (details: `availableAt`) (D14)
 5. `match_lock` **조건 행** 잠금 — `"match:{targetMinutes}"`
 6. 내 요청 INSERT (`status=WAITING`, `active_member_id=member_id`, `expires_at = now + match.wait-expire-minutes`)
-7. 동일 `target_minutes`의 `WAITING`을 `requested_at` 오름차순 조회. 제외 대상: 유효 제재 보유자 / 활성 세션 보유자 / **요청자와 `match_block` 관계인 회원**(★D6)
+7. 동일 `target_minutes`의 `WAITING`을 `requested_at` 오름차순 조회. 제외 대상: 유효 제재 보유자 / 활성 세션 보유자 / **요청자와 `match_block` 관계인 회원**(★D6). **`expires_at`은 보지 않는다** — 만료 시각이 지났지만 B2가 아직 마킹하지 않은 요청(최대 1분 창)도 성사 대상이다. 그 창의 성사는 사용자에게 손해가 아니라 이득이고(기다린 보람이 1분 늦게 온 것뿐이다), 후보에서 빼면 매칭 확률만 낮아진다. 프론트 규약은 §0-7 — 카운트다운이 0이어도 `EXPIRED`를 받을 때까지 폴링을 유지한다
 8. 선택된 후보 6인 집합 안에 상호 `match_block` 쌍이 남아 있으면 후순위 요청으로 교체한다. 6인을 채우지 못하면 대기 상태로 응답한다
 9. 자신 포함 6건이 모이면 선착순 정확히 6건 선택 → `UPDATE match_request SET status='MATCHED', ... WHERE id IN (6건) AND status='WAITING'` 실행 후 **영향 행 수 = 6 검증, 미달 시 전체 롤백**
 10. `live_session` INSERT — `status=LIVE`, `started_at = now`(6인 확정 시각, D21), `ends_at = started_at + target_minutes`, `livekit_room_name = "molock-{sessionId}"` UNIQUE
@@ -697,10 +697,15 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 `requiredCount`는 `session.required-participants`(6)를 그대로 내려준 값이며, `waitingCount`가 여기 도달하면 매칭이 성사된다.
 종결 상태(CANCELLED·EXPIRED)에서는 대기열 자리가 없으므로 `waitingCount`를 0으로 내린다.
 
-`status=MATCHED`면 `sessionId`가 채워진다. 클라이언트는 이 값을 받으면 폴링을 멈추고 SS-2로 넘어간다.
-`status=EXPIRED`면 대기가 만료된 것이며(B2), 재시도 안내를 띄운다.
+**가장 최근 요청을 상태와 무관하게 반환한다.** 404는 요청 이력이 전무한 경우뿐이다 — 폴링하던 화면이 404라는 모호한 답 대신 `CANCELLED`·`EXPIRED`·`MATCHED`를 그대로 받아야 무엇이 일어났는지 안다. 상태별 화면 행동:
 
-발생 에러: 404 `NO_ACTIVE_MATCH_REQUEST`(활성 요청도 최근 종결 요청도 없음)
+- `WAITING` — 폴링을 계속한다. `expiresAt`이 지났어도 `EXPIRED`를 받을 때까지 유지한다(§0-7 — 만료 창의 성사는 계약이다)
+- `MATCHED` — `sessionId`로 전이하고 폴링을 멈춘다
+- `CANCELLED` — 대기 화면을 닫고 재요청 버튼을 그린다(본인 취소 또는 탈퇴·제재 회수)
+- `EXPIRED` — 재시도 안내를 띄운다(B2)
+- 404 `NO_ACTIVE_MATCH_REQUEST` — 요청 이력이 전무하다. 대기 화면 자체가 성립하지 않으므로 닫는다
+
+발생 에러: 404 `NO_ACTIVE_MATCH_REQUEST`(요청 이력이 전무함)
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 소유권 본인
 
@@ -1967,7 +1972,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 회원·인증 | **GOAL_ALREADY_ACTIVE** | 409 | AU-7 | 진행 중 목표 존재 |
 | 매칭 | DUPLICATE_MATCH_REQUEST | 409 | MT-1 | 활성 대기 요청 존재 |
 | 매칭 | **ALREADY_IN_ACTIVE_SESSION** | 409 | MT-1 | 활성 세션 참가 중. `details.sessionId`에 그 세션 번호 |
-| 매칭 | NO_ACTIVE_MATCH_REQUEST | 404 | MT-2 | 요청 없음 |
+| 매칭 | NO_ACTIVE_MATCH_REQUEST | 404 | MT-2, MT-3 | 요청 이력이 전무함(MT-2) / 없는 요청 id(MT-3) |
 | 매칭 | ALREADY_MATCHED | 409 | MT-3 | 이미 성사 |
 | 매칭 | LOCK_ACQUISITION_FAILED | 503 | MT-1, MT-3, B2 | 잠금 타임아웃 |
 | 매칭 | **REMATCH_COOLDOWN** | 409 | MT-1 | 퇴출 후 30분 미경과 (D14) |
