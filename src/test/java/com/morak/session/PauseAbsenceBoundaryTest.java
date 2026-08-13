@@ -3,6 +3,7 @@ package com.morak.session;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.morak.session.dto.request.AbsenceEventRequest;
+import com.morak.session.dto.response.PauseStartResponse;
 import com.morak.session.service.AbsenceJudgeService;
 import com.morak.session.service.PauseService;
 import com.morak.session.type.AbsenceEventType;
@@ -84,11 +85,54 @@ class PauseAbsenceBoundaryTest extends IntegrationTest {
         report(memberId, sessionId, AbsenceEventType.START, 0, absenceStart);
         clock.fixAt(absenceStart.plusSeconds(absenceThresholdSeconds + 30L));
 
-        pauseService.start(memberId, sessionId);
+        PauseStartResponse response = pauseService.start(memberId, sessionId);
 
         assertThat(fixtures.participant(sessionId, memberId).getWarningCount()).isEqualTo(1);
         assertThat(fixtures.count("warning", "session_id = ? AND member_id = ?",
                 sessionId, memberId)).isEqualTo(1);
+        // 여기서 붙은 경고를 본인이 알아야 한다. 응답에 없으면 화장실을 다녀온 사람은
+        // 경고가 하나 는 것을 모른 채 다음 경고에 퇴출된다
+        assertThat(response.warningIssued()).isTrue();
+        assertThat(response.warningCount()).isEqualTo(1);
+        assertThat(response.closedAbsenceSeconds())
+                .isEqualTo(absenceThresholdSeconds + 30L);
+    }
+
+    @Test
+    @DisplayName("마감할 구간이 없으면 응답의 경고 항목이 비어 있다")
+    void 마감이_없으면_경고를_알리지_않는다() {
+        // 이 테스트가 죽으면: 자리를 비운 적 없는 사람에게도 경고 표시가 뜬다.
+        List<Long> memberIds = fixtures.joinMembers(PARTICIPANTS);
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, BASE_TIME, memberIds);
+        Long memberId = memberIds.getFirst();
+
+        clock.fixAt(BASE_TIME.plusMinutes(1));
+        PauseStartResponse response = pauseService.start(memberId, sessionId);
+
+        assertThat(response.warningIssued()).isFalse();
+        assertThat(response.warningCount()).isZero();
+        assertThat(response.closedAbsenceSeconds()).isNull();
+    }
+
+    @Test
+    @DisplayName("임계 안쪽에서 마감되면 경고 없이 구간 길이만 알린다")
+    void 임계_안쪽_마감은_길이만_알린다() {
+        // 경고는 아니지만 "얼마나 자리를 비운 것으로 계산됐는지"는 본인이 볼 수 있어야
+        // 판정을 납득하거나 다툴 수 있다.
+        List<Long> memberIds = fixtures.joinMembers(PARTICIPANTS);
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, BASE_TIME, memberIds);
+        Long memberId = memberIds.getFirst();
+
+        LocalDateTime absenceStart = BASE_TIME.plusMinutes(1);
+        report(memberId, sessionId, AbsenceEventType.START, 0, absenceStart);
+        clock.fixAt(absenceStart.plusSeconds(absenceThresholdSeconds - 10L));
+
+        PauseStartResponse response = pauseService.start(memberId, sessionId);
+
+        assertThat(response.warningIssued()).isFalse();
+        assertThat(response.warningCount()).isZero();
+        assertThat(response.closedAbsenceSeconds())
+                .isEqualTo(absenceThresholdSeconds - 10L);
     }
 
     private void report(Long memberId, Long sessionId, AbsenceEventType type, long clientSeq,

@@ -151,27 +151,39 @@ public class AbsenceJudgeService {
      * <p>호출자는 Pause 상태 전이 <b>전에</b> 부른다. 뒤에 부르면 여기서 난 퇴출이 방금 세운
      * PAUSED를 덮어써, 응답은 화장실 모드 시작인데 참가자는 퇴출된 상태가 된다.
      */
-    public void closeAbsenceOnPause(Long sessionId, SessionParticipant participant,
-                                    LocalDateTime at) {
+    public PauseClosure closeAbsenceOnPause(Long sessionId, SessionParticipant participant,
+                                            LocalDateTime at) {
         if (participant.getStatus() != ParticipantStatus.ACTIVE) {
-            return;
+            return null;
         }
         AbsenceEvent last = absenceEventRepository
                 .findFirstBySessionIdAndMemberIdOrderByIdDesc(sessionId, participant.getMemberId())
                 .orElse(null);
         if (last == null || last.getType() != AbsenceEventType.START) {
-            return;
+            return null;
         }
         AbsenceEvent closing = absenceEventRepository.saveAndFlush(AbsenceEvent.report(
                 sessionId, participant.getMemberId(), AbsenceEventType.END,
                 PAUSE_BOUNDARY_CLIENT_SEQ, at, at));
         long absentSeconds = Duration.between(last.getOccurredAt(), at).getSeconds();
         if (absentSeconds <= thresholdSeconds) {
-            return;
+            return new PauseClosure(absentSeconds, false);
         }
         log.info("Pause 시작으로 자리비움 구간 마감: session={}, member={}, 지속 {}초",
                 sessionId, participant.getMemberId(), absentSeconds);
         warn(sessionId, participant, closing, absentSeconds, at);
+        return new PauseClosure(absentSeconds, true);
+    }
+
+    /**
+     * Pause 시작이 마감한 자리비움 구간. 마감할 구간이 없었으면 {@code null}이다.
+     *
+     * <p>이 값을 호출자에게 돌려주는 이유는 하나다 — <b>여기서 부여한 경고를 본인이 알아야
+     * 한다.</b> 3회째는 조건부 UPDATE가 0행이 되어 409로 드러나지만, 1·2회째는 화장실 모드가
+     * 정상 시작되므로 응답에 싣지 않으면 사용자는 경고가 늘어난 것을 모른 채 다음 경고에
+     * 퇴출된다. 같은 이유로 SS-6은 처음부터 경고 여부를 응답에 싣고 있었다.
+     */
+    public record PauseClosure(long absentSeconds, boolean warningIssued) {
     }
 
     /**

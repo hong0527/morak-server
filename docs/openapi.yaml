@@ -969,6 +969,8 @@ components:
       - pausedAt
       - pauseLimitSeconds
       - resumeDueAt
+      - warningIssued
+      - warningCount
       properties:
         status:
           $ref: '#/components/schemas/ParticipantStatus'
@@ -981,11 +983,27 @@ components:
         resumeDueAt:
           type: string
           format: date-time
+        warningIssued:
+          type: boolean
+          description: 시작과 함께 마감된 자리비움 구간으로 경고가 붙었는지. 1·2회째는 화장실
+            모드가 정상 시작되므로 이 값이 없으면 사용자는 경고가 는 것을 모른다
+        warningCount:
+          type: integer
+          description: 마감 반영 후의 누적 경고 수. 3회면 퇴출이라 이 응답은 409로 대체된다
+        closedAbsenceSeconds:
+          type: integer
+          format: int64
+          nullable: true
+          description: 마감된 자리비움 구간의 지속 초. 마감할 구간이 없었으면 null이고,
+            경고가 붙지 않은 경우에도 값은 실린다 — 이의를 쓸 때 본인이 댈 유일한 근거다
       example:
         status: PAUSED
         pausedAt: '2026-08-12T09:50:00+09:00'
         pauseLimitSeconds: 600
         resumeDueAt: '2026-08-12T10:00:00+09:00'
+        warningIssued: true
+        warningCount: 1
+        closedAbsenceSeconds: 90
     PauseEndResponse:
       type: object
       required:

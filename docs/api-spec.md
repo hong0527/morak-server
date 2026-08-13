@@ -888,9 +888,16 @@ UPDATE session_participant
   "status": "PAUSED",
   "pausedAt": "2026-08-12T09:50:00+09:00",
   "pauseLimitSeconds": 600,
-  "resumeDueAt": "2026-08-12T10:00:00+09:00"
+  "resumeDueAt": "2026-08-12T10:00:00+09:00",
+  "warningIssued": true,
+  "warningCount": 1,
+  "closedAbsenceSeconds": 90
 }
 ```
+
+`warningIssued`·`warningCount`는 **위 마감으로 경고가 붙었는지**를 알린다. 3회째는 UPDATE가 0행이 되어 409로 드러나지만 1·2회째는 화장실 모드가 정상 시작되므로, 여기 싣지 않으면 사용자는 경고가 는 것을 모른 채 다음 경고에 퇴출된다. 필드 이름은 SS-6과 같다 — 같은 값을 두 화면이 다르게 부르면 클라이언트가 분기한다.
+
+`closedAbsenceSeconds`는 마감된 구간의 지속 초다. 마감할 구간이 없었으면 `null`이고, 임계 안쪽이라 경고가 붙지 않은 경우에도 값은 실린다. 판정이 몇 초로 계산됐는지가 이의(AP-1)를 쓸 때 본인이 댈 수 있는 유일한 근거라서다(영상은 저장하지 않는다 — ★D17).
 
 발생 에러: 409 `PAUSE_ALREADY_USED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND`
 

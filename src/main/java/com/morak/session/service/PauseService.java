@@ -79,14 +79,19 @@ public class PauseService {
         LocalDateTime now = LocalDateTime.now(clock);
         // 열려 있는 자리비움 구간을 Pause 시작 시각으로 끊는다. 상태 전이보다 먼저다 —
         // 여기서 3회째 경고로 퇴출되면 아래 조건부 UPDATE가 0행이 되어 409로 끝난다.
-        absenceJudgeService.closeAbsenceOnPause(sessionId, participant, now);
+        AbsenceJudgeService.PauseClosure closure =
+                absenceJudgeService.closeAbsenceOnPause(sessionId, participant, now);
         int updated = sessionParticipantRepository.startPause(session.getId(), memberId, now,
                 ParticipantStatus.ACTIVE, ParticipantStatus.PAUSED);
         if (updated == 0) {
             throw startFailure(sessionId, memberId);
         }
         log.info("화장실 모드 시작: session={}, member={}", sessionId, memberId);
-        return PauseStartResponse.of(now, pauseLimitSeconds);
+        // 경고 수는 마감이 올린 값이다. startPause가 flush 뒤에 컨텍스트를 비우므로 참가자는
+        // 준영속이지만, 올린 값은 이미 flush돼 있어 여기서 읽는 것이 DB와 같다
+        return PauseStartResponse.of(participant, now, pauseLimitSeconds,
+                closure != null && closure.warningIssued(),
+                closure == null ? null : closure.absentSeconds());
     }
 
     /**
