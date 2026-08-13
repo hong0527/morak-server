@@ -22,8 +22,8 @@ public class PointController {
 
     @GetMapping
     public PointBalanceResponse getMyPoints(@LoginMember Long memberId,
-                                      @RequestParam(required = false) Integer page,
-                                      @RequestParam(required = false) Integer size) {
+                                            @RequestParam(required = false) Integer page,
+                                            @RequestParam(required = false) Integer size) {
         return pointService.getMyPoints(memberId, page, size);
     }
 }

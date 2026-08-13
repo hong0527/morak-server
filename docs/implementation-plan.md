@@ -693,7 +693,7 @@ Q1·Q2·D15 확정 시 재실측: 완주 판정식, Streak 단위, 포인트 값
 - **테이블**: `point_ledger`(조회 인덱스), `member.point_balance`
 
 ### 이 단계의 함정
-- **웰컴 포인트의 멱등키는 `(memberId, WELCOME, MEMBER, memberId)`다.** ref 대상이 회원 자신이라 member_id가 두 자리에 들어간다 — 규약표대로다. 탈퇴 후 재로그인 복구(RESTORED) 시 다시 지급되면 안 되고, UNIQUE가 그것을 막는다.
+- **웰컴 포인트의 멱등키는 `(memberId, WELCOME, MEMBER, memberId)`다.** ref 대상이 회원 자신이라 member_id가 두 자리에 들어간다 — 규약표대로다. 탈퇴 후 재로그인 복구(RESTORED)는 가입 경로를 타지 않아 지급을 시도하지도 않는다 — UNIQUE는 그 위에 한 겹 더 두는 방어이지 유일한 방어가 아니다. 순서를 뒤집어 적으면 복구가 지급을 부르는데 제약이 막는 것으로 읽힌다.
 - **잔액은 캐시에서 읽고 내역은 원장에서 읽는다.** 둘이 어긋나면 원장이 진실이다. 검증 쿼리(`SUM(delta)` vs `point_balance`)를 게이트에 넣는다.
 - 원장 내역은 최신순 Page. `PageResponse<T>`를 쓴다(Spring `Page` 직렬화 금지).
 
