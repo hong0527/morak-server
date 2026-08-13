@@ -36,6 +36,11 @@
 전부 거절하는 기본 구현(`RejectingSocialClient`·`RejectingPgClient`)이 채우고 있어, 운영 프로필로도 기동은 된다 —
 AU-1은 401 `INVALID_SOCIAL_TOKEN`, PY-2는 409 `PAYMENT_NOT_APPROVED`가 정상 동작이다.
 그 밖에 LiveKit `RemoveParticipant` 호출(`EvictionService`)과 신고 서술 텍스트 검열(`Report`)이 TODO로 남아 있다.
+여기에 3차 검증 B가 올린 **재기동 내성 이월 3건**(유예 창 DB 영속화 · 스케줄러 락 · `point_charge` 시각 정합)이 더해진다. 셋 다 12단계 절에 상세를 적었고, 1번이 끝나기 전까지 **v1 배포는 단일 인스턴스 전제**다.
+
+**테스트 39건 / 16클래스**(`./gradlew test` 실측 — `build/test-results/test/*.xml`의 `tests` 합계, 실패·에러 0). 단위 테스트가 아니라 H2를 띄우는 통합 테스트이며, 단계별 게이트가 curl로 보는 것과 달리 동시성·멱등·경계값처럼 손으로 재현하기 어려운 불변식을 덮는다. 이 수치가 줄면 무엇을 지웠는지 먼저 확인한다.
+
+수를 셀 때 `grep -c "@Test"`를 그대로 쓰면 `TestSupportConfig`의 `@TestConfiguration`이 함께 잡혀 40이 나온다. 실측 기준은 Gradle 리포트다.
 
 ---
 
@@ -71,7 +76,7 @@ base yml의 시크릿 폴백을 제거해 운영에서 환경변수가 없으면
 ### 미커밋 작업물 처리 방침
 현재 워킹트리에 `src/main/java/com/morak/dev/` 4파일(`AdjustableClock`·`DevClockController`·request/response record)과 `AppConfig`·`Sanction` 수정이 커밋되지 않은 상태다.
 **DEV-2(시각 조작)는 피벗 후에도 그대로 유효하다** — Streak 일자 경계·매칭 만료·Pause 10분·세션 종료 예정 시각이 전부 시각 판정이고, 이것 없이는 2·4·5·11단계 게이트를 재현할 수 없다. 폐기하지 않고 2단계에서 DEV-4와 함께 커밋한다.
-패키지 위치는 현행 `com.morak.dev`를 유지한다(blueprint §11·CLAUDE.md §4의 확정 도메인 목록에 포함돼 있다).
+패키지 위치는 현행 `com.morak.dev`를 유지한다(E단계 '패키지 배치'·CLAUDE.md §4의 확정 도메인 목록에 포함돼 있다).
 
 ---
 
@@ -242,12 +247,15 @@ POST_REPORT_REQUIRED     DUPLICATE_POST         POST_NOT_FOUND
 **신설 ErrorCode**
 
 ```
-UNDER_AGE_SIGNUP_BLOCKED  AGREEMENT_REQUIRED       GOAL_ALREADY_ACTIVE      REMATCH_COOLDOWN
-DUPLICATE_ABSENCE_EVENT   ABSENCE_RATE_LIMITED     ALREADY_EVICTED          PAUSE_ALREADY_USED
-PAUSE_NOT_ACTIVE          INSUFFICIENT_POINT       OUT_OF_STOCK             PRODUCT_NOT_FOUND
-DUPLICATE_ORDER           ORDER_NOT_FOUND          CHARGE_NOT_FOUND         PAYMENT_AMOUNT_MISMATCH
-PAYMENT_NOT_APPROVED      APPEAL_ALREADY_FILED     APPEAL_NOT_FOUND         INVALID_WEBHOOK_SIGNATURE
+METHOD_NOT_ALLOWED        UNSUPPORTED_MEDIA_TYPE   UNDER_AGE_SIGNUP_BLOCKED AGREEMENT_REQUIRED
+GOAL_ALREADY_ACTIVE       REMATCH_COOLDOWN         DUPLICATE_ABSENCE_EVENT  ABSENCE_RATE_LIMITED
+ALREADY_EVICTED           PAUSE_ALREADY_USED       PAUSE_NOT_ACTIVE         INSUFFICIENT_POINT
+OUT_OF_STOCK              PRODUCT_NOT_FOUND        DUPLICATE_ORDER          ORDER_NOT_FOUND
+CHARGE_NOT_FOUND          PAYMENT_AMOUNT_MISMATCH  PAYMENT_NOT_APPROVED     APPEAL_ALREADY_FILED
+APPEAL_NOT_FOUND          INVALID_WEBHOOK_SIGNATURE
 ```
+
+`METHOD_NOT_ALLOWED`·`UNSUPPORTED_MEDIA_TYPE`은 개별 엔드포인트가 아니라 전 경로 공통이다. 잡지 않으면 전역 `Exception` 핸들러가 500으로 덮어 프론트가 잘못 부른 요청을 서버 장애로 읽고 재시도한다. 목록 정본은 api-spec §6-2다.
 
 코드당 status 1개 원칙을 유지한다. 같은 코드가 상황에 따라 400도 되고 409도 되면 프론트가 코드로 분기할 수 없다.
 
@@ -302,7 +310,7 @@ morak:
 ### 완료 게이트
 - `./gradlew build` 성공. 폐기 enum·ErrorCode를 참조하는 컴파일 에러 0
 - 애플리케이션 기동 성공 후 없는 URL → 404 `ENDPOINT_NOT_FOUND` (0단계 게이트 회귀)
-- `ErrorCode` ↔ blueprint §6 대조 diff 0. `application.yml` ↔ blueprint §7 대조 diff 0
+- `ErrorCode` ↔ api-spec §6-1 대조 diff 0. `application.yml` ↔ api-spec §0-5 대조 diff 0
 - **잔존 어휘 검사는 `src` 전체를 훑는다**: `grep -rniE "proof|challenge|genai|인증 마감|촬영물|사진" src/` → 0건. `resources`만 보면 `AppConfig`의 javadoc("인증 마감" 등) 같은 **코드 주석 잔존**을 놓친다 — 주석은 컴파일을 막지 않으므로 빌드 게이트로도 안 잡힌다
 
 ### 강의 포인트
@@ -369,7 +377,7 @@ morak:
 | ORDER_SPEND · ORDER_CANCEL | `store_order.id` |
 | CHARGE | `point_charge.id` |
 
-### 패키지 배치 (blueprint §11 확정)
+### 패키지 배치 (확정 — CLAUDE.md §4의 도메인 목록과 같다)
 
 ```
 com.morak
@@ -405,7 +413,7 @@ com.morak
 **목표**: `docs/openapi.yaml`을 40 오퍼레이션으로 다시 쓴다. 프론트가 이 파일을 계약으로 보고 병렬 작업하므로, 코드보다 먼저 확정돼야 한다.
 
 ### 만들 것
-blueprint §3의 **43개**를 그대로 옮긴다. AU 7 · MT 3 · SS 11 · AP 1 · PT 1 · SR 5 · PY 3 · RP 1 · AD 8 · **DEV 3**.
+api-spec §3 총람의 **44행**을 그대로 옮긴다. AU 7 · MT 3 · SS 11 · AP 1 · PT 1 · SR 5 · PY 3 · RP 1 · AD 8 · **DEV 4**. DEV가 4행인 것은 DEV-2가 시각 조작(POST)과 조회(GET) 두 행이기 때문이다 — 오퍼레이션 수와 총람 행 수를 같은 단위로 센다.
 **DEV-1(`POST /api/auth/dev-login`)은 1단계에서 폐기가 확정됐다** — dev 로그인은 AU-1 + `DevSocialClient`가 처리하므로 별도 경로가 없다. 남은 개발 전용은 DEV-2·3·4 셋이다.
 **DEV 계열은 프론트 계약이 아니므로 openapi.yaml에 넣지 않는다** — 이 문서가 정의처다. 실제 openapi.yaml 오퍼레이션은 40개다.
 공통 스키마: `ErrorResponse`(`{"error":{code,message,details}}`), `PageResponse<T>`(Spring `Page` 직렬화 금지), Bearer 보안 스킴.
@@ -511,7 +519,7 @@ D8(시간 옵션 4종) 확정 시 재실측: 시드 행과 요청 검증 범위.
 - **enum**: `SessionStatus`, `ParticipantStatus`, `StickerType`, `LeftReason`(웹훅이 쓰는 `DEVICE_ISSUE`만 — 나머지 값은 4단계)
 - **설정**: `morak.livekit.*`, `session.reconnect-grace-seconds`, LiveKit server SDK 토큰 서명·웹훅 서명 검증
 
-**LiveKit identity 규약 (blueprint §10.5 확정)**: **`identity` = `member_id`를 문자열로 변환한 값**이다. SS-2가 토큰에 그 값을 심고, SS-10 웹훅이 받은 `identity`를 그대로 파싱해 회원을 찾는다. 별도 매핑 컬럼을 두지 않는다 — 컬럼을 두면 토큰 발급과 웹훅 수신 사이에 갱신 순서 문제가 생기고, 매핑이 유실되면 웹훅이 누구의 것인지 알 수 없어진다. `room` 이름은 `live_session.livekit_room_name`(UNIQUE)이다.
+**LiveKit identity 규약 (api-spec SS-2·SS-10 확정)**: **`identity` = `member_id`를 문자열로 변환한 값**이다. SS-2가 토큰에 그 값을 심고, SS-10 웹훅이 받은 `identity`를 그대로 파싱해 회원을 찾는다. 별도 매핑 컬럼을 두지 않는다 — 컬럼을 두면 토큰 발급과 웹훅 수신 사이에 갱신 순서 문제가 생기고, 매핑이 유실되면 웹훅이 누구의 것인지 알 수 없어진다. `room` 이름은 `live_session.livekit_room_name`(UNIQUE)이다.
 
 작업 순서:
 1. AU-6 `media_consent` 쓰기 + `MemberService` — SS-2의 선행 검증이라 먼저 만든다
@@ -720,7 +728,7 @@ Q4 확정 시 재실측: 스파크 포인트 분리 여부.
 - **주문·재고·원장이 한 트랜잭션.** 포인트만 빠지고 주문이 없는 상태를 만들지 않는다.
 - **`HIDDEN` 상품은 SR-1 목록에서 제외하고 SR-2 직접 호출도 404** `PRODUCT_NOT_FOUND`. 목록 제외만으로는 부족하다.
 - **장바구니·환불·배송지는 보류**(v2). SR-3은 단일 상품 주문 1건이고 `OrderStatus.CANCELLED`는 enum에만 두고 전이 경로를 만들지 않는다 — 환불이 들어올 자리를 비워 두는 것이지 지금 구현하는 것이 아니다.
-- **주문 이행은 v1 범위 밖이다**(blueprint §10.5). `store_order`는 **주문 접수까지**만 책임진다. 기프티콘 발송 코드·수령 연락처·배송 상태 컬럼을 만들지 않는다. 실제 전달은 운영자가 수동으로 처리하는 것을 전제하고, 그 전제를 팀과 프론트에 명시한다 — 스토어 화면이 "발송 완료" 같은 상태를 기대하면 계약이 어긋난다.
+- **주문 이행은 v1 범위 밖이다**(api-spec SR-3·§7 FR-506). `store_order`는 **주문 접수까지**만 책임진다. 기프티콘 발송 코드·수령 연락처·배송 상태 컬럼을 만들지 않는다. 실제 전달은 운영자가 수동으로 처리하는 것을 전제하고, 그 전제를 팀과 프론트에 명시한다 — 스토어 화면이 "발송 완료" 같은 상태를 기대하면 계약이 어긋난다.
 
 ### 완료 게이트
 1. SR-1 → 상품 목록, `SOLD_OUT` 상태 표시. `HIDDEN` 상품 미노출 + SR-2 직접 호출 404
@@ -843,7 +851,7 @@ Q5 확정 시 재실측: 신고 시 세션 처리 정책.
 - **AP-1은 본인·1회만.** `eviction_id` UNIQUE가 방어선 → 409 `APPEAL_ALREADY_FILED`. 요청 본문의 `reason_text`는 200자 제한이고 필수다 — 사유 없는 이의는 관리자가 판단할 근거가 없다.
 - **AP-1은 게이트 ④(제재)를 건너뛴다**(§0-3 SKIP_RULES). 퇴출 이의는 잘못된 퇴출을 되돌리는 유일한 수단인데(NFR-402), 별개의 제재가 걸려 있으면 구제 경로까지 함께 닫혀 3일짜리 이의 기한이 그대로 지나간다. AU-5(탈퇴 철회)를 제재 중에도 열어 두는 것과 같은 논리다. **연령 게이트 ⑤는 그대로 건다** — 퇴출당했다는 것은 이미 세션에 들어갔다는 뜻이라 연령 확인을 통과한 회원이다.
 - **타인의 퇴출과 존재하지 않는 퇴출을 같은 403 `FORBIDDEN`으로 응답한다.** 404를 주면 evictionId를 훑어 "그 번호의 퇴출이 실재한다"를 알아낼 수 있고, 퇴출 사실은 그 자체로 민감하다. 7단계 SR-5(없는 주문 404·타인 주문 403)와 방향이 반대로 보이지만 원칙은 같다 — **응답 두 종류가 갈리는 지점을 만들지 않는다**는 것이 핵심이고, 어느 쪽으로 통일하느냐는 그 자원의 기본 응답을 따른다. `APPEAL_NOT_FOUND`는 AD-6(관리자가 없는 이의를 처리)에서만 쓴다.
-- **`overdue`는 컬럼이 아니라 조회 조건이다**(blueprint §10.5). 미종결 AND `sla_due_at < now`를 그때그때 계산한다. **신고(9단계)와 같은 규칙이므로 판정식을 공용 헬퍼로 뽑아 두 콘솔이 같은 코드를 쓰게 한다** — 한쪽만 고쳐 두 큐의 SLA 판정이 갈리는 것이 이 구조에서 가장 흔한 사고다.
+- **`overdue`는 컬럼이 아니라 조회 조건이다**(api-spec AD-1·§5 '구 B3 폐지'). 미종결 AND `sla_due_at < now`를 그때그때 계산한다. **신고(9단계)와 같은 규칙이므로 판정식을 공용 헬퍼로 뽑아 두 콘솔이 같은 코드를 쓰게 한다** — 한쪽만 고쳐 두 큐의 SLA 판정이 갈리는 것이 이 구조에서 가장 흔한 사고다.
 - **인용 시 원복은 3종 세트다**: ①`eviction.revoked_at` 기록(행을 지우지 않는다 — 감사 기록이다) ②포인트 역분개(`APPEAL_REFUND` +300, 기존 -300 행은 그대로 둔다) ③해당일 완주 소급 재판정(D1 기준으로 다시 판정 → 완주면 `streak_day` INSERT + 완주 포인트 지급).
 - **역분개이지 삭제가 아니다.** 원장에서 행을 지우면 `balance_after` 연쇄가 깨지고 무슨 일이 있었는지 사라진다.
 - **소급 완주가 Streak 연속을 되살릴 수 있다.** 그날이 채워지면 이후 날짜의 연속 계산이 바뀐다 — `current_streak` 재계산이 필요하다. 이 재계산을 빠뜨리면 이의가 인용돼도 Streak는 끊긴 채로 남는다.
@@ -926,6 +934,12 @@ B4 대상: `delete_scheduled_at < now`인 WITHDRAW_PENDING. 처리 내용은 익
 4. **동시성 재실측**: 2단계 게이트 2(6스레드 동시 매칭)를 MySQL에서 재실행
 5. CORS 설정, 운영 프로필 검증, 배포
 
+**재기동 내성 이월 3건** (3차 검증 B의 실측 발견. 전부 12단계 몫으로 미룬 것이라 여기 등재한다)
+
+1. **재접속 유예 창을 DB로 내린다.** `session_participant`에 끊긴 시각 컬럼(`disconnected_at` 등)을 추가하고 `ReconnectGraceRegistry`의 메모리 맵을 대체한다. 지금 구조의 두 결함을 한 번에 없앤다 — ① 유예 도중 재기동하면 창이 사라져 끊긴 참가자가 `ACTIVE`로 남고 세션 종료 시 완주로 계산된다(실측: 5명이 유령으로 남아 예정 종료까지 유지되고 전원 완주 지급, 조기 종료 판정도 인원이 남은 것으로 보여 작동하지 않았다) ② 인스턴스가 둘이면 웹훅을 받은 쪽만 타이머를 쥐어 다른 쪽이 받은 재접속이 유예를 닫지 못한다. **`db-schema.md` 개정이 동반된다** — 컬럼 추가이므로 테이블 수는 그대로지만 `session_participant` 정의와 개발 주의 절의 실측 수치가 함께 바뀐다. 이 작업 전까지 v1은 단일 인스턴스 전제다.
+2. **종료 루틴의 다중 인스턴스 중복 실행을 막는다.** B1을 비롯한 `@Scheduled` 배치가 인스턴스마다 돌면 같은 세션의 종료 루틴이 동시에 두 번 들어온다. 지급·완주일·사후 정산 경고는 UNIQUE(`uk_pl_dedup`·`uk_streak_day`·`uk_warning`)가 막아 결과는 어긋나지 않지만, 매분 제약 위반 예외가 쌓여 진짜 장애를 덮는다. 스케줄러 락(ShedLock 류 또는 DB 기반 리더 선출)을 넣어 한 인스턴스만 돌게 한다. 1번과 함께 해야 수평 확장이 열린다.
+3. **`point_charge`의 시각 정합을 방어한다.** `approved_at`이 `created_at`보다 앞서는 행을 막는 장치가 없다. 승인 시각은 PG가 준 값을 그대로 쓰는데, 외부 시계가 우리보다 뒤처져 있으면 "승인이 생성보다 먼저"인 행이 원장에 남아 정산 조회의 기간 필터가 그 건을 놓친다. `approved_at >= created_at` 검증을 승인 경로에 넣고, MySQL 전환 시 CHECK 제약으로도 받친다.
+
 ### 이 단계의 함정
 - **시크릿 폴백 금지는 1단계에서 확보됐다.** 여기서는 실측만 한다: 운영 프로필 + 환경변수 미설정 → **기동 실패**가 정답이다. **필수 6종**: `MORAK_JWT_SECRET`·`MORAK_SOCIAL_HASH_PEPPER`·`MORAK_LIVEKIT_HOST`·`MORAK_LIVEKIT_API_KEY`·`MORAK_LIVEKIT_API_SECRET`·`MORAK_PG_SECRET_KEY`. 1단계의 3종에서 media-token 1종이 빠지고 LiveKit·PG 4종이 들어온 결과다 — 피벗으로 외부 의존이 늘었으니 기동 전제도 늘었다.
 - **dev 이중 스위치**: 운영 프로필은 `@Profile("dev")` 빈 자체가 없고 `morak.dev.enabled=false`(base 기본값). 하나만 믿지 않는다.
@@ -961,12 +975,14 @@ B4 대상: `delete_scheduled_at < now`인 WITHDRAW_PENDING. 처리 내용은 익
 | `POST /api/dev/batches/B1`·`B2`·`B4` | 각각 404 `ENDPOINT_NOT_FOUND` |
 | `POST /api/dev/sessions/seed` | 404 `ENDPOINT_NOT_FOUND` |
 | `GET /h2-console`·`/h2-console/` | 404. 콘솔이 매핑 자체를 갖지 않는다 |
-| 404 응답 본문 | 전부 우리 규격 — `{"error":{"code":"ENDPOINT_NOT_FOUND","message":"존재하지 않는 경로입니다.","details":{}}}` |
+| 404 응답 본문 | 전부 우리 규격 — `{"error":{"code":"ENDPOINT_NOT_FOUND","message":"존재하지 않는 경로입니다.","details":null}}` |
 | 대조: `GET /api/members/me` | 401 `UNAUTHORIZED`. 전 경로가 404인 게 아니라 dev 경로만 사라진 것이다 |
 | `ddl-auto=validate` + 컬럼 1개 제거 | 기동 실패. `Schema validation: missing column [session_id] in table [streak_day]` |
 | `ddl-auto=validate` + `uk_streak_day` 제거 | **정상 기동.** validate는 UNIQUE 제약을 보지 않는다 |
 
-스키마 실측(H2, `ddl-auto=update` 생성): 테이블 24 · PK 24 · UNIQUE 17 · **FK 0** · 인덱스 항목 57. DEFAULT 절이 붙은 컬럼 0개, enum 컬럼은 네이티브 `ENUM`. `db-schema.md` 개발 주의 절의 서술과 일치한다.
+스키마 실측(H2, `ddl-auto=update` 생성): 테이블 24 · PK 24 · UNIQUE 17 · **FK 0** · 인덱스 항목 60(그중 명명 인덱스 `idx_*` 19종). DEFAULT 절이 붙은 컬럼 0개, enum 컬럼은 네이티브 `ENUM`. `db-schema.md` 개발 주의 절의 서술과 일치한다.
+
+인덱스 항목이 57에서 60으로 는 것은 `e6c8e99`에서 배치 스캔용 3종(`idx_sp_award`·`idx_ev_revoked`·`idx_pc_expire`)을 추가했기 때문이다.
 
 `MORAK_DB_URL`·`MORAK_DB_USERNAME`·`MORAK_DB_PASSWORD`도 없으면 기동은 실패하지만 **원인 메시지가 다르다** — 각각 `'url' must start with "jdbc"`, `Wrong user name or password`다. 미해석 플레이스홀더가 문자열로 흘러 들어가 뒤늦게 터지기 때문이다. 배포 중 이 메시지를 보면 DB 문제가 아니라 환경변수 누락을 먼저 의심한다.
 

@@ -1737,6 +1737,11 @@ UPDATE session_participant
 - **DEV-3** `POST /api/dev/sessions/seed` · `{"memberId": 1042, "dates": ["2026-08-08", "2026-08-09", "2026-08-10"]}` → 해당 일자에 완주한 `live_session`(ENDED) + `session_participant`(completed=true) + `streak_day`를 만든다. 구 `POST /api/dev/proofs/seed`의 대체다
 - **DEV-4** `POST /api/dev/batches/{B1|B2|B4|B5}` → 해당 배치 즉시 실행. B3(SLA 마킹)은 폐지되어 트리거 대상이 아니다. 응답은 `{"batch": "B2", "processed": 2}`(처리 건수 — 게이트 실측용, 개발 전용이라 공개 계약 아님). 없는 배치 이름은 404
 
+**DEV-2 시계 조작 주의 2건** (3차 검증 B 실측)
+
+- **시계를 민 채 재기동하면 시계만 리셋되고 미래 시각 데이터는 남는다.** 오프셋은 프로세스 메모리에 있어 재기동으로 사라지지만, 그 시계로 만들어진 `ends_at`·`expires_at`은 DB에 미래 시각으로 남는다. 실측에서 이상 3종이 나왔다 — 이미 끝났어야 할 세션이 `LIVE`로 계속 살아 있고, 만료됐어야 할 매칭 요청이 대기열을 점유하며, B1·B2가 대상을 찾지 못해 둘 다 0건을 돌려준다. **재기동 전 `POST /api/dev/clock` `{"reset": true}`(또는 `offsetMinutes: 0`)로 시계를 되돌리는 것이 규약이다.** 이미 벌어졌다면 남은 미래 시각 행을 지우거나 같은 오프셋으로 시계를 다시 밀어야 한다.
+- **`offsetMinutes`를 토큰 유효 기간 이상 밀면 모든 API 호출이 막힌다.** JWT는 `jwt.expire-hours: 24`, 즉 1440분짜리다. 1440 이상을 밀면 발급돼 있던 토큰이 전부 만료로 판정돼 401 `UNAUTHORIZED`가 되고, 재발급을 받으려면 로그인을 해야 하는데 그 호출도 같은 시계를 본다. Streak 일 경계처럼 하루를 넘겨야 하는 실측은 **1440분 미만으로 밀고 그 안에서 날짜만 넘기거나**, 시계를 민 뒤 토큰을 새로 발급받아 진행한다.
+
 **DEV 3종의 응답은 공개 계약이 아니다.** 개발 프로필에서만 뜨고 프론트가 호출할 일이 없으므로 openapi에 스키마를 두되 `개발 전용`으로 표시한다. DEV-2에는 조회(`GET /api/dev/clock`)도 있어 현재 모드·오프셋·서버 시각을 돌려준다 — 게이트가 "지금 서버가 몇 시로 보고 있는가"를 알아야 시각 기반 판정을 실측할 수 있다.
 
 ---
@@ -1878,7 +1883,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 
 METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_REQUIRED, GOAL_ALREADY_ACTIVE, REMATCH_COOLDOWN, DUPLICATE_ABSENCE_EVENT, ABSENCE_RATE_LIMITED, ALREADY_EVICTED, PAUSE_ALREADY_USED, PAUSE_NOT_ACTIVE, INVALID_WEBHOOK_SIGNATURE, INSUFFICIENT_POINT, PRODUCT_NOT_FOUND, OUT_OF_STOCK, DUPLICATE_ORDER, ORDER_NOT_FOUND, CHARGE_NOT_FOUND, PAYMENT_AMOUNT_MISMATCH, PAYMENT_NOT_APPROVED, APPEAL_ALREADY_FILED, APPEAL_NOT_FOUND
 
-신설 22종, 전체 52종이다. `METHOD_NOT_ALLOWED`·`UNSUPPORTED_MEDIA_TYPE`은 3부-A 이후에 추가했다 — 잡지 않으면 전역 `Exception` 핸들러가 500으로 덮어, 프론트가 잘못 부른 요청을 서버 장애로 읽고 재시도한다.
+신설분은 바로 위 목록이 전부이고, 전체 코드는 §6-1 표의 행 수가 정본이다. `METHOD_NOT_ALLOWED`·`UNSUPPORTED_MEDIA_TYPE`은 3부-A 이후에 추가했다 — 잡지 않으면 전역 `Exception` 핸들러가 500으로 덮어, 프론트가 잘못 부른 요청을 서버 장애로 읽고 재시도한다.
 
 ---
 
@@ -1932,9 +1937,11 @@ METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_
 
 ## §8. 잠정 결정 요약
 
-아래 항목은 팀 확정 전 잠정 적용분이다. 확정 결과에 따라 해당 엔드포인트 명세가 바뀐다. 상세는 `docs/open-decisions.md`.
+이 절이 `Dn` 번호의 유일한 정의처다. 다른 문서와 코드 주석의 `D8`·`D17` 같은 표기는 전부 아래 표를 가리킨다. **`Dn`(설계 결정)과 `open-decisions.md`의 `D-n`(값 확정 대기 안건)은 다른 체계이며 번호가 서로 대응하지 않는다.**
 
-| # | 결정 | 잠정 내용 | 영향 엔드포인트 |
+★가 붙은 D1~D7만 잠정이다. 팀 확정 결과에 따라 해당 엔드포인트 명세가 바뀐다. 상세는 `docs/open-decisions.md`.
+
+| # | 결정 | 잠정 내용 | 관련 지점 |
 |---|---|---|---|
 | ★D1 (Q1) | 세션 완주 정의 | 세션 종료 시각까지 참가 상태 유지(LEFT·EVICTED 아님). Pause 10분은 재실 인정. 재실 비율 기준 없음 | SS-7, SS-8, AD-6, B1 |
 | ★D2 (Q2) | Streak 단위 | 일 단위. 하루 1세션 이상 완주 → 그날 완주(+1). UNIQUE(member, date)로 멱등 | AU-2, SS-8, B1 |
@@ -1944,12 +1951,25 @@ METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_
 | ★D6 (Q5) | 신고 시 세션 처리 | 아무도 세션에서 나가지 않는다. 상호 비노출(클라이언트) + `match_block` 양방향 등재(재매칭 영구 차단). 구 기획의 "신고자 즉시 퇴장"은 폐기 | RP-1 |
 | ★D7 (Q6) | 만 14세 미만 처리 | 가입 자체 차단. 미만 판정 시 계정을 만들지 않는다(생성된 임시 상태면 즉시 삭제). 구 코드의 "가입 유지 + 기능 차단"에서 변경 | AU-1, AU-3 |
 
-아래 3건은 이후 검토에서 **확정**된 항목이다(잠정 아님). 초기 서술과 달라진 부분이 있어 함께 남긴다.
+아래는 **확정**된 항목이다(잠정 아님). D13·D15는 초기 서술에서 달라진 부분이 있어 변경분을 함께 적었다.
 
-| # | 결정 | 확정 내용 | 영향 엔드포인트 |
+| # | 결정 | 확정 내용 | 관련 지점 |
 |---|---|---|---|
+| D8 | 매칭 조건 | 시간 단일 축이며 `{60, 120, 180, 240}` 4종 고정 — 이 목록이 곧 `match_lock` 조건 행이다. 대기 `match.wait-expire-minutes` 경과 시 자동 만료 후 재시도 안내. FR-202 인접 시간대 합류는 보류 | MT-1, MT-2, B2 |
+| D9 | Pause 초과 처리 | `session.pause-limit-minutes` 초과 복귀는 경고 1회 + Pause 강제 종료(카메라 재개). 그 경고가 3회째면 그대로 퇴출된다 — Pause가 퇴출 회피 수단이 되지 않게 하는 장치다 | SS-5, SS-6, B1 |
+| D10 | 자율 퇴장 처리 | 포인트 차감 없음, 그 세션만 미완주. 사유 enum 필수 | SS-7, SS-8 |
+| D11 | 경고 카운터 범위 | 세션 스코프. 세션이 끝나면 소멸하고 계정에 남는 효과가 없다. 계정 누적 매너 점수는 Phase 4 | SS-4, SS-6, SS-8 |
+| D12 | 조기 종료 | 잔여 인원이 `session.min-participants` 미만이면 세션을 즉시 종료한다(`end_reason=EARLY_UNDER_MIN`). 그 시점까지 남아 있던 참가자는 완주로 인정 | SS-7, SS-8, SS-10, B1 |
 | D13 | 연결 끊김 처리 | 자리비움 경고와 **별개 축**. 90초 이내 재접속은 아무 일 없음, 초과는 `LEFT(DEVICE_ISSUE)` 자동 처리 — 경고·포인트 차감 없이 그 세션만 미완주. 자리비움 경고는 캠 연결 상태에서 얼굴 미검출 60초 초과일 때만 | SS-4, SS-8, SS-10 |
+| D14 | 재매칭 쿨다운 | 퇴출자는 `eviction.created_at + match.rematch-cooldown-minutes`까지 MT-1이 409 `REMATCH_COOLDOWN`으로 막힌다. 본인에게만 걸리며 상대와 무관하다 | MT-1, AP-1 |
 | D15 보충 | 완주 포인트 기준 | 실제 재실 시간이 아니라 `targetMinutes` 기준. 조기 종료(D12)로 30분 만에 끝난 60분 세션도 +100 | SS-8, B1 |
+| D16 | 결제 범위 | 포인트 충전은 웹 PG 테스트 모드(토스페이먼츠) 1회 왕복만이고 IAP는 보류. 스토어 주문은 포인트 전액 결제만 지원한다. FR-505의 "실물 + 인앱결제 혼합"은 앱 스토어 정책과 충돌해 구현하지 않는다(팀 전달 사항) | SR-3, PY-1, PY-2, PY-3 |
+| D17 | 영상·스티커 무저장 | 세션 영상은 어떤 경로로도 저장하지 않는다 — NFR-203의 "저장이 필요한 경우"를 없음으로 고정했고, 그래서 파기 대상도 관리자 열람 경로도 존재하지 않는다. 스티커는 LiveKit 데이터 채널로 클라이언트 간 전송하며 서버는 남기지 않는다 | AU-6, SS-11, AD-7 |
+| D18 | 매칭 호출 방식 | 비동기다. 등록(MT-1) 후 폴링(MT-2)으로 성사를 확인하며 푸시 알림은 v1에 없다 | MT-1, MT-2 |
+| D19 | 우선순위 축 | 분장표 MoSCoW 기준 | 구현 순서 전반 (implementation-plan '팀 미확정 항목' Q8) |
+| D20 | 약관 구성 | 필수 2종(`TOS`·`PRIVACY`) + 선택 1종(`MARKETING`). 위치정보 약관은 위치를 수집하지 않아 근거가 없으므로 두지 않는다 | AU-1 |
+| D21 | 세션 시작·종료 시각 | 6인 확정 즉시 `live_session`을 만들고 `started_at`은 그 확정 시각이다(대기 시간 미포함). `ends_at = started_at + target_minutes`이고 도래하면 배치가 자동 종료한다 | MT-1, SS-1, B1 |
+| D22 | 코드 패키지명 | `com.morak`를 유지한다. 서비스명과 문서 제목만 MoLock | 코드 전반 (db-schema '도메인 그룹핑') |
 | D23 | 마이크 정책 | v1 언뮤트 불가. SS-2 토큰에서 오디오 publish 권한을 제외해 서버가 강제(FR-301 "기본 Mute"의 구현) | SS-2 |
 
 값 확정 대기: 포인트 4종(1,000 / 100×h / 300 / 1,000), 매칭 시간 옵션 4종, 경고 임계 60초, 충전 원-포인트 환산 비율, 상품 목록·가격, 커머스 기록 보존 기간.

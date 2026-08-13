@@ -30,8 +30,22 @@ JDBC URL은 `jdbc:h2:mem:morak;MODE=MySQL;LOCK_TIMEOUT=3000` 입니다.
 
 ```bash
 curl http://localhost:8080/api/ping
-# {"error":{"code":"ENDPOINT_NOT_FOUND","message":"존재하지 않는 경로입니다.","details":{}}}
+# {"error":{"code":"ENDPOINT_NOT_FOUND","message":"존재하지 않는 경로입니다.","details":null}}
 ```
+
+### 재기동 실측·시연 시 주의 두 가지
+
+**파일 H2를 쓸 때는 URL에 `WRITE_DELAY=0`을 붙입니다.**
+`jdbc:h2:file:./data/morak;MODE=MySQL;LOCK_TIMEOUT=3000;WRITE_DELAY=0` 형태입니다.
+H2의 기본값은 500ms 비동기 기록이라, 그 사이에 프로세스를 죽이면 **이미 200을 돌려준
+커밋이 사라집니다**. 실측에서 로그인 10건 중 7건이 소실됐습니다. 붙이지 않으면 재기동
+실측의 결과 자체를 믿을 수 없습니다.
+
+**v1 배포는 단일 인스턴스가 전제입니다.**
+재접속 유예 창(D13)이 인스턴스 메모리에 있어서, 인스턴스를 둘 이상 띄우면 웹훅을 받은
+쪽만 타이머를 쥡니다. 다른 쪽이 받은 재접속은 유예를 닫지 못해 멀쩡한 참가자가 이탈로
+판정됩니다(실측 확인). 수평 확장은 12단계 과제이며, 유예 창을 DB로 내리는 것이 선결
+조건입니다.
 
 ## 설정 파일
 
@@ -113,10 +127,11 @@ com.morak
 | [docs/implementation-plan.md](docs/implementation-plan.md) | 구현 순서와 단계별 게이트 |
 | [docs/open-decisions.md](docs/open-decisions.md) | 아직 확정되지 않은 정책 |
 | [docs/git-convention.md](docs/git-convention.md) | 브랜치, 커밋, PR 규칙 |
-| [docs/screen-api-map.md](docs/screen-api-map.md) | 화면별 호출 API |
-| [docs/frontend-change-requests.md](docs/frontend-change-requests.md) | 프론트 전달 사항 |
+| [docs/screen-api-map.md](docs/screen-api-map.md) | 화면별 호출 API (구판 — 새 와이어프레임 수령 후 재작성) |
+| [docs/frontend-change-requests.md](docs/frontend-change-requests.md) | 프론트 전달 사항 (구판 — 새 와이어프레임 수령 후 재작성) |
 
-프론트엔드는 API 명세와 화면-API 매핑 두 개를 보시면 됩니다.
+프론트엔드는 API 명세를 먼저 보시면 됩니다. 화면-API 매핑은 구 모락 24화면 기준이라
+지금은 참고용입니다.
 `docs/openapi.yaml`은 `api-spec.md` v2.0 기준으로 재생성되어(2026-08-12) 같이 보셔도 됩니다.
 두 문서가 어긋나면 `api-spec.md`가 정본입니다.
 

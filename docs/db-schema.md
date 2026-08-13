@@ -2,7 +2,7 @@
 
 기획이 사진 인증 챌린지에서 실시간 캠 스터디로 바뀌면서 스키마의 절반이 근거를 잃었다. 인증 사진과 AI 판정을 중심으로 짜여 있던 14개 테이블(challenge_group·group_member·proof·proof_media·ai_judgment·ai_review_queue·sticker_reaction·media_access_log·final_report·completion_stats·challenge_post·post_like·kick_history·fill_in_history)을 폐기하고, 라이브 세션·자리비움 경고·포인트 원장·스토어를 담는 16개 테이블을 새로 넣었다. 회원·매칭·신고 계열 10개는 정의를 승계하되 그룹(challenge_group) 참조를 세션(live_session) 참조로 바꾸고, 시간 단일 매칭에 맞춰 조건 컬럼을 줄였다. 총 24개 테이블이다.
 
-> 자기완결 문서. 구 판본(v1.0)은 `docs/archive/`. 계약 정본은 `docs/api-spec.md`(enum·계산식·상태 전이는 그쪽이 유일 정의처, 여기 주석은 참조).
+> 자기완결 문서. 구 판본(v1.0)은 git 이력에서 본다. 계약 정본은 `docs/api-spec.md`(enum·계산식·상태 전이는 그쪽이 유일 정의처, 여기 주석은 참조).
 > MySQL 8 / InnoDB / utf8mb4. 개발은 H2 2.4.240(`MODE=MySQL;LOCK_TIMEOUT=3000`).
 > **UNIQUE 제약은 엔티티 `@Table(uniqueConstraints=…)`에도 반드시 선언한다** — `ddl-auto=update`만 믿으면 개발 DB에 방어선이 생기지 않아 게이트가 무의미해진다.
 > 개수는 §목록의 행 수로만 말한다.
