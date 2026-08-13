@@ -10,25 +10,32 @@
 
 ## 진행 현황판
 
+전 단계 구현이 끝났다. 남은 것은 실서비스 연동(카카오·토스페이먼츠)과 강의 자료 정리다.
+
 | 단계 | 이름 | 상태 |
 |---|---|---|
 | 0 | 프로젝트 골격·전역 예외 | 완료 |
-| 0.5 | enum·ErrorCode·정책값 교체 | 미착수 — **다음 작업** |
-| E | 엔티티 재편 | 미착수 |
-| O | OpenAPI 재생성 | 미착수 |
-| 1 | 회원·인증·JWT | 완료 (수정 3건 대기) |
-| 1.5 | 약관·목표·Streak 골격 | 미착수 |
-| 2 | 매칭 엔진 | 미착수 |
-| 3 | 라이브 세션 골격 | 미착수 |
-| 4 | 경고·퇴출·Pause | 미착수 |
-| 5 | 세션 종료·완주·포인트 지급 | 미착수 |
-| 6 | 포인트 원장·조회 | 미착수 |
-| 7 | 스토어·주문 | 미착수 |
-| 8 | PG 테스트 결제 | 미착수 |
-| 9 | 신고·차단·제재 | 미착수 |
-| 10 | 관리자 콘솔·이의 | 미착수 |
-| 11 | 탈퇴 완결 | 미착수 |
-| 12 | 운영 준비 | 미착수 |
+| 0.5 | enum·ErrorCode·정책값 교체 | 완료 |
+| E | 엔티티 재편 | 완료 |
+| O | OpenAPI 재생성 | 완료 |
+| 1 | 회원·인증·JWT | 완료 |
+| 1.5 | 약관·목표·Streak 골격 | 완료 |
+| 2 | 매칭 엔진 | 완료 |
+| 3 | 라이브 세션 골격 | 완료 |
+| 4 | 경고·퇴출·Pause | 완료 |
+| 5 | 세션 종료·완주·포인트 지급 | 완료 |
+| 6 | 포인트 원장·조회 | 완료 |
+| 7 | 스토어·주문 | 완료 |
+| 8 | PG 테스트 결제 | 완료 (개발용 스텁 기준) |
+| 9 | 신고·차단·제재 | 완료 |
+| 10 | 관리자 콘솔·이의 | 완료 |
+| 11 | 탈퇴 완결 | 완료 |
+| 12 | 운영 준비 | 진행 중 — 실 연동 2건이 남았다 |
+
+12단계에 남은 것: 카카오 `SocialClient`·토스페이먼츠 `PgClient` 실구현. 그 자리는 지금 dev가 아닌 프로필에서
+전부 거절하는 기본 구현(`RejectingSocialClient`·`RejectingPgClient`)이 채우고 있어, 운영 프로필로도 기동은 된다 —
+AU-1은 401 `INVALID_SOCIAL_TOKEN`, PY-2는 409 `PAYMENT_NOT_APPROVED`가 정상 동작이다.
+그 밖에 LiveKit `RemoveParticipant` 호출(`EvictionService`)과 신고 서술 텍스트 검열(`Report`)이 TODO로 남아 있다.
 
 ---
 
@@ -457,6 +464,7 @@ Q2·Q6 확정 시 재실측: Streak 단위, 가입 차단 정책.
 
 작업 순서:
 1. `com.morak.dev`의 `AdjustableClock`·`DevClockController` 커밋 + `DevBatchController`(DEV-4) + `@EnableScheduling`. **B2가 이 단계에서 처음 생기므로 배치 인프라를 함께 만든다**
+   (강의 순서 주: 실습에서는 `AdjustableClock`이 1강 1부 — 2빈 `AppConfig`를 최종 상태로 가르치는 결정에 따라 — 에서 먼저 옮겨져 커밋되므로, 학습자 기준 이 항목은 `DevClockController`부터다)
 2. `MatchLockRepository`에 `@Lock(PESSIMISTIC_WRITE) findByLockKey` + `MatchLockSeeder`(`ApplicationRunner`) — `match:60`·`match:120`·`match:180`·`match:240` 4행 시드
 3. Repository 4종 → `MatchService`(MT-1 성사 절차, MT-3, MT-2) → `MatchController` + dto
 4. `MatchExpireBatch`(B2)

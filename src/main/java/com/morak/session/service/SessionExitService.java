@@ -146,11 +146,19 @@ public class SessionExitService {
     }
 
     /**
-     * {@code room_finished} 웹훅이 부르는 정시 종료. 종료 루틴은 세션이 이미 끝났으면
-     * 아무것도 하지 않는다 — 웹훅은 중복 수신되고, 조기 종료가 먼저 닿았을 수도 있다.
+     * {@code room_finished} 웹훅이 부르는 종료. 종료 루틴은 세션이 이미 끝났으면 아무것도
+     * 하지 않는다 — 웹훅은 중복 수신되고, 조기 종료가 먼저 닿았을 수도 있다.
+     *
+     * <p><b>사유는 시각으로 가른다.</b> LiveKit이 방을 닫는 시점은 우리가 정하지 않는다 —
+     * 마지막 참가자가 나가면 예정 시각과 무관하게 닫힌다. 그때도 NORMAL로 적으면 운영 지표에서
+     * 30분 만에 빈 방이 된 세션과 60분을 다 채운 세션이 같은 줄에 선다. 지급은 달라지지
+     * 않는다({@code target_minutes} 기준, D15 보충) — 바뀌는 것은 종료 사유 기록뿐이다.
      */
     public void endOnRoomFinished(LiveSession session) {
-        closingService.closeSession(session.getId(), SessionEndReason.NORMAL,
-                LocalDateTime.now(clock));
+        LocalDateTime now = LocalDateTime.now(clock);
+        SessionEndReason reason = now.isBefore(session.getEndsAt())
+                ? SessionEndReason.EARLY_UNDER_MIN
+                : SessionEndReason.NORMAL;
+        closingService.closeSession(session.getId(), reason, now);
     }
 }

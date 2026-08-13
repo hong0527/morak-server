@@ -4,6 +4,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.Date;
 import javax.crypto.SecretKey;
@@ -27,7 +28,9 @@ public class JwtProvider {
     public JwtProvider(@Value("${morak.jwt.secret}") String secret,
                        @Value("${morak.jwt.expire-hours}") long expireHours,
                        Clock clock) {
-        this.key = Keys.hmacShaKeyFor(secret.getBytes());
+        // 인코딩을 명시하지 않으면 플랫폼 기본값을 따라간다. 서버와 컨테이너의 기본
+        // 인코딩이 다르면 같은 설정값에서 다른 키가 나와 발급한 토큰을 스스로 못 읽는다.
+        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expireMillis = expireHours * 60 * 60 * 1000;
         this.clock = clock;
     }

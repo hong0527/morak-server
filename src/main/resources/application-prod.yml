@@ -19,3 +19,8 @@ spring:
 morak:
   dev:
     enabled: false       # 개발용 소셜 로그인은 운영에서 꺼진다
+
+# 소셜 로그인·PG 실구현은 12단계다. 그때까지 이 프로필은 전부 거절하는 기본 구현
+# (RejectingSocialClient·RejectingPgClient)을 쓴다 — AU-1은 401 INVALID_SOCIAL_TOKEN,
+# PY-2는 409 PAYMENT_NOT_APPROVED가 정상 동작이고, 그 밖의 API는 그대로 동작한다.
+# 통과시키는 스텁을 두지 않는 이유는 그 하나로 인증 없는 로그인과 결제 없는 적립이 열리기 때문이다.

@@ -27,6 +27,9 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>10분을 넘긴 채 복귀조차 하지 않은 경우의 정산은 5단계 세션 종료 배치(B1)가 같은
  * 규칙으로 한다. 여기에 별도 스위퍼를 두면 판정 주체가 둘이 되어 경고가 두 번 붙는다.
+ *
+ * <p><b>시작은 열려 있는 자리비움 구간을 끊는다</b>({@link AbsenceJudgeService#closeAbsenceOnPause}).
+ * PAUSED 구간이 자리비움에 들어가지 않는다는 약속(★D1)은 그 마감이 있어야 성립한다.
  */
 @Service
 @Transactional
@@ -41,6 +44,7 @@ public class PauseService {
     private final WarningRepository warningRepository;
     private final EvictionService evictionService;
     private final SessionClosingService closingService;
+    private final AbsenceJudgeService absenceJudgeService;
     private final Clock clock;
     private final int pauseLimitSeconds;
 
@@ -49,6 +53,7 @@ public class PauseService {
                         WarningRepository warningRepository,
                         EvictionService evictionService,
                         SessionClosingService closingService,
+                        AbsenceJudgeService absenceJudgeService,
                         Clock clock,
                         @Value("${morak.session.pause-limit-minutes}") int pauseLimitMinutes) {
         this.liveSessionRepository = liveSessionRepository;
@@ -56,6 +61,7 @@ public class PauseService {
         this.warningRepository = warningRepository;
         this.evictionService = evictionService;
         this.closingService = closingService;
+        this.absenceJudgeService = absenceJudgeService;
         this.clock = clock;
         this.pauseLimitSeconds = pauseLimitMinutes * SECONDS_PER_MINUTE;
     }
@@ -68,9 +74,12 @@ public class PauseService {
      */
     public PauseStartResponse start(Long memberId, Long sessionId) {
         LiveSession session = findSession(sessionId);
-        requireParticipant(sessionId, memberId);
+        SessionParticipant participant = requireParticipant(sessionId, memberId);
         requireLive(session);
         LocalDateTime now = LocalDateTime.now(clock);
+        // 열려 있는 자리비움 구간을 Pause 시작 시각으로 끊는다. 상태 전이보다 먼저다 —
+        // 여기서 3회째 경고로 퇴출되면 아래 조건부 UPDATE가 0행이 되어 409로 끝난다.
+        absenceJudgeService.closeAbsenceOnPause(sessionId, participant, now);
         int updated = sessionParticipantRepository.startPause(session.getId(), memberId, now,
                 ParticipantStatus.ACTIVE, ParticipantStatus.PAUSED);
         if (updated == 0) {

@@ -9,6 +9,7 @@ import com.morak.member.type.AgreementType;
 import com.morak.member.type.SocialProvider;
 import com.morak.session.entity.LiveSession;
 import com.morak.session.entity.SessionParticipant;
+import com.morak.session.repository.EvictionRepository;
 import com.morak.session.repository.LiveSessionRepository;
 import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.store.entity.Product;
@@ -43,6 +44,7 @@ public class TestFixtures {
     private final MemberRepository memberRepository;
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
+    private final EvictionRepository evictionRepository;
     private final ProductRepository productRepository;
     private final TransactionTemplate transactionTemplate;
     private final JdbcTemplate jdbcTemplate;
@@ -51,6 +53,7 @@ public class TestFixtures {
                         MemberRepository memberRepository,
                         LiveSessionRepository liveSessionRepository,
                         SessionParticipantRepository sessionParticipantRepository,
+                        EvictionRepository evictionRepository,
                         ProductRepository productRepository,
                         PlatformTransactionManager transactionManager,
                         JdbcTemplate jdbcTemplate) {
@@ -58,6 +61,7 @@ public class TestFixtures {
         this.memberRepository = memberRepository;
         this.liveSessionRepository = liveSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
+        this.evictionRepository = evictionRepository;
         this.productRepository = productRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.jdbcTemplate = jdbcTemplate;
@@ -120,6 +124,14 @@ public class TestFixtures {
         return sessionParticipantRepository.findBySessionIdAndMemberId(sessionId, memberId)
                 .orElseThrow(() -> new IllegalStateException(
                         "참가자가 없다: session=" + sessionId + ", member=" + memberId));
+    }
+
+    /** 이의 신청(AP-1)이 필요로 하는 퇴출 번호. uk_eviction이 세션·회원 쌍의 유일성을 보장한다. */
+    public Long evictionId(Long sessionId, Long memberId) {
+        return evictionRepository.findBySessionIdAndMemberId(sessionId, memberId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "퇴출이 없다: session=" + sessionId + ", member=" + memberId))
+                .getId();
     }
 
     public LiveSession session(Long sessionId) {

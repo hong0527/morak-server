@@ -14,9 +14,11 @@ import com.morak.session.dto.response.AppealProcessResponse;
 import com.morak.session.dto.response.AppealSummaryResponse;
 import com.morak.session.entity.AppealCase;
 import com.morak.session.entity.Eviction;
+import com.morak.session.entity.LiveSession;
 import com.morak.session.entity.SessionParticipant;
 import com.morak.session.repository.AppealCaseRepository;
 import com.morak.session.repository.EvictionRepository;
+import com.morak.session.repository.LiveSessionRepository;
 import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.type.AppealStatus;
 import com.morak.session.type.DecidedBy;
@@ -64,6 +66,7 @@ public class AppealAdminService {
     private final AppealCaseRepository appealCaseRepository;
     private final EvictionRepository evictionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
+    private final LiveSessionRepository liveSessionRepository;
     private final MemberRepository memberRepository;
     private final SessionClosingService sessionClosingService;
     private final PointService pointService;
@@ -118,6 +121,9 @@ public class AppealAdminService {
         if (appeal.getStatus() != AppealStatus.PENDING) {
             throw new BusinessException(ErrorCode.ALREADY_PROCESSED);
         }
+        if (request.decision() == AppealStatus.ACCEPTED) {
+            rejectIfSessionLive(appeal);
+        }
         appeal.decide(request.decision(), DecidedBy.ADMIN, request.note(), now);
 
         if (request.decision() == AppealStatus.REJECTED) {
@@ -125,6 +131,28 @@ public class AppealAdminService {
             return AppealProcessResponse.of(appeal, 0, false, currentStreak(appeal.getMemberId(), now));
         }
         return accept(adminId, appeal, now);
+    }
+
+    /**
+     * 진행 중인 세션의 퇴출은 인용할 수 없다(409 {@code SESSION_NOT_ENDED}).
+     *
+     * <p>완주 소급은 세션이 끝난 뒤에만 성립한다 — 아직 진행 중이면 완주 여부가 정해지지 않아
+     * {@link SessionClosingService#restoreCompletion}이 false를 돌려주고, 그 사이 이의는 이미
+     * ACCEPTED로 종결돼 재처리 경로가 없다. 퇴출만 취소되고 완주는 영영 복구되지 않는 상태다.
+     *
+     * <p>그래서 여기서 끊어 이의를 PENDING으로 남긴다. 관리자는 세션이 끝난 뒤 같은 이의를
+     * 다시 처리하면 되고, 퇴출 취소·환급·완주 소급이 그때 한꺼번에 성립한다.
+     */
+    private void rejectIfSessionLive(AppealCase appeal) {
+        Eviction eviction = evictionRepository.findById(appeal.getEvictionId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "이의의 근거 퇴출이 없다: appeal=" + appeal.getId()));
+        boolean live = liveSessionRepository.findById(eviction.getSessionId())
+                .map(LiveSession::isLive)
+                .orElse(false);
+        if (live) {
+            throw new BusinessException(ErrorCode.SESSION_NOT_ENDED);
+        }
     }
 
     private AppealProcessResponse accept(Long adminId, AppealCase appeal, LocalDateTime now) {

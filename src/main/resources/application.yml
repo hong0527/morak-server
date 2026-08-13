@@ -4,6 +4,10 @@ spring:
     default: dev
 
   jpa:
+    # 뷰까지 영속성 컨텍스트를 끌고 가지 않는다. 켜 두면 컨트롤러·직렬화 단계에서 지연 로딩이
+    # 조용히 성공해, 서비스 밖으로 준영속 엔티티를 내보내는 코드가 테스트에서 드러나지 않는다.
+    # DTO 변환은 Service에서 한다는 규칙(CLAUDE.md §4-2)과 같은 이야기다.
+    open-in-view: false
     properties:
       hibernate:
         format_sql: true
@@ -29,6 +33,9 @@ morak:
 
   dev:
     enabled: false          # dev 프로필에서만 true. @Profile("dev")와 AND 조건
+
+  scheduling:
+    enabled: true           # 배치(B1·B2·B4·B5)와 재접속 유예 스위퍼. 테스트만 false로 끈다
 
   match:
     # 매칭 조건의 전부. 이 목록이 곧 match_lock 조건 행이라 값을 바꾸면 시더가 새 행을 만든다.

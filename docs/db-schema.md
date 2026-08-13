@@ -122,7 +122,7 @@ CREATE TABLE member_agreement (
 | agreed_at | 동의 시각. 철회는 행 삭제로 표현 |
 
 **불변식**
-- 회원·종류당 동의 행은 최대 1개다(`uk_ma`). 재동의는 upsert.
+- 회원·종류당 동의 행은 최대 1개다(`uk_ma`). **v1에는 재동의 경로가 없다** — 행은 AU-1 가입 트랜잭션에서만 만들어지고, 같은 소셜 계정으로 다시 로그인해도 손대지 않는다. `uk_ma`는 한 요청에 같은 종류가 두 번 실려 오는 경우와, 나중에 약관 재동의 API가 생겼을 때를 막는 울타리다. 갱신형 동의가 필요한 곳은 `media_consent`이고 그쪽은 동의 시각을 덮어쓴다(AU-6).
 - TOS·PRIVACY 두 행이 없는 회원은 서비스 API를 쓸 수 없다(AU-1 가입 트랜잭션에서 함께 INSERT, 누락 시 `AGREEMENT_REQUIRED`).
 - MARKETING 행의 유무가 곧 마케팅 수신 동의 여부다. 별도 플래그를 두지 않는다.
 
@@ -839,7 +839,7 @@ member · member_agreement · member_goal · streak_day · media_consent · bloc
 | 제약 | 막는 사고 | 위반 시 응답 |
 |---|---|---|
 | `uk_member_provider` | 같은 소셜 계정으로 회원이 둘 생기는 것 | 로그인 경로로 흡수 |
-| `uk_ma` | 재동의 요청이 동의 이력을 중복 적재하는 것 | upsert |
+| `uk_ma` | 한 요청에 같은 종류가 두 번 실려 동의 행이 중복 적재되는 것 | 접수 전에 집합으로 정규화해 발생시키지 않는다 |
 | `uk_streak_day` | 하루에 두 세션을 완주한 사람의 Streak가 2 오르는 것, B1 재실행이 완주일을 부풀리는 것 | 무시(이미 기록됨) |
 | `uk_mr_active` | **이중 배정** — 대기 중인 사람이 요청을 한 번 더 넣어 두 세션에 동시 배정되는 것 | 409 `DUPLICATE_MATCH_REQUEST` |
 | `uk_mb` | 같은 상대를 여러 번 신고했을 때 차단 행이 쌓이는 것 | 무시(이미 차단됨) |

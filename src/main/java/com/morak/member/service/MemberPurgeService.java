@@ -5,6 +5,7 @@ import com.morak.match.entity.MatchLock;
 import com.morak.match.repository.MatchBlockRepository;
 import com.morak.match.repository.MatchLockRepository;
 import com.morak.match.repository.MatchRequestRepository;
+import com.morak.match.service.MatchService;
 import com.morak.member.entity.BlockedSocialHash;
 import com.morak.member.entity.Member;
 import com.morak.member.repository.BlockedSocialHashRepository;
@@ -62,6 +63,7 @@ public class MemberPurgeService {
     private final WarningRepository warningRepository;
     private final SanctionRepository sanctionRepository;
     private final SessionExitService sessionExitService;
+    private final MatchService matchService;
     private final SocialHasher socialHasher;
     private final Clock clock;
 
@@ -93,6 +95,10 @@ public class MemberPurgeService {
         // AU-4가 신청 시점에 이미 내보냈지만, 유예 30일 사이에 다시 들어갈 경로가 없다는
         // 보장을 이 배치가 지지 않는다. 남은 참가가 없으면 아무 일도 일어나지 않는다.
         sessionExitService.leaveAll(memberId, LeftReason.WITHDRAWAL);
+        // 같은 이유로 활성 매칭 요청도 방어적으로 놓아 준다. 아래에서 요청 행을 통째로 지우지만,
+        // 그 삭제는 조건 행을 잠그지 않아 6인 확정을 진행 중인 트랜잭션과 겹칠 수 있다.
+        // cancelActiveRequest는 조건 행 잠금·조건부 UPDATE를 함께 하므로 그 경합을 직렬화한다.
+        matchService.cancelActiveRequest(memberId);
 
         memberAgreementRepository.deleteByMemberId(memberId);
         memberGoalRepository.deleteByMemberId(memberId);
@@ -115,7 +121,12 @@ public class MemberPurgeService {
             participant.clearPersonalText();
         }
 
-        member.anonymize(now);
+        // 위 퇴장·요청 해제가 지급과 벌크 UPDATE로 영속성 컨텍스트를 비웠을 수 있다. 처음 읽은
+        // 인스턴스는 그때부터 준영속이라 거기 찍은 익명화는 flush되지 않고 사라진다
+        // (MemberService.requestWithdrawal이 같은 이유로 재조회한다).
+        Member target = memberRepository.findById(memberId)
+                .orElseThrow(() -> new IllegalStateException("파기 대상 회원이 사라졌다: " + memberId));
+        target.anonymize(now);
         log.info("탈퇴 회원 파기: member={}", memberId);
         return 1;
     }

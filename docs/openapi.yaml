@@ -623,7 +623,7 @@ components:
           description: 유효 제재가 없으면 `null`
       example:
         memberId: 1042
-        nickname: 익명 치타37
+        nickname: 익명 치타037
         role: PARTICIPANT
         memberStatus: ACTIVE
         ageVerification: VERIFIED
@@ -835,7 +835,7 @@ components:
         roomName: molock-5501
         participants:
         - memberId: 1042
-          nickname: 익명 치타37
+          nickname: 익명 치타037
           isMe: true
           status: ACTIVE
           warningCount: 1
@@ -1153,7 +1153,7 @@ components:
           evictionId: null
         participants:
         - memberId: 1042
-          nickname: 익명 치타37
+          nickname: 익명 치타037
           isMe: true
           participantStatus: ACTIVE
           completed: true
@@ -2254,7 +2254,7 @@ components:
         - appealId: 41
           evictionId: 77
           memberId: 1042
-          nickname: 익명 치타37
+          nickname: 익명 치타037
           sessionId: 5501
           warningCount: 3
           status: PENDING
@@ -2401,7 +2401,7 @@ components:
           evictedCount: 1
           participants:
           - memberId: 1042
-            nickname: 익명 치타37
+            nickname: 익명 치타037
             status: ACTIVE
             warningCount: 1
             paused: false
@@ -4282,7 +4282,7 @@ paths:
         \ 퇴출로 유지하고 취소 사실은 별도 시각으로 표현합니다.\n- 인용 시 패널티는 역분개로 되돌아가고, 원래의 차감 행은 지우지 않습니다.\n\
         - 인용 시 완주를 소급 재판정합니다 — 퇴출이 없었다면 세션 종료까지 참가한 것으로 보아 완주 처리하고 포인트를 지급합니다.\n \
         \ Streak도 함께 재계산되며 목표 달성 조건을 채우면 달성 처리됩니다.\n  단, 세션이 아직 진행 중이면 완주 여부가 정해지지\
-        \ 않았으므로 소급하지 않습니다(`sessionCompletedRestored=false`).\n- 되돌릴 차감이 아직 원장에 없으면 역분개도\
+        \ 않았으므로 인용 자체를 409 `SESSION_NOT_ENDED`로 거절하고\n  이의는 대기 상태로 남습니다 — 기각은 세션 상태와 무관하게 언제든 가능합니다.\n- 되돌릴 차감이 아직 원장에 없으면 역분개도\
         \ 만들지 않습니다(`pointRefunded=0`). 역분개는 기존 기록을 뒤집는 것이지 새 지급이 아닙니다.\n- 재매칭 쿨다운은\
         \ 인용 시점부터 해제됩니다.\n- 기각이면 상태와 메모만 기록하고 원복은 일어나지 않습니다.\n"
       parameters:
@@ -4313,7 +4313,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: '`ALREADY_PROCESSED` 이미 처리된 이의'
+          description: '`ALREADY_PROCESSED` 이미 처리된 이의 / `SESSION_NOT_ENDED` 진행 중 세션의 인용'
           content:
             application/json:
               schema:

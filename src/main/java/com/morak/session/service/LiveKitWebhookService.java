@@ -9,6 +9,7 @@ import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.type.ParticipantStatus;
 import io.livekit.server.WebhookReceiver;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Set;
 import livekit.LivekitWebhook.WebhookEvent;
@@ -105,7 +106,10 @@ public class LiveKitWebhookService {
         if (participant == null) {
             return;
         }
-        graceRegistry.close(session.getId(), participant.getMemberId());
+        // 이벤트 발생 시각으로 판단한다. 수신 시각을 쓰면 끊기기 전의 입장 이벤트가 뒤늦게
+        // 도착했을 때 방금 열린 유예 창을 지운다.
+        graceRegistry.closeIfNotBefore(session.getId(), participant.getMemberId(),
+                occurredAt(event));
         if (!PRESENT.contains(participant.getStatus())) {
             log.info("참여 상태가 아닌 참가자의 입장 이벤트라 기록하지 않는다: session={}, member={}, status={}",
                     session.getId(), participant.getMemberId(), participant.getStatus());
@@ -132,7 +136,21 @@ public class LiveKitWebhookService {
             // 이미 퇴장했거나 퇴출된 참가자에게는 유예 타이머를 걸지 않는다
             return;
         }
-        graceRegistry.open(session.getId(), participant.getMemberId(), LocalDateTime.now(clock));
+        graceRegistry.open(session.getId(), participant.getMemberId(), occurredAt(event));
+    }
+
+    /**
+     * 이벤트가 LiveKit에서 발생한 시각. 유예 창을 열고 닫는 판단이 <b>같은 시계</b>를 봐야
+     * 순서 뒤바뀜을 가려낼 수 있어 수신 시각을 쓰지 않는다.
+     *
+     * <p>{@code createdAt}이 비어 있으면(구버전 서버·테스트 이벤트) 수신 시각으로 대신한다.
+     * 그때는 순서 판정을 포기하는 것이지만, 값이 없다고 이벤트를 버리면 유예 창 자체가 서지 않는다.
+     */
+    private LocalDateTime occurredAt(WebhookEvent event) {
+        if (event.getCreatedAt() <= 0) {
+            return LocalDateTime.now(clock);
+        }
+        return LocalDateTime.ofInstant(Instant.ofEpochSecond(event.getCreatedAt()), clock.getZone());
     }
 
     private void onRoomFinished(WebhookEvent event) {

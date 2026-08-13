@@ -26,8 +26,9 @@ import lombok.NoArgsConstructor;
  * <p>{@code uk_ae}가 네트워크 재전송 멱등의 근거다. 같은 {@code clientSeq}가 다시 와도
  * 새 행이 생기지 않으므로 재시도만으로 경고가 쌓이지 않는다.
  *
- * <p>{@code occurredAt}은 단말이 보낸 값이라 신뢰할 수 없는 입력이다. 레이트리밋과
- * {@code reportedAt} 대조가 유일한 방어선이다.
+ * <p>{@code occurredAt}은 단말이 보낸 값이라 신뢰할 수 없는 입력이다. 울타리는 셋이다 —
+ * 멱등키({@code uk_ae}), {@code reportedAt} 간격으로 거는 레이트리밋, 그리고 세션 시작 이전과
+ * 미래를 잘라 내는 범위 검증({@code AbsenceJudgeService})이다.
  */
 @Entity
 @Table(

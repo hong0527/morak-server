@@ -22,8 +22,10 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * RP-1 신고 접수 (API명세서 RP-1, FR-402·FR-701).
@@ -38,7 +40,6 @@ import org.springframework.transaction.annotation.Transactional;
  * (고위험 24시간)가 피해자 보호 장치를 진다.
  */
 @Service
-@Transactional
 public class ReportService {
 
     private static final Logger log = LoggerFactory.getLogger(ReportService.class);
@@ -56,6 +57,7 @@ public class ReportService {
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final Clock clock;
+    private final TransactionTemplate transactionTemplate;
     private final int highSlaHours;
     private final int normalSlaHours;
 
@@ -66,8 +68,10 @@ public class ReportService {
                          LiveSessionRepository liveSessionRepository,
                          SessionParticipantRepository sessionParticipantRepository,
                          Clock clock,
+                         PlatformTransactionManager transactionManager,
                          @Value("${morak.report.sla-hours.high}") int highSlaHours,
                          @Value("${morak.report.sla-hours.normal}") int normalSlaHours) {
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.reportCaseRepository = reportCaseRepository;
         this.reportRepository = reportRepository;
         this.matchBlockRepository = matchBlockRepository;
@@ -79,7 +83,30 @@ public class ReportService {
         this.normalSlaHours = normalSlaHours;
     }
 
+    /**
+     * 접수 경계를 {@link TransactionTemplate}으로 직접 긋는다(PY-2·SR-3과 같은 이유).
+     *
+     * <p>이 경로가 걸릴 수 있는 제약이 셋이고 <b>셋 다 사전 조회를 함께 통과한 동시 요청에서만
+     * 터진다</b> — 같은 대상의 첫 신고 두 건이 각각 케이스를 여는 {@code uk_rc_open},
+     * 같은 사람이 같은 케이스에 두 번 접수하는 {@code uk_report}, 같은 쌍의 차단 행을 동시에
+     * 넣는 {@code uk_mb}다. 제약 위반은 트랜잭션이 끝나야 손에 들어오므로 잡는 자리가
+     * 트랜잭션 <b>밖</b>이어야 하고, 애너테이션만 붙이면 그 자리가 없어 500이 나간다.
+     *
+     * <p>대응은 재시도 한 번이다. 세 경우 모두 상대가 이미 커밋해 둔 행이 원인이라, 다시
+     * 실행하면 그 행이 보이는 상태에서 정상 경로가 답을 낸다 — 케이스는 병합되고, 중복 접수는
+     * 409 {@code DUPLICATE_REPORT}가 되며, 이미 있는 차단은 건너뛴다. 재시도에도 같은 예외가
+     * 나면 우리가 모르는 제약이므로 그대로 올려 보낸다.
+     */
     public ReportCreateResponse report(Long reporterId, ReportCreateRequest request) {
+        try {
+            return transactionTemplate.execute(status -> reportInternal(reporterId, request));
+        } catch (DataIntegrityViolationException e) {
+            log.info("신고 접수가 제약에 부딪혀 롤백됐다. 한 번 재시도한다: reporter={}", reporterId);
+            return transactionTemplate.execute(status -> reportInternal(reporterId, request));
+        }
+    }
+
+    private ReportCreateResponse reportInternal(Long reporterId, ReportCreateRequest request) {
         request.validateShape();
         LocalDateTime now = LocalDateTime.now(clock);
 

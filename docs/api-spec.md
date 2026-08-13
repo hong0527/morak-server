@@ -158,9 +158,12 @@ morak:
     expire-hours: 24
   dev:
     enabled: false                        # @Profile("dev")와 AND 조건 (이중 스위치)
+  scheduling:
+    enabled: true                         # 배치(B1·B2·B4·B5)와 재접속 유예 스위퍼. 테스트만 false
   security:
     social-hash-pepper: ${MORAK_SOCIAL_HASH_PEPPER}   # blocked_social_hash HMAC
   match:
+    target-minutes-options: 60,120,180,240  # 매칭 조건의 전부. 이 목록이 곧 match_lock 조건 행 (D8)
     wait-expire-minutes: 10               # 대기 만료 (D8)
     rematch-cooldown-minutes: 30          # 퇴출자 재매칭 쿨다운 (D14)
   session:
@@ -190,6 +193,10 @@ morak:
   pg:
     provider: toss-test                   # 테스트 모드 (D16, 잠정)
     secret-key: ${MORAK_PG_SECRET_KEY}
+    point-per-krw: 1                      # 1원 = 1포인트 (D-6, 잠정)
+    min-amount-krw: 1000                  # 1회 충전 하한. 미만이면 400 (잠정)
+    max-amount-krw: 1000000               # 1회 충전 상한. 초과면 400 (잠정)
+    ready-expire-minutes: 30              # 승인도 실패도 오지 않은 READY를 닫는 기한(B5)
 ```
 
 구 v1.0에서 폐기한 설정: `proof.*`, `ai.*`, `completion.*`, `media.retention-days`, `storage.local-path`, `security.media-token-secret`(촬영물 열람 HMAC이 사라져 쓰임이 없다), multipart 10MB 제한.
@@ -205,7 +212,7 @@ morak:
 | Streak 증가 | 하루에 1세션 이상 완주하면 그날 +1. `streak_day` UNIQUE(member_id, completed_on)로 멱등 | 하루 다회 완주해도 1일 (★D2) |
 | Streak 리셋 | 완주일이 하루라도 끊기면 연속이 끊긴다. **끊긴 날에 캐시를 0으로 써 두는 배치는 없고**, 다음 완주 때 `last_completed_on`과의 거리로 판정해 1부터 다시 센다 | 목표는 유지 (★D3). 회원 수만큼 매일 UPDATE를 도는 대신 판정을 다음 완주로 미룬 것이라 `streak_day` 기준 결과는 같다. 저장된 `member.current_streak`에는 끊긴 뒤에도 직전 연속 일수가 남으므로, **AU-2가 내려보내기 전에 이 판정을 서버에서 수행한다** — `last_completed_on`이 오늘도 어제도 아니면(NULL 포함) `streak.current = 0`. 어제는 오늘 완주로 이어질 수 있어 유지한다 |
 | 세션 시점 Streak | SS-8의 `before`·`after` = `streak_day`에서 해당 `completed_on`을 기준으로 **역방향 연속 행 수** | `member.current_streak`(현재값 캐시)를 쓰면 과거 세션 결과를 다시 열었을 때 그때가 아닌 지금 값이 나온다 |
-| 목표 달성 | `current_streak >= period_days` **AND** `member_goal.started_on` 이후의 `streak_day` 행 수 `>= period_days` | 두 조건이 모두 필요하다. 연속 캐시만 보면 **같은 연속을 몇 번이든 다시 팔 수 있다** — 7일을 채워 달성한 회원이 곧바로 7일 목표를 새로 걸면 `current_streak`가 이미 7이라 다음 날 한 번 완주하는 것으로 또 1,000p가 나간다(실측). 목표는 "지금까지 며칠 했는가"가 아니라 "여기서부터 며칠 더 하는가"이므로 시작일 이후의 완주일 수를 함께 본다. 거꾸로 완주일 수만 보면 중간에 하루 끊긴 7일도 달성이 되므로 연속 조건도 남긴다. 달성 시 `GoalStatus=ACHIEVED`, `point.goal-achieved` 지급, `BadgeCode=GOAL_ACHIEVED`. 재설정 가능 (★D3) |
+| 목표 달성 | `current_streak >= period_days` **AND** `member_goal.started_on` 이후의 `streak_day` 행 수 `>= period_days` | 두 조건이 모두 필요하다. 연속 캐시만 보면 **같은 연속을 몇 번이든 다시 팔 수 있다** — 7일을 채워 달성한 회원이 곧바로 7일 목표를 새로 걸면 `current_streak`가 이미 7이라 다음 날 한 번 완주하는 것으로 또 1,000p가 나간다(실측). 목표는 "지금까지 며칠 했는가"가 아니라 "여기서부터 며칠 더 하는가"이므로 시작일 이후의 완주일 수를 함께 본다. 거꾸로 완주일 수만 보면 중간에 하루 끊긴 7일도 달성이 되므로 연속 조건도 남긴다. 달성 시 `GoalStatus=ACHIEVED`, `point.goal-achieved` 지급, `BadgeCode=GOAL_ACHIEVED`. 달성 후에는 새 목표를 걸 수 있다(진행 중 변경은 불가 — §2 `member_goal`) (★D3) |
 | 경고 부여 | **캠이 연결된 상태에서** 얼굴 미검출 지속시간 > `session.absence-threshold-seconds` | 경고 1회. `warning.seq`는 세션 내 1~3 (★D4) |
 | 연결 끊김 처리 | `participant_left` 후 `session.reconnect-grace-seconds` 내 미복귀 | **자리비움 경고와 별개 축이다.** 경고·포인트 차감 없이 `LEFT(DEVICE_ISSUE)` 자동 처리, 그 세션만 미완주 (D13 확정) |
 | 퇴출 | `warning_count >= session.evict-warning-count` | `EVICTED` + `point.eviction-penalty` 차감 + LiveKit 강제 퇴장. **차감은 퇴출과 같은 트랜잭션에서 즉시 한다** — SS-4 응답이 `pointDelta=-300`을 싣는데 원장을 배치로 미루면 최대 1분 동안 그 값이 사실이 아니다. 이중 차감은 원장 멱등키 `(member_id, EVICTION_PENALTY, EVICTION, eviction_id)`가 막고, B1은 그 트랜잭션이 원장을 남기지 못하고 끊긴 경우의 안전망이다 |
@@ -257,11 +264,13 @@ morak:
 | **member** | ACTIVE | 가입(AU-1) 또는 AU-5 철회 | AU-4 → WITHDRAW_PENDING | `withdraw_requested_at`, `delete_scheduled_at`(+30일), 활성 match_request CANCELLED, 진행 세션 참가자 `LEFT(WITHDRAWAL)` |
 | | WITHDRAW_PENDING | AU-4 | AU-5·재로그인 → ACTIVE / B4(유예 30일 경과) → DELETED | 철회 시 시각 컬럼 NULL / 삭제 시 익명화 |
 | | DELETED | B4 | (종점) | `provider_user_id='deleted:{id}'`, 닉네임 치환, `birth_date` NULL, media_consent 삭제, 제재 이력자면 blocked_social_hash 등재. 커머스 기록(store_order·point_charge·point_ledger)은 파기 예외 |
-| **member_goal** | ACTIVE | AU-7 설정. `started_on`이 달성 판정의 기산점이다 | `started_on` 이후로 `period_days`일을 연속 완주 → ACHIEVED / AU-7 재설정 → CANCELLED | ACHIEVED 시 `achieved_at`, `point_ledger(GOAL_ACHIEVED)`, 뱃지 부여 (★D3) |
+| **member_goal** | ACTIVE | AU-7 설정. `started_on`이 달성 판정의 기산점이다 | `started_on` 이후로 `period_days`일을 연속 완주 → ACHIEVED | ACHIEVED 시 `achieved_at`, `point_ledger(GOAL_ACHIEVED)`, 뱃지 부여 (★D3) |
+| | ACHIEVED | 달성 판정 | (종점) | 여기서 AU-7을 다시 부르면 **새 목표 행이 생긴다**. 기존 행은 그대로 남는다 — 달성 이력이라 지우거나 상태를 바꿀 이유가 없다 |
+| | CANCELLED | (전이 경로 없음) | — | enum에만 있는 예약값이다. **진행 중인 목표를 중도 변경·취소하는 API가 v1에 없어서** 이 상태로 가는 경로가 하나도 없다. ACTIVE 목표가 있는 채로 AU-7을 부르면 409 `GOAL_ALREADY_ACTIVE`다(현재는 의도한 동작 — open-decisions D-9) |
 | | ACHIEVED | 완주 처리의 목표 달성 검사(§0-6) | AU-7 재설정 → 새 ACTIVE 행 생성 | (종점) |
 | | CANCELLED | AU-7 재설정·탈퇴 | (종점) | — |
 | **match_request** | WAITING | MT-1 등록 | MT-1 성사 → MATCHED / MT-3 → CANCELLED / B2(10분 경과) → EXPIRED / AU-4 탈퇴 → CANCELLED / AD-4 제재 → CANCELLED | 모든 이탈에서 `active_member_id=NULL`(조건 행 잠금 + 조건부 UPDATE 동반). MATCHED는 `matched_session_id` 기록, CANCELLED·EXPIRED는 `match_event` 기록 |
-| **live_session** | LIVE | MT-1 6인 확정(D21). `end_reason=NULL` | B1(`ends_at` 도래) → ENDED(`end_reason=NORMAL`) / SS-10 `room_finished` → ENDED(`end_reason=NORMAL`) / SS-4·SS-6·SS-7·SS-10·AU-4·AD-4로 잔여 인원 < `min-participants` → ENDED(`end_reason=EARLY_UNDER_MIN`) | **진입점이 셋이지만 종료 루틴은 하나다**(§5). 미결 정산 → 잔류 참가자 완주 판정 → 포인트 지급 → `streak_day` INSERT → 목표 달성 검사 → LiveKit 룸 종료 |
+| **live_session** | LIVE | MT-1 6인 확정(D21). `end_reason=NULL` | B1(`ends_at` 도래) → ENDED(`end_reason=NORMAL`) / SS-10 `room_finished` → ENDED(`ends_at` 이후면 `NORMAL`, 이전이면 `EARLY_UNDER_MIN`) / SS-4·SS-6·SS-7·SS-10·AU-4·AD-4로 잔여 인원 < `min-participants` → ENDED(`end_reason=EARLY_UNDER_MIN`) | **진입점이 셋이지만 종료 루틴은 하나다**(§5). 미결 정산 → 잔류 참가자 완주 판정 → 포인트 지급 → `streak_day` INSERT → 목표 달성 검사 → LiveKit 룸 종료 |
 | | ENDED | 종료 루틴 | (종점) | `ended_at`·`end_reason` 확정. SS-8 결과 조회 가능. 조기 종료여도 완주 포인트는 `target_minutes` 기준 그대로다(D15 보충) |
 | | CANCELLED | (v1에서 전이 경로 없음) | — | enum에는 정의되어 있으나 v1에서 이 상태로 보내는 경로가 없다 |
 | **session_participant** | ACTIVE | MT-1 6인 확정 | SS-5 → PAUSED / SS-7 → LEFT / SS-4·SS-6 경고 3회 → EVICTED / SS-10 재접속 유예 초과 → LEFT / AU-4·AD-4 → LEFT | 세션 종료 시각에 ACTIVE·PAUSED면 `completed=true`, `point_awarded` 기록 |
@@ -401,7 +410,7 @@ morak:
 ```json
 {
   "memberId": 1042,
-  "nickname": "익명 치타37",
+  "nickname": "익명 치타037",
   "role": "PARTICIPANT",
   "memberStatus": "ACTIVE",
   "ageVerification": "VERIFIED",
@@ -693,7 +702,7 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
   "roomName": "molock-5501",
   "participants": [
     {
-      "memberId": 1042, "nickname": "익명 치타37", "isMe": true,
+      "memberId": 1042, "nickname": "익명 치타037", "isMe": true,
       "status": "ACTIVE", "warningCount": 1, "paused": false, "pauseUsed": false,
       "joinedAt": "2026-08-12T09:00:14+09:00", "goalText": "정처기 필기 3단원",
       "evictionId": null
@@ -867,6 +876,8 @@ UPDATE session_participant
 
 영향 행 0이면 원인을 구분해 응답한다. `pause_used=true`면 409 `PAUSE_ALREADY_USED`, `status != ACTIVE`면 상태에 맞는 코드(`ALREADY_EVICTED` / `NOT_SESSION_PARTICIPANT`).
 
+부수효과: **위 UPDATE 직전에 열려 있는 자리비움 구간을 Pause 시작 시각으로 끊는다.** 마지막 `absence_event`가 `START`면 그 시각을 END로 간주해 SS-4와 같은 임계로 판정하고(초과면 경고 1회, 3회째면 퇴출), 서버가 만든 `END` 행을 남겨 구간을 닫는다(`client_seq`는 단말 값과 겹치지 않도록 음수를 쓴다). 닫지 않으면 화장실에 있던 시간이 자리비움 간격에 그대로 들어가, 복귀 후 도착한 END가 10분짜리 자리비움으로 판정된다 — "PAUSED 구간은 자리비움에 들어가지 않는다"(★D1·D9)가 성립하려면 이 마감이 필요하다. 반대로 **이미 임계를 넘긴 구간은 Pause를 켜도 무를 수 없다**(D9). 이 판정으로 퇴출되면 위 UPDATE가 0행이 되어 409 `ALREADY_EVICTED`로 끝난다.
+
 응답 200
 
 ```json
@@ -972,7 +983,7 @@ UPDATE session_participant
     "evictionId": null
   },
   "participants": [
-    {"memberId": 1042, "nickname": "익명 치타37", "isMe": true, "participantStatus": "ACTIVE", "completed": true, "warningCount": 1},
+    {"memberId": 1042, "nickname": "익명 치타037", "isMe": true, "participantStatus": "ACTIVE", "completed": true, "warningCount": 1},
     {"memberId": 1088, "nickname": "익명수달12", "isMe": false, "participantStatus": "EVICTED", "completed": false, "warningCount": 3},
     {"memberId": 1105, "nickname": "익명너구리04", "isMe": false, "participantStatus": "LEFT", "completed": false, "warningCount": 0}
   ]
@@ -1052,7 +1063,7 @@ UPDATE session_participant
 |---|---|
 | `participant_joined` | `session_participant.joined_at` 기록(최초 1회만). 유예 타이머가 걸려 있으면 해제 |
 | `participant_left` | 재접속 유예 타이머 시작 — `session.reconnect-grace-seconds`(90초) (D13) |
-| `room_finished` | 룸 종료 확인. 세션이 아직 `LIVE`면 §5 종료 루틴을 `end_reason=NORMAL`로 실행(미결 정산·완주 판정·지급까지 전부) |
+| `room_finished` | 룸 종료 확인. 세션이 아직 `LIVE`면 §5 종료 루틴을 실행(미결 정산·완주 판정·지급까지 전부). `end_reason`은 수신 시각이 `ends_at` 이후면 `NORMAL`, 그 전이면 `EARLY_UNDER_MIN` |
 
 `participant.identity`는 `member_id`의 문자열 표현이다(SS-2와 같은 규약). 이 값을 정수로 파싱해 참가자를 찾으며, 알 수 없는 identity는 200으로 흡수하고 로그만 남긴다.
 
@@ -1384,7 +1395,7 @@ UPDATE session_participant
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 소유권 본인
 
-트랜잭션·부수효과: `point_charge` 상태 전이 + `point_ledger` 적립 + 잔액 캐시 갱신이 한 트랜잭션이다. **PY-3 웹훅과 이 API가 같은 건을 동시에 처리해도 `point_ledger` UNIQUE(member_id, reason, ref_type, ref_id)가 이중 적립을 막는다.** 결제 실패 시 포인트를 적립하지 않으며 실패 사유를 응답에 담아 안내한다(요구사항 5.2 리스크 대응).
+트랜잭션·부수효과: `point_charge` 상태 전이 + `point_ledger` 적립 + 잔액 캐시 갱신이 한 트랜잭션이다. **PY-3 웹훅과 이 API가 같은 건을 동시에 처리해도 `point_ledger` UNIQUE(member_id, reason, ref_type, ref_id)가 이중 적립을 막는다.** 적립 여부의 판정은 상태가 아니라 이 멱등키가 한다 — 이미 적립된 건에는 `pg_tid`를 다시 쓰지 않는다(나중 요청의 값으로 덮으면 실제로 적립을 만든 거래를 대사에서 찾을 수 없다). 결제 실패 시 포인트를 적립하지 않으며 실패 사유를 응답에 담아 안내한다(요구사항 5.2 리스크 대응).
 
 ### PY-3 PG 결제 웹훅
 
@@ -1413,6 +1424,7 @@ UPDATE session_participant
 - `status=DONE` → PY-2 6~7단계와 동일한 서비스 메서드를 호출한다. `pg_tid` UNIQUE와 원장 멱등키가 중복 수신을 흡수하므로 몇 번 재수신되어도 적립은 1회다
 - `status=CANCELED|ABORTED|EXPIRED` → `point_charge.status = FAILED`
 - 금액 불일치 → 적립하지 않고 `FAILED` 기록 + 로그
+- **`DONE`인데 적립하지 못한 경우 → 식별자를 포함한 WARN 로그를 남긴다.** 대부분은 B5가 기한 초과로 이미 닫아 둔 건이고(결제창을 늦게 승인했다), 돈은 빠졌는데 포인트가 없는 상태라 사람이 대사해야 한다. 로그 문구를 고정해 두는 이유가 이것이다 — 대사 시 `"PG 승인 통보를 적립하지 못했다(대사 필요)"`로 검색하면 `charge`·`member`·`pgOrderId`·`pgTid`·금액·사유 코드가 한 줄에 있다
 
 응답 200
 
@@ -1616,7 +1628,7 @@ UPDATE session_participant
 ```json
 {
   "content": [
-    {"appealId": 41, "evictionId": 77, "memberId": 1042, "nickname": "익명 치타37",
+    {"appealId": 41, "evictionId": 77, "memberId": 1042, "nickname": "익명 치타037",
      "sessionId": 5501, "warningCount": 3, "status": "PENDING", "overdue": false,
      "createdAt": "2026-08-12T11:20:00+09:00", "slaDueAt": "2026-08-15T11:20:00+09:00"}
   ],
@@ -1654,7 +1666,7 @@ UPDATE session_participant
 }
 ```
 
-발생 에러: 404 `APPEAL_NOT_FOUND` / 409 `ALREADY_PROCESSED` / 400 `VALIDATION_FAILED` / 403 `FORBIDDEN_ROLE`
+발생 에러: 404 `APPEAL_NOT_FOUND` / 409 `ALREADY_PROCESSED` / 409 `SESSION_NOT_ENDED`(진행 중 세션의 인용) / 400 `VALIDATION_FAILED` / 403 `FORBIDDEN_ROLE`
 
 게이트: ③ ADMIN · ② ✓
 
@@ -1665,7 +1677,7 @@ UPDATE session_participant
 - `point_ledger` INSERT — `reason=APPEAL_REFUND`, `delta=+300`, `ref_type=EVICTION`, `ref_id={evictionId}`. 역분개이며 원래의 `EVICTION_PENALTY` 행은 지우지 않는다.
   **되돌릴 차감이 원장에 없으면 이 행도 만들지 않고 `pointRefunded=0`이다.** 퇴출 -300은 퇴출 트랜잭션이 즉시 넣지만, 그 트랜잭션이 원장을 남기지 못하고 끊겼다면 B1의 안전망(§5)이 채우기 전까지 차감이 없는 상태가 존재한다. 그때 인용하면 빠져나간 적 없는 300이 들어온다. 역분개는 기존 기록을 뒤집는 것이지 새 지급이 아니다
 - 완주 소급 재판정 (★D1 기준) — 퇴출이 없었다면 세션 종료 시각까지 참가한 것으로 보아 `completed=true`, `point_awarded` 지급(`point_ledger(SESSION_COMPLETE, ref_type=SESSION_PARTICIPANT, ref_id=participantId)` — UNIQUE로 중복 지급이 막힌다).
-  **대상은 세션이 이미 `ENDED`이고 참가자 상태가 `EVICTED`인 경우뿐이다.** 세션이 아직 `LIVE`면 완주 여부가 정해지지 않았으므로 소급하지 않고 `sessionCompletedRestored=false`로 답한다 — 남은 시간을 채우지 않은 사람을 완주자로 만들 수는 없고, 세션 복귀(LiveKit 재입장) 경로는 v1 범위 밖이다. 이 경우 그 세션은 미완주로 남는다(SLA 72시간 > 최대 세션 길이 4시간이라 실제로는 드문 경로다)
+  **대상은 세션이 이미 `ENDED`이고 참가자 상태가 `EVICTED`인 경우뿐이다.** 세션이 아직 `LIVE`면 **인용 자체를 409 `SESSION_NOT_ENDED`로 거절하고 이의는 `PENDING`으로 남긴다.** 완주는 종료 시각에 정해지므로 진행 중에 인용하면 퇴출 취소와 환급만 되고 완주 소급은 조용히 실패하는데, 이의는 그 순간 종결돼 재처리 경로가 없어진다 — 잘못된 퇴출로 잃은 완주가 영영 돌아오지 않는다. 거절은 기각이 아니라 판단의 유예이고, 관리자는 세션이 끝난 뒤 같은 이의를 그대로 다시 처리하면 된다(SLA 72시간 > 최대 세션 길이 4시간이라 기한 안에 충분히 들어온다). `REJECTED`는 세션 상태와 무관하게 언제든 가능하다
 - `streak_day` INSERT(UNIQUE(member_id, completed_on)로 멱등) → `member.current_streak`·`last_completed_on` 재계산 → 목표 달성 검사(★D3). 달성 시 `GOAL_ACHIEVED` 지급
 - 재매칭 쿨다운은 이 시점부터 해제된다
 
@@ -1685,7 +1697,7 @@ UPDATE session_participant
       "startedAt": "2026-08-12T09:00:00+09:00", "endsAt": "2026-08-12T11:00:00+09:00",
       "activeCount": 4, "pausedCount": 1, "leftCount": 0, "evictedCount": 1,
       "participants": [
-        {"memberId": 1042, "nickname": "익명 치타37", "status": "ACTIVE", "warningCount": 1, "paused": false}
+        {"memberId": 1042, "nickname": "익명 치타037", "status": "ACTIVE", "warningCount": 1, "paused": false}
       ]
     }
   ],
@@ -1738,7 +1750,7 @@ UPDATE session_participant
 
 **세션 종료 루틴** (세션 단위 한 트랜잭션, 멱등)
 
-**진입점은 셋이고 루틴은 하나다.** ① B1(`ends_at` 도래, `end_reason=NORMAL`) ② 잔여 인원 미달 조기 종료(D12, `EARLY_UNDER_MIN`) ③ `room_finished` 웹훅(SS-10, `NORMAL`). 셋 다 아래 1~7을 그대로 지난다.
+**진입점은 셋이고 루틴은 하나다.** ① B1(`ends_at` 도래, `end_reason=NORMAL`) ② 잔여 인원 미달 조기 종료(D12, `EARLY_UNDER_MIN`) ③ `room_finished` 웹훅(SS-10). ③의 사유는 시각으로 가른다 — 종료 시각이 `ends_at` 이후면 `NORMAL`, 그 전이면 `EARLY_UNDER_MIN`이다. LiveKit이 방을 닫는 시점은 우리가 정하지 않아서(마지막 참가자가 나가면 예정과 무관하게 닫힌다) 전부 `NORMAL`로 적으면 운영 지표에서 다 채운 세션과 도중에 빈 세션이 구분되지 않는다. **지급은 어느 쪽이든 `target_minutes` 기준으로 같다**(D15 보충). 셋 다 아래 1~7을 그대로 지난다.
 
 1. `live_session.status = ENDED`, `ended_at`·`end_reason` 기록, LiveKit 룸 종료, 그 세션의 재접속 유예 창 폐기.
    **정시 종료의 `ended_at`은 배치가 도는 시각이 아니라 `ends_at`이다** — 아래 정산이 그 시각을 기준으로 하므로, 배치가 몇 분 늦게 돌았다는 이유로 자리비움 구간이 길어져 없던 경고가 붙으면 안 된다. 조기 종료는 실제로 인원이 미달한 시각이 `ended_at`이다.
@@ -1796,7 +1808,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 세션 | **SESSION_NOT_FOUND** | 404 | SS-1~8 | 없는 세션 |
 | 세션 | **NOT_SESSION_PARTICIPANT** | 403 | SS-1~8, RP-1 | 참가 자격 없음 |
 | 세션 | **SESSION_ENDED** | 409 | SS-2~7 | 종료된 세션에 대한 참여 요청 |
-| 세션 | **SESSION_NOT_ENDED** | 409 | SS-8 | 진행 중 세션의 결과 조회 |
+| 세션 | **SESSION_NOT_ENDED** | 409 | SS-8, AD-6 | 진행 중 세션의 결과 조회 / 진행 중 세션의 이의 인용 |
 | 세션 | ALREADY_LEFT | 409 | SS-7 | 이미 퇴장 |
 | 세션 | REASON_REQUIRED | 400 | SS-7 | 퇴장 사유 없음 |
 | 세션 | CONSENT_REQUIRED | 403 | SS-2 | 캠 영상 온디바이스 분석 미동의 |

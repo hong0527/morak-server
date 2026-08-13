@@ -49,6 +49,13 @@ public class AbsenceJudgeService {
     /** 단말 시계가 조금 앞선 정도는 정상이다. 이 폭을 넘는 미래 시각만 조작으로 본다. */
     private static final int CLOCK_SKEW_TOLERANCE_SECONDS = 5;
 
+    /**
+     * Pause 시작이 자리비움 구간을 끊을 때 서버가 만드는 END의 {@code clientSeq}. 단말이 보내는
+     * 값은 {@code @PositiveOrZero}라 음수와 겹칠 수 없고, Pause는 세션당 1회(SS-5)여서 이 값으로
+     * {@code uk_ae}가 충돌하는 경로가 없다.
+     */
+    private static final long PAUSE_BOUNDARY_CLIENT_SEQ = -1L;
+
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final AbsenceEventRepository absenceEventRepository;
@@ -124,7 +131,45 @@ public class AbsenceJudgeService {
             return AbsenceEventResponse.of(participant.getWarningCount(), null,
                     evictionService.getPointPenalty());
         }
-        return warn(session, participant, event, absentSeconds, now);
+        return warn(sessionId, participant, event, absentSeconds, now);
+    }
+
+    /**
+     * SS-5 Pause 시작이 부르는 자리비움 구간 마감. <b>열려 있는 START를 Pause 시작 시각 기준으로
+     * 정산하고 닫는다.</b>
+     *
+     * <p>닫지 않으면 PAUSED 구간이 자리비움에 섞인다. 10분을 화장실에 있다 돌아와 END를 보내면
+     * 그 END는 ACTIVE 상태에서 도착하므로 판정 대상이 되고, 간격이 Pause 시작 전의 START부터
+     * 계산돼 임계를 훌쩍 넘긴다. 세션 종료 정산도 같은 START를 집어 든다. 어느 쪽이든
+     * "PAUSED 구간은 자리비움에 들어가지 않는다"(★D1·D9)가 성립하지 않는다.
+     *
+     * <p>정산은 END를 받은 것과 같은 규칙이다 — 임계를 넘겼으면 경고 1회이고 3회째면 퇴출이다.
+     * Pause를 켜는 것으로 이미 진행 중인 자리비움을 무르게 하지 않는 것이 D9의 요지다.
+     *
+     * <p>호출자는 Pause 상태 전이 <b>전에</b> 부른다. 뒤에 부르면 여기서 난 퇴출이 방금 세운
+     * PAUSED를 덮어써, 응답은 화장실 모드 시작인데 참가자는 퇴출된 상태가 된다.
+     */
+    public void closeAbsenceOnPause(Long sessionId, SessionParticipant participant,
+                                    LocalDateTime at) {
+        if (participant.getStatus() != ParticipantStatus.ACTIVE) {
+            return;
+        }
+        AbsenceEvent last = absenceEventRepository
+                .findFirstBySessionIdAndMemberIdOrderByIdDesc(sessionId, participant.getMemberId())
+                .orElse(null);
+        if (last == null || last.getType() != AbsenceEventType.START) {
+            return;
+        }
+        AbsenceEvent closing = absenceEventRepository.saveAndFlush(AbsenceEvent.report(
+                sessionId, participant.getMemberId(), AbsenceEventType.END,
+                PAUSE_BOUNDARY_CLIENT_SEQ, at, at));
+        long absentSeconds = Duration.between(last.getOccurredAt(), at).getSeconds();
+        if (absentSeconds <= thresholdSeconds) {
+            return;
+        }
+        log.info("Pause 시작으로 자리비움 구간 마감: session={}, member={}, 지속 {}초",
+                sessionId, participant.getMemberId(), absentSeconds);
+        warn(sessionId, participant, closing, absentSeconds, at);
     }
 
     /**
@@ -197,9 +242,8 @@ public class AbsenceJudgeService {
      * 퇴출이 났으면 잔여 인원 검사를 이어서 부른다. 퇴출도 사람이 세션에서 빠지는 경로라
      * 남은 인원이 최소 미만이면 그 자리에서 세션이 끝나야 한다(D12).
      */
-    private AbsenceEventResponse warn(LiveSession session, SessionParticipant participant,
+    private AbsenceEventResponse warn(Long sessionId, SessionParticipant participant,
                                       AbsenceEvent event, long absentSeconds, LocalDateTime now) {
-        Long sessionId = session.getId();
         int seq = participant.addWarning();
         warningRepository.save(Warning.fromAbsence(
                 sessionId, participant.getMemberId(), seq, event.getId(), now));

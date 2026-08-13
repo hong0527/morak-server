@@ -15,7 +15,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
+import java.util.Map;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -34,7 +35,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Profile("dev")
 @ConditionalOnProperty(name = "morak.dev.enabled", havingValue = "true")
 @Transactional
-@RequiredArgsConstructor
 public class DevSessionSeedService {
 
     /** 과거 세션의 시작 시각. 자정 경계에 걸리지 않는 값이면 무엇이든 된다. */
@@ -44,8 +44,23 @@ public class DevSessionSeedService {
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final SessionClosingService sessionClosingService;
+    private final List<Integer> targetMinutesOptions;
+
+    public DevSessionSeedService(MemberRepository memberRepository,
+                                 LiveSessionRepository liveSessionRepository,
+                                 SessionParticipantRepository sessionParticipantRepository,
+                                 SessionClosingService sessionClosingService,
+                                 @Value("${morak.match.target-minutes-options}")
+                                 List<Integer> targetMinutesOptions) {
+        this.memberRepository = memberRepository;
+        this.liveSessionRepository = liveSessionRepository;
+        this.sessionParticipantRepository = sessionParticipantRepository;
+        this.sessionClosingService = sessionClosingService;
+        this.targetMinutesOptions = targetMinutesOptions;
+    }
 
     public DevSessionSeedResponse seed(DevSessionSeedRequest request) {
+        int targetMinutes = validateTargetMinutes(request.targetMinutesOrDefault());
         Long memberId = memberRepository.findById(request.memberId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_FAILED))
                 .getId();
@@ -53,7 +68,7 @@ public class DevSessionSeedService {
         // 오름차순으로 처리해야 연속 판정이 실제 시간 순서와 같아진다. 뒤섞인 날짜를 받으면
         // last_completed_on이 미래로 먼저 가 그 뒤의 과거 완주가 캐시를 흔들지 못한다.
         for (LocalDate date : request.dates().stream().distinct().sorted().toList()) {
-            sessionIds.add(seedOneDay(memberId, date, request.targetMinutesOrDefault()));
+            sessionIds.add(seedOneDay(memberId, date, targetMinutes));
         }
         // 시드가 부른 지급 경로가 영속성 컨텍스트를 비웠으므로 회원 행을 다시 읽는다.
         // 처음 읽은 참조를 그대로 쓰면 Streak도 잔액도 시드 이전 값이 응답에 실린다.
@@ -61,6 +76,18 @@ public class DevSessionSeedService {
                 .orElseThrow(() -> new IllegalStateException("시드 대상 회원이 사라졌다: " + memberId));
         return new DevSessionSeedResponse(memberId, sessionIds, member.getCurrentStreak(),
                 member.getPointBalance());
+    }
+
+    /**
+     * 시드가 만드는 세션도 매칭이 만드는 것과 같은 길이여야 한다. 목록에 없는 값을 허용하면
+     * 시드로만 존재하는 세션 길이가 생기고, 그 길이에서만 나오는 지급액으로 게이트를 통과하게 된다.
+     */
+    private int validateTargetMinutes(int targetMinutes) {
+        if (!targetMinutesOptions.contains(targetMinutes)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    Map.of("targetMinutes", "허용값은 " + targetMinutesOptions + "입니다."));
+        }
+        return targetMinutes;
     }
 
     private Long seedOneDay(Long memberId, LocalDate date, int targetMinutes) {

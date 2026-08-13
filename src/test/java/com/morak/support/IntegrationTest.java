@@ -21,7 +21,12 @@ import org.springframework.boot.test.context.SpringBootTest;
  * <p>시각은 {@link AdjustableClock}으로만 움직인다. 기다리거나 리플렉션으로 필드를 고치는 방식은
  * 판정 기준이 코드가 아니라 테스트에 생기게 만든다.
  */
-@SpringBootTest(classes = {MorakServerApplication.class, TestSupportConfig.class})
+@SpringBootTest(
+        classes = {MorakServerApplication.class, TestSupportConfig.class},
+        // 배치와 유예 스위퍼가 테스트 도중 스스로 돌지 않게 한다(SchedulingConfig 주석).
+        // 배치를 확인하는 테스트는 배치 빈의 run()을 직접 부른다 — DEV-4 수동 트리거가 부르는
+        // 것과 같은 메서드라, 거기서 확인한 동작이 곧 스케줄 실행의 동작이다.
+        properties = "morak.scheduling.enabled=false")
 @AutoConfigureMockMvc
 public abstract class IntegrationTest {
 

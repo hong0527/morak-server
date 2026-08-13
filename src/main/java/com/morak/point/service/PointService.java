@@ -131,6 +131,11 @@ public class PointService {
      *
      * <p>회원 행을 포인트 도메인 밖으로 내보내지 않기 위해 감싼다 — 잔액이 캐시라는 사실과
      * 어긋났을 때 원장이 옳다는 규칙을 아는 쪽이 하나여야 한다.
+     *
+     * <p>{@code readOnly}는 <b>밖에서 부를 때만</b> 걸린다. {@link #award}·{@link #spend}가
+     * 부르는 것은 자기 호출이라 프록시를 타지 않고, 그때는 쓰기 트랜잭션 안에서 그냥 실행된다.
+     * 노리는 동작이 그것이다 — 여기서 새 읽기 전용 트랜잭션이 열리면 아직 커밋되지 않은
+     * 증감을 보지 못해 원장의 {@code balance_after}가 어긋난다.
      */
     @Transactional(readOnly = true)
     public int getBalance(Long memberId) {

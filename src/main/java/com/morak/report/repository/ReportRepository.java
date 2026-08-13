@@ -20,4 +20,11 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
      * 상한이 50이라 읽는 양이 정해져 있다.
      */
     List<Report> findByCaseIdInOrderByIdAsc(Collection<Long> caseIds);
+
+    /**
+     * 만 14세 미만 판정 계정의 파기(★D7)가 그 계정이 넣은 신고를 지운다. 탈퇴 파기(B4)는
+     * 반대로 <b>남긴다</b> — 그쪽은 가입이 성립한 회원의 신고라 다른 사람의 케이스를 지탱하는
+     * 기록이고, 이쪽은 애초에 존재하지 않았어야 할 계정의 입력이다.
+     */
+    void deleteByReporterId(Long reporterId);
 }

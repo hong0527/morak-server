@@ -169,8 +169,14 @@ public class PointChargeService {
             Settled settled = transactionTemplate.execute(status ->
                     settle(loadCharge(found.getId()), pgTid));
             if (settled.failure() != null) {
-                log.warn("웹훅 승인이 적립 없이 끝났다: charge={}, code={}",
-                        found.getId(), settled.failure());
+                // PG는 승인이라는데 우리 쪽은 적립하지 않았다. 대부분 B5가 기한 초과로 이미
+                // 닫아 둔 건이며, 돈은 빠졌는데 포인트가 없는 상태라 사람이 대사해야 한다.
+                // 문구를 고정해 두는 이유가 이것이다 — 로그 검색의 열쇠가 곧 대사 목록이다
+                // (api-spec PY-3).
+                log.warn("PG 승인 통보를 적립하지 못했다(대사 필요): charge={}, member={}, "
+                                + "pgOrderId={}, pgTid={}, 금액={}원, code={}",
+                        found.getId(), found.getMemberId(), pgOrderId, pgTid, amountKrw,
+                        settled.failure());
             }
         } catch (DataIntegrityViolationException e) {
             // PY-2와 동시에 도달해 한쪽만 반영됐다. 이쪽이 롤백된 것이라 할 일이 없다.
@@ -271,13 +277,26 @@ public class PointChargeService {
         }
 
         LocalDateTime now = LocalDateTime.now(clock);
-        charge.approve(payment.pgTid(), now);
-        // 같은 거래가 다른 충전 건에 붙는 경우를 uk_pc_tid가 잡는다. 적립보다 먼저 드러내야
-        // 원장을 쓴 뒤에 뒤집히지 않는다.
+        // 적립을 먼저 시도한다. 위의 {@code isApproved()} 검사는 이 트랜잭션이 본 스냅샷에
+        // 기대는 지름길이라, 격리 수준에 따라 먼저 커밋한 쪽의 승인을 놓칠 수 있다. 원장
+        // 멱등키는 그 스냅샷과 무관하게 답하므로 여기가 실제 판정 자리다.
+        Long chargeId = charge.getId();
+        boolean awarded = pointService.award(charge.getMemberId(), charge.getPointAmount(),
+                PointReason.CHARGE, chargeId, now);
+        if (!awarded) {
+            // 이미 같은 근거로 적립된 건이다. approve()를 부르면 실제로 적립을 만든 거래
+            // 식별자를 이번 요청의 pgTid가 덮어써 대사할 재료가 사라진다.
+            log.info("이미 적립된 충전이라 승인 정보를 덮지 않는다: charge={}", chargeId);
+            return Settled.of(response(loadCharge(chargeId)));
+        }
+        // 지급이 잔액 캐시를 벌크 UPDATE로 갱신하며 영속성 컨텍스트를 비웠다. 위에서 들고 있던
+        // 충전 건은 그때부터 준영속이라 거기 찍은 승인은 flush되지 않는다 — 다시 읽어 쓴다.
+        PointCharge approved = loadCharge(chargeId);
+        approved.approve(payment.pgTid(), now);
+        // 같은 거래가 다른 충전 건에 붙는 경우는 uk_pc_tid가 잡는다. 여기서 터지면 위의
+        // 원장 INSERT까지 같은 트랜잭션에서 함께 롤백되므로 적립만 남지 않는다.
         pointChargeRepository.flush();
-        pointService.award(charge.getMemberId(), charge.getPointAmount(), PointReason.CHARGE,
-                charge.getId(), now);
-        return Settled.of(response(charge));
+        return Settled.of(response(approved));
     }
 
     /** 동시 도달로 롤백된 쪽이 먼저 커밋한 쪽의 결과를 읽는다. */

@@ -28,6 +28,10 @@ import lombok.NoArgsConstructor;
  * <p>종결된 케이스는 재오픈하지 않는다. 재검토가 필요하면 새 케이스를 만든다.
  * 재오픈을 허용하는 순간 uk_rc_open 충돌 경로가 되살아나기 때문에 reopen 메서드를 두지 않는다.
  *
+ * <p><b>종결 전이는 이 클래스에 없다.</b> status·open_target_id·restriction_review를 한 문장에
+ * 묶은 조건부 UPDATE가 그 일을 하고({@code ReportCaseRepository#close}), 근거는 동시 처리다 —
+ * 엔티티 메서드로 두면 상태 검사와 쓰기 사이가 벌어져 같은 케이스가 두 번 확정된다.
+ *
  * <p>지연(overdue)은 저장하지 않고 조회 시점에 파생한다(미종결 AND {@code slaDueAt < now}).
  * 저장 플래그는 그것을 세우는 배치가 밀리면 이미 기한을 넘긴 케이스가 큐에서 정상으로 보인다.
  * {@code appeal_case}도 같은 규칙이라 두 큐의 지연 판정이 하나의 식을 쓴다.
@@ -108,24 +112,6 @@ public class ReportCase {
     }
 
     /**
-     * 케이스를 종결한다.
-     *
-     * <p>불변식: status 변경과 openTargetId를 NULL로 비우는 일은 반드시 함께 일어나야 한다.
-     * 하나라도 빠지면 그 대상은 uk_rc_open에 영원히 걸려 다시 신고할 수 없게 된다.
-     * 종결은 되돌릴 수 없으므로 이미 종결된 케이스에는 적용하지 않는다.
-     */
-    public void close(ReportStatus closedStatus) {
-        if (closedStatus == ReportStatus.PENDING) {
-            throw new IllegalArgumentException("종결 상태가 아니다: " + closedStatus);
-        }
-        if (this.status != ReportStatus.PENDING) {
-            throw new IllegalStateException("이미 종결된 케이스다: " + this.status);
-        }
-        this.status = closedStatus;
-        this.openTargetId = null;
-    }
-
-    /**
      * 병합 과정에서 더 높은 severity가 들어왔을 때 케이스를 상향한다.
      *
      * <p>SLA 시간 계산은 서비스 책임이라 계산된 만료 시각을 받는다.
@@ -138,10 +124,5 @@ public class ReportCase {
     /** 저장 컬럼이 아니라 조회 시점 계산이다. 마킹 배치가 없는 이유는 클래스 주석 참조. */
     public boolean isOverdue(LocalDateTime now) {
         return this.status == ReportStatus.PENDING && this.slaDueAt.isBefore(now);
-    }
-
-    /** AD-3이 신고를 기각할 때 신고자를 이용 제한 검토 대상으로 올린다. */
-    public void flagRestrictionReview() {
-        this.restrictionReview = true;
     }
 }

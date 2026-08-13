@@ -1,24 +1,45 @@
 package com.morak.session.repository;
 
+import com.morak.point.type.PointReason;
 import com.morak.session.entity.Eviction;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface EvictionRepository extends JpaRepository<Eviction, Long> {
 
     /**
-     * B1이 패널티 차감 여부를 확인할 퇴출. 차감은 퇴출 트랜잭션이 즉시 하므로 여기서 걸리는
-     * 것은 그 트랜잭션이 원장을 남기지 못하고 끊긴 건뿐이다 — 안전망이라 대상이 비어 있는
-     * 것이 정상이다.
+     * B1이 소급 차감할 퇴출. 차감은 퇴출 트랜잭션이 즉시 하므로 여기 걸리는 것은 그 트랜잭션이
+     * 원장을 남기지 못하고 끊긴 건뿐이다 — 안전망이라 대상이 비어 있는 것이 정상이다.
      *
-     * <p>이미 차감된 건까지 함께 읽는다. 걸러내는 일은 원장의 멱등 검사가 하고, 여기서
-     * 조건을 흉내 내면 point 도메인의 규약이 session 도메인 쿼리에 복제된다.
-     * 취소된 퇴출({@code revoked_at})은 역분개 대상이라 애초에 후보가 아니다.
+     * <p><b>미차감 조건을 쿼리가 진다.</b> 예전에는 취소되지 않은 퇴출을 전부 읽어 멱등 검사에
+     * 맡겼는데, 대상이 언제나 비어 있는 안전망이 매분 퇴출 전체를 훑는 구조라 서비스가 오래
+     * 살수록 배치 한 번의 비용이 계속 자란다. 시간 창으로 자르는 방법도 있지만 그 창보다 오래
+     * 배치가 멈추면 그 사이 끊긴 건이 영구 미차감으로 남아, 안전망이 안전망이 아니게 된다.
+     *
+     * <p>대신 point 도메인의 규약이 이 쿼리에 복제되지 않도록 멱등키의 두 축
+     * ({@code reason}·{@code refType})을 호출부에서 받는다 — 무엇이 차감의 근거인가는
+     * {@code PointLedger.refTypeOf}가 계속 소유한다.
+     *
+     * <p>취소된 퇴출({@code revoked_at})은 역분개 대상이라 애초에 후보가 아니다.
      */
-    @Query("SELECT e.id FROM Eviction e WHERE e.revokedAt IS NULL ORDER BY e.id")
-    List<Long> findIdsToSettle();
+    @Query("""
+            SELECT e.id
+              FROM Eviction e
+             WHERE e.revokedAt IS NULL
+               AND NOT EXISTS (
+                     SELECT 1
+                       FROM PointLedger pl
+                      WHERE pl.memberId = e.memberId
+                        AND pl.reason = :reason
+                        AND pl.refType = :refType
+                        AND pl.refId = e.id)
+             ORDER BY e.id
+            """)
+    List<Long> findIdsToSettle(@Param("reason") PointReason reason,
+                               @Param("refType") String refType);
 
     /**
      * SS-1·SS-8이 본인 행에 실을 퇴출 번호. {@code uk_eviction}이 세션·회원 쌍의 유일성을

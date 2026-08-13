@@ -128,7 +128,10 @@ public class AuthService {
         if (member == null) {
             // 미만 판정을 가입보다 먼저 한다. 만들지 않은 계정은 지울 일도 없다(★D7).
             rejectIfUnderAge(socialUser.birthDate());
-            member = join(provider, socialUser, request.agreements(), now);
+            // 웰컴 지급이 영속성 컨텍스트를 비우므로(PointService#award의 벌크 UPDATE) join()이
+            // 돌려준 인스턴스는 준영속이다. 아래 연령 확정과 응답 조립이 그 객체를 쓰면
+            // VERIFIED가 flush되지 않고 사라지고, 응답의 잔액도 지급 이전 값이 된다.
+            member = reload(join(provider, socialUser, request.agreements(), now));
         } else {
             // 이미 커밋된 계정이라 파기에 별도 트랜잭션이 필요하다. 상태를 바꾸기 전에 판정해야
             // 같은 행을 두 트랜잭션이 동시에 건드리지 않는다.
@@ -185,6 +188,13 @@ public class AuthService {
         // member.id)가 두 번째 지급을 막는다 — 지급 여부를 회원 행에 플래그로 두지 않는 이유다.
         pointService.award(member.getId(), welcomePoint, PointReason.WELCOME, member.getId(), now);
         return member;
+    }
+
+    /** 지급이 비운 컨텍스트에 다시 붙인다. 이후의 변경이 flush되려면 영속 인스턴스여야 한다. */
+    private Member reload(Member member) {
+        return memberRepository.findById(member.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "방금 가입한 회원이 사라졌다: " + member.getId()));
     }
 
     /**

@@ -33,8 +33,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 @Transactional(readOnly = true)
@@ -55,6 +59,7 @@ public class MemberService {
     private final SessionExitService sessionExitService;
     private final MemberAccountPurger memberAccountPurger;
     private final Clock clock;
+    private final TransactionTemplate transactionTemplate;
     private final int withdrawalGraceDays;
 
     public MemberService(MemberRepository memberRepository,
@@ -66,6 +71,7 @@ public class MemberService {
                          SessionExitService sessionExitService,
                          MemberAccountPurger memberAccountPurger,
                          Clock clock,
+                         PlatformTransactionManager transactionManager,
                          @Value("${morak.withdrawal.grace-days}") int withdrawalGraceDays) {
         this.memberRepository = memberRepository;
         this.memberGoalRepository = memberGoalRepository;
@@ -76,6 +82,7 @@ public class MemberService {
         this.sessionExitService = sessionExitService;
         this.memberAccountPurger = memberAccountPurger;
         this.clock = clock;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.withdrawalGraceDays = withdrawalGraceDays;
     }
 
@@ -105,15 +112,32 @@ public class MemberService {
      * AU-6 캠 영상 온디바이스 분석 동의. 미동의(false)는 저장하지 않고 400으로 거부한다 —
      * 철회가 v1 범위 밖이라 false 행은 "동의를 취소했다"로도 "아직 안 했다"로도 읽히는
      * 값이 된다.
+     *
+     * <p><b>첫 동의가 동시에 둘 오면 한쪽이 PK({@code member_id})에 걸린다.</b> "없으면 넣는다"는
+     * 사전 조회를 둘이 함께 통과하기 때문이고, 실제 방어선은 그 제약이다. 제약 위반은
+     * 트랜잭션이 끝나야 손에 들어오므로 경계를 프로그래밍 방식으로 긋고 밖에서 잡는다 —
+     * 애너테이션만 붙이면 잡을 자리가 트랜잭션 안이라 500이 나간다(PY-2·SR-3과 같은 이유).
+     *
+     * <p>상대가 이미 같은 동의를 남긴 것이라 재시도는 시각 갱신으로 끝난다. 클래스에 걸린
+     * {@code readOnly} 트랜잭션에 합류하면 커밋이 이 메서드 밖에서 일어나 그 자리가 다시
+     * 사라지므로 {@code NOT_SUPPORTED}로 바깥 트랜잭션을 두지 않는다.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public void agreeMediaConsent(Long memberId, MediaConsentRequest request) {
         if (!request.agreed()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     Map.of("agreed", "동의해야 세션에 참여할 수 있습니다."));
         }
-        findMember(memberId);
         LocalDateTime now = LocalDateTime.now(clock);
+        try {
+            transactionTemplate.executeWithoutResult(status -> upsertMediaConsent(memberId, now));
+        } catch (DataIntegrityViolationException e) {
+            transactionTemplate.executeWithoutResult(status -> upsertMediaConsent(memberId, now));
+        }
+    }
+
+    private void upsertMediaConsent(Long memberId, LocalDateTime now) {
+        findMember(memberId);
         mediaConsentRepository.findById(memberId)
                 .ifPresentOrElse(
                         consent -> consent.renew(now),
@@ -167,11 +191,13 @@ public class MemberService {
         matchLockRepository.findByLockKey(MatchLock.memberKey(memberId))
                 .orElseThrow(() -> new IllegalStateException(
                         "회원 잠금 행이 없다. 가입 트랜잭션이 깨진 계정이다: " + memberId));
-        // 대기 중인 요청을 남기면 탈퇴한 회원이 남의 세션에 6번째로 들어간다
-        matchService.cancelActiveRequest(memberId);
+        // 순서는 SanctionService.apply와 같다 — 퇴장 먼저, 매칭 요청 해제가 나중이다. 두 경로가
+        // 같은 두 자원을 반대 순서로 건드리면 동시에 실행됐을 때 서로를 기다린다.
         // 진행 중인 세션에 남겨 두면 탈퇴한 회원이 남의 세션에서 계속 자리를 차지한다.
         // 이 퇴장으로 잔여 인원이 최소치 미만이 되면 세션도 함께 조기 종료된다(D12).
         sessionExitService.leaveAll(memberId, LeftReason.WITHDRAWAL);
+        // 대기 중인 요청을 남기면 탈퇴한 회원이 남의 세션에 6번째로 들어간다
+        matchService.cancelActiveRequest(memberId);
 
         // 위 호출의 조건부 UPDATE가 영속성 컨텍스트를 비우므로 회원을 다시 읽어 상태를 바꾼다.
         // 비워지기 전에 읽은 엔티티는 준영속이라 변경이 반영되지 않는다.

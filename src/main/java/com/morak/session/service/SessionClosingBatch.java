@@ -1,6 +1,8 @@
 package com.morak.session.service;
 
 import com.morak.dev.DevBatch;
+import com.morak.point.entity.PointLedger;
+import com.morak.point.type.PointReason;
 import com.morak.session.repository.EvictionRepository;
 import com.morak.session.repository.LiveSessionRepository;
 import com.morak.session.repository.SessionParticipantRepository;
@@ -58,7 +60,8 @@ public class SessionClosingBatch implements DevBatch {
                 : sessionParticipantRepository.findIdsAwaitingAward(SessionStatus.ENDED)) {
             processed += closingService.awardCompletion(participantId);
         }
-        for (Long evictionId : evictionRepository.findIdsToSettle()) {
+        for (Long evictionId : evictionRepository.findIdsToSettle(
+                PointReason.EVICTION_PENALTY, PointLedger.refTypeOf(PointReason.EVICTION_PENALTY))) {
             processed += closingService.settleEvictionPenalty(evictionId);
         }
         if (processed > 0) {

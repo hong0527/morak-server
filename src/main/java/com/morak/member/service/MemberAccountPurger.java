@@ -1,12 +1,15 @@
 package com.morak.member.service;
 
 import com.morak.match.entity.MatchLock;
+import com.morak.match.repository.MatchBlockRepository;
 import com.morak.match.repository.MatchLockRepository;
 import com.morak.member.repository.MediaConsentRepository;
 import com.morak.member.repository.MemberAgreementRepository;
+import com.morak.member.repository.MemberGoalRepository;
 import com.morak.member.repository.MemberRepository;
 import com.morak.member.repository.StreakDayRepository;
 import com.morak.point.repository.PointLedgerRepository;
+import com.morak.report.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -31,16 +34,33 @@ public class MemberAccountPurger {
 
     private final MemberRepository memberRepository;
     private final MemberAgreementRepository memberAgreementRepository;
+    private final MemberGoalRepository memberGoalRepository;
     private final MediaConsentRepository mediaConsentRepository;
     private final StreakDayRepository streakDayRepository;
     private final MatchLockRepository matchLockRepository;
+    private final MatchBlockRepository matchBlockRepository;
     private final PointLedgerRepository pointLedgerRepository;
+    private final ReportRepository reportRepository;
 
+    /**
+     * <b>지우는 목록은 인터셉터 게이트 ⑤(연령 확인)의 예외 목록과 함께 움직인다.</b> 이 계정이
+     * 남길 수 있는 흔적은 연령 미확인 상태에서 부를 수 있었던 API가 만든 것뿐이라, 게이트 ⑤를
+     * 건너뛰는 경로가 늘어나면 그 API가 쓰는 테이블이 여기 추가돼야 한다. 빠뜨리면 회원 없는
+     * 고아 행이 남고, 신고·차단처럼 남을 가리키는 행은 남의 화면을 계속 흔든다
+     * ({@code AuthInterceptor.SKIP_RULES}의 {@code Gate.AGE} 행이 그 목록이다).
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void purge(Long memberId) {
         // member를 참조하는 행부터 지운다. FK가 걸려 있어 순서를 바꾸면 제약 위반이다.
         memberAgreementRepository.deleteByMemberId(memberId);
         streakDayRepository.deleteByMemberId(memberId);
+        // AU-7 목표. 게이트 ⑤가 막는 경로라 보통은 없지만, 있으면 회원 없는 목표가 된다.
+        memberGoalRepository.deleteByMemberId(memberId);
+        // RP-1은 게이트 ⑤ 예외라 연령 미확인 상태에서도 신고할 수 있다. 그 신고가 남긴
+        // 흔적을 함께 지운다 — 차단은 방향이 있는 2행이라 양쪽을 다 지우지 않으면 사라진
+        // 회원을 가리키는 배제 관계가 상대의 매칭 후보를 영구히 깎는다.
+        reportRepository.deleteByReporterId(memberId);
+        matchBlockRepository.deleteByMemberIdOrBlockedMemberId(memberId, memberId);
         // 회원당 1행이라 PK로 지운다. 없으면 아무 일도 일어나지 않는다.
         mediaConsentRepository.deleteById(memberId);
         // 가입 트랜잭션이 함께 만든 잠금 행. 남으면 회원 없는 고아 행이 쌓인다.

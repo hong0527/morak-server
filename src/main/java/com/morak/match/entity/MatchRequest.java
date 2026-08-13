@@ -26,8 +26,12 @@ import lombok.NoArgsConstructor;
  * <p>따라서 status를 바꾸는 모든 주체(MT-1·MT-3·B2·AD-4·AU-4)는 예외 없이
  * ① 조건 행 잠금 ② 조건부 UPDATE(WHERE status='WAITING') ③ activeMemberId=NULL 을 함께 수행한다.
  * 상태만 바꾸고 activeMemberId를 비우지 않으면 그 회원은 uk_mr_active에 걸려 다시는
- * 매칭을 요청할 수 없게 되고, 애플리케이션 재배포로도 풀리지 않는다. 이 클래스의
- * {@link #matched(Long)}·{@link #expire()}·{@link #cancel()}은 셋 다 두 변경을 함께 한다.
+ * 매칭을 요청할 수 없게 되고, 애플리케이션 재배포로도 풀리지 않는다.
+ *
+ * <p><b>그래서 전이 메서드가 이 클래스에 없다.</b> ②③은 {@code MatchRequestRepository}의
+ * {@code markMatched}·{@code releaseWaiting} 안에서 한 문장으로 묶여 있고, 거기가 유일한
+ * 전이 지점이다. 엔티티에 setter 성격의 전이를 두면 조건 없이 상태만 바꾸는 경로가 열려
+ * 경합에서 남의 요청을 덮어쓴다.
  */
 @Entity
 @Table(
@@ -93,25 +97,6 @@ public class MatchRequest {
     public static MatchRequest request(Long memberId, int targetMinutes,
                                        LocalDateTime requestedAt, LocalDateTime expiresAt) {
         return new MatchRequest(memberId, targetMinutes, requestedAt, expiresAt);
-    }
-
-    /** 매칭 성사(MT-1). 세션 배정과 활성 해제를 함께 한다. */
-    public void matched(Long sessionId) {
-        this.status = MatchRequestStatus.MATCHED;
-        this.matchedSessionId = sessionId;
-        this.activeMemberId = null;
-    }
-
-    /** 대기 만료(B2). */
-    public void expire() {
-        this.status = MatchRequestStatus.EXPIRED;
-        this.activeMemberId = null;
-    }
-
-    /** 대기 취소(MT-3·AD-4·AU-4). */
-    public void cancel() {
-        this.status = MatchRequestStatus.CANCELLED;
-        this.activeMemberId = null;
     }
 
     public boolean isWaiting() {

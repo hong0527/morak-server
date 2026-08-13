@@ -133,28 +133,36 @@ public class ReportAdminService {
         if (reportCase.getStatus() != ReportStatus.PENDING) {
             throw new BusinessException(ErrorCode.ALREADY_PROCESSED);
         }
+        if (request.status() == ReportStatus.SANCTIONED
+                && reportCase.getTargetType() != ReportTargetType.MEMBER) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    Map.of("status", "세션 신고에는 제재 대상 회원이 없습니다."));
+        }
+        Long targetId = reportCase.getTargetId();
+
+        // 제재보다 종결이 먼저다. 위의 상태 검사는 흔한 재요청을 걸러 주는 지름길일 뿐이고,
+        // 동시에 들어온 두 처리를 갈라내는 것은 이 조건부 UPDATE다 — 순서를 뒤집으면 둘 다
+        // 제재를 걸어 놓은 뒤에야 한쪽이 밀려나고, 그 제재는 이미 세션 퇴장까지 마친 뒤다.
+        // 여기서 예외를 던지면 트랜잭션이 통째로 롤백되므로 종결만 남는 상태는 생기지 않는다.
+        //
+        // 이용 제한 검토 플래그를 같은 문장에 싣는 것은 반복 허위 신고자를 남기는 유일한
+        // 경로가 기각이기 때문이다. SLA 초과를 근거로 자동 마킹하지는 않는다 — 처리가 늦은
+        // 것은 운영 사정이지 신고자의 잘못이 아니다.
+        int closed = reportCaseRepository.close(caseId, request.status(),
+                request.status() == ReportStatus.REJECTED, ReportStatus.PENDING);
+        if (closed == 0) {
+            throw new BusinessException(ErrorCode.ALREADY_PROCESSED);
+        }
 
         Sanction sanction = null;
         if (request.status() == ReportStatus.SANCTIONED) {
-            if (reportCase.getTargetType() != ReportTargetType.MEMBER) {
-                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                        Map.of("status", "세션 신고에는 제재 대상 회원이 없습니다."));
-            }
-            sanction = sanctionService.apply(reportCase.getTargetId(), reportCase.getId(),
-                    request.sanction(), adminId);
+            sanction = sanctionService.apply(targetId, caseId, request.sanction(), adminId);
         }
-        if (request.status() == ReportStatus.REJECTED) {
-            // 반복 허위 신고자를 제재 검토 대상으로 남기는 유일한 경로다. SLA 초과를 근거로
-            // 자동 마킹하지 않는다 — 처리가 늦은 것은 운영 사정이지 신고자의 잘못이 아니다.
-            reportCase.flagRestrictionReview();
-        }
-
-        // close()가 status 전이와 open_target_id NULL화를 함께 한다. 후자를 빠뜨리면
-        // 그 대상은 uk_rc_open에 걸려 영원히 새 신고를 받지 못한다.
-        reportCase.close(request.status());
-        reportHistoryRepository.save(ReportHistory.process(reportCase.getId(), adminId,
-                reportCase.getStatus(), request.reviewNote(), now));
-        return ReportProcessResponse.of(reportCase, sanction, now);
+        reportHistoryRepository.save(
+                ReportHistory.process(caseId, adminId, request.status(), request.reviewNote(), now));
+        // 조건부 UPDATE와 제재의 포인트 차감이 영속성 컨텍스트를 비웠다. 응답에 실을 케이스는
+        // 여기서 다시 읽는다 — 위에서 잡아 둔 참조는 종결 이전 상태다.
+        return ReportProcessResponse.of(findCase(caseId), sanction, now);
     }
 
     /** AD-4 제재 단독 적용. 절차는 AD-3의 제재 확정과 같은 메서드가 진다. */
