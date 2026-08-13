@@ -10,21 +10,29 @@ import com.morak.member.repository.MemberRepository;
 import com.morak.point.service.PointService;
 import com.morak.point.type.PointReason;
 import com.morak.session.dto.request.AppealProcessRequest;
+import com.morak.session.dto.response.AppealDetailResponse;
 import com.morak.session.dto.response.AppealProcessResponse;
 import com.morak.session.dto.response.AppealSummaryResponse;
+import com.morak.session.entity.AbsenceEvent;
 import com.morak.session.entity.AppealCase;
 import com.morak.session.entity.Eviction;
 import com.morak.session.entity.LiveSession;
 import com.morak.session.entity.SessionParticipant;
+import com.morak.session.entity.Warning;
+import com.morak.session.repository.AbsenceEventRepository;
 import com.morak.session.repository.AppealCaseRepository;
 import com.morak.session.repository.EvictionRepository;
 import com.morak.session.repository.LiveSessionRepository;
 import com.morak.session.repository.SessionParticipantRepository;
+import com.morak.session.repository.WarningRepository;
+import com.morak.session.type.AbsenceEventType;
 import com.morak.session.type.AppealStatus;
 import com.morak.session.type.DecidedBy;
 import com.morak.session.type.ParticipantStatus;
+import com.morak.session.type.WarningBasis;
 import jakarta.persistence.criteria.Predicate;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,7 +49,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 이의 콘솔 (API명세서 AD-5·AD-6).
+ * 이의 콘솔 (API명세서 AD-5·AD-6·AD-9).
  *
  * <p>관리자 여부는 여기서 보지 않는다. {@code /api/admin/**} 전체를 전역 인터셉터의 ③ 역할
  * 검사가 막으므로 서비스마다 다시 확인하면 검사가 두 곳이 되고 언젠가 한쪽이 빠진다.
@@ -67,6 +75,8 @@ public class AppealAdminService {
     private final EvictionRepository evictionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final LiveSessionRepository liveSessionRepository;
+    private final WarningRepository warningRepository;
+    private final AbsenceEventRepository absenceEventRepository;
     private final MemberRepository memberRepository;
     private final SessionClosingService sessionClosingService;
     private final PointService pointService;
@@ -93,6 +103,78 @@ public class AppealAdminService {
 
         return PageResponse.of(appeals, appeal -> AppealSummaryResponse.of(appeal,
                 evictions.get(appeal.getEvictionId()), nicknames.get(appeal.getMemberId()), now));
+    }
+
+    /**
+     * AD-9 이의 심사 상세. 당사자 진술({@code reasonText})과 경고 3건의 근거 구간을 한 번에
+     * 모은다 — 진술은 AP-1이 필수로 받아 저장까지 해 놓고 관리자에게 내려 주는 응답이 없어,
+     * 심사자가 큐의 메타데이터만 보고 인용·기각을 골라야 했다.
+     */
+    public AppealDetailResponse getAppeal(Long appealId) {
+        LocalDateTime now = LocalDateTime.now(clock);
+        AppealCase appeal = appealCaseRepository.findById(appealId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.APPEAL_NOT_FOUND));
+        Eviction eviction = evictionRepository.findById(appeal.getEvictionId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "이의의 근거 퇴출이 없다: appeal=" + appealId));
+        LiveSession session = liveSessionRepository.findById(eviction.getSessionId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "퇴출의 근거 세션이 없다: eviction=" + eviction.getId()));
+        String nickname = memberRepository.findByIdIn(List.of(appeal.getMemberId())).stream()
+                .findFirst()
+                .map(MemberNickname::getNickname)
+                .orElse(null);
+        // concurrentReporterCount의 분모. "6명 중 4명"과 "2명 중 1명"은 같은 수치가 아니다
+        int participantCount = sessionParticipantRepository
+                .findBySessionIdOrderByIdAsc(eviction.getSessionId()).size();
+        List<AppealDetailResponse.WarningItem> warnings = warningRepository
+                .findBySessionIdAndMemberIdOrderBySeqAsc(eviction.getSessionId(),
+                        appeal.getMemberId())
+                .stream()
+                .map(warning -> toWarningItem(warning, session))
+                .toList();
+        return AppealDetailResponse.of(appeal, eviction, nickname, participantCount, warnings,
+                now);
+    }
+
+    /**
+     * 경고의 근거 구간을 판정(★D4)과 같은 규칙으로 되짚는다. 근거가 END면 그 직전 이벤트가
+     * START였던 것이고(SS-4·SS-5), START면 END 없이 세션이 끝나 종료 시각으로 정산된
+     * 것이다(B1). 되짚지 못하는 조합에서는 구간을 지어내지 않고 null로 둔다.
+     */
+    private AppealDetailResponse.WarningItem toWarningItem(Warning warning, LiveSession session) {
+        if (warning.getAbsenceEventId() == null) {
+            return AppealDetailResponse.WarningItem.pauseOverrun(warning);
+        }
+        AbsenceEvent basisEvent = absenceEventRepository.findById(warning.getAbsenceEventId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "경고의 근거 이벤트가 없다: warning=" + warning.getId()));
+        LocalDateTime startedAt;
+        LocalDateTime endedAt;
+        if (basisEvent.getType() == AbsenceEventType.END) {
+            startedAt = absenceEventRepository
+                    .findFirstBySessionIdAndMemberIdAndIdLessThanOrderByIdDesc(
+                            warning.getSessionId(), warning.getMemberId(), basisEvent.getId())
+                    .filter(previous -> previous.getType() == AbsenceEventType.START)
+                    .map(AbsenceEvent::getOccurredAt)
+                    .orElse(null);
+            endedAt = basisEvent.getOccurredAt();
+        } else {
+            startedAt = basisEvent.getOccurredAt();
+            endedAt = session.getEndedAt();
+        }
+        Long absentSeconds = startedAt == null || endedAt == null
+                ? null
+                : Duration.between(startedAt, endedAt).getSeconds();
+        long reportSkewSeconds = Duration
+                .between(basisEvent.getOccurredAt(), basisEvent.getReportedAt()).getSeconds();
+        Integer concurrentReporterCount = startedAt == null || endedAt == null
+                ? null
+                : (int) absenceEventRepository.countOtherReporters(warning.getSessionId(),
+                        warning.getMemberId(), startedAt, endedAt);
+        return new AppealDetailResponse.WarningItem(warning.getSeq(), WarningBasis.ABSENCE,
+                warning.getCreatedAt(), startedAt, endedAt, absentSeconds, reportSkewSeconds,
+                concurrentReporterCount);
     }
 
     /**

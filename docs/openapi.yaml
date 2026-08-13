@@ -927,7 +927,9 @@ components:
         occurredAt:
           type: string
           format: date-time
-          description: 참고값입니다. 지속시간 계산은 서버 수신 시각 기준입니다
+          description: 지속시간(60초 초과) 계산의 기준 시각입니다. 서버 수신 시각이 아니라 이 값의 간격으로 판정합니다
+            — 수신 시각으로 재면 네트워크 지연이 자리비움 시간으로 둔갑합니다. 서버는 수신 시각을 감사용으로만 함께 저장합니다.
+            허용 범위는 [세션 시작 −5초, 현재 +5초]
       example:
         type: START
         clientSeq: 17
@@ -2265,6 +2267,168 @@ components:
         size: 20
         totalElements: 5
         totalPages: 1
+    WarningBasis:
+      type: string
+      description: '경고의 근거 종류. ABSENCE 자리비움 판정 · PAUSE_OVERRUN 화장실 모드 초과(근거 이벤트 없음)'
+      enum:
+      - ABSENCE
+      - PAUSE_OVERRUN
+      example: ABSENCE
+    AppealWarningItem:
+      type: object
+      required:
+      - seq
+      - basis
+      - issuedAt
+      properties:
+        seq:
+          type: integer
+          description: 세션 안에서의 경고 번호 1~3
+        basis:
+          $ref: '#/components/schemas/WarningBasis'
+        issuedAt:
+          type: string
+          format: date-time
+        absenceStartedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 판정에 쓰인 자리비움 구간의 시작. Pause 초과 경고는 null
+        absenceEndedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 구간의 끝. END 없이 세션이 끝나 정산된 경고는 세션 종료 시각
+        absentSeconds:
+          type: integer
+          format: int64
+          nullable: true
+          description: 구간 길이(초). 임계에 얼마나 근접했는지가 오탐 개연성의 재료입니다
+        reportSkewSeconds:
+          type: integer
+          format: int64
+          nullable: true
+          description: 근거 이벤트의 서버 수신 시각 − 단말 관측 시각. 크게 양수면 전송 지연·시각 조작 신호
+        concurrentReporterCount:
+          type: integer
+          nullable: true
+          description: 같은 구간에 미검출을 보고한 다른 참가자 수. 집계 수치만 내립니다 — 명단은 없습니다
+    AppealDetailResponse:
+      type: object
+      required:
+      - appealId
+      - evictionId
+      - memberId
+      - status
+      - overdue
+      - reasonText
+      - createdAt
+      - slaDueAt
+      - eviction
+      - sessionParticipantCount
+      - warnings
+      properties:
+        appealId:
+          type: integer
+          format: int64
+        evictionId:
+          type: integer
+          format: int64
+        memberId:
+          type: integer
+          format: int64
+        nickname:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/AppealStatus'
+        overdue:
+          type: boolean
+        reasonText:
+          type: string
+          description: 신청자의 진술 전문. 관리자가 판단할 유일한 사용자 측 근거입니다
+        createdAt:
+          type: string
+          format: date-time
+        slaDueAt:
+          type: string
+          format: date-time
+        decidedBy:
+          $ref: '#/components/schemas/DecidedBy'
+        decidedAt:
+          type: string
+          format: date-time
+          nullable: true
+        note:
+          type: string
+          nullable: true
+          description: 관리자 처리 사유. 미처리면 null
+        eviction:
+          type: object
+          required:
+          - sessionId
+          - evictedAt
+          - warningCount
+          - pointPenalty
+          properties:
+            sessionId:
+              type: integer
+              format: int64
+            evictedAt:
+              type: string
+              format: date-time
+            warningCount:
+              type: integer
+            pointPenalty:
+              type: integer
+            revokedAt:
+              type: string
+              format: date-time
+              nullable: true
+        sessionParticipantCount:
+          type: integer
+          description: 그 세션의 전체 참가자 수. concurrentReporterCount의 분모입니다
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/AppealWarningItem'
+      example:
+        appealId: 41
+        evictionId: 77
+        memberId: 1042
+        nickname: 익명 치타037
+        status: PENDING
+        overdue: false
+        reasonText: 자리에 있었습니다. 카메라 각도가 틀어져 있었습니다.
+        createdAt: '2026-08-12T11:20:00+09:00'
+        slaDueAt: '2026-08-15T11:20:00+09:00'
+        decidedBy: null
+        decidedAt: null
+        note: null
+        eviction:
+          sessionId: 5501
+          evictedAt: '2026-08-12T10:41:00+09:00'
+          warningCount: 3
+          pointPenalty: 300
+          revokedAt: null
+        sessionParticipantCount: 6
+        warnings:
+        - seq: 1
+          basis: ABSENCE
+          issuedAt: '2026-08-12T09:42:19+09:00'
+          absenceStartedAt: '2026-08-12T09:41:12+09:00'
+          absenceEndedAt: '2026-08-12T09:42:17+09:00'
+          absentSeconds: 65
+          reportSkewSeconds: 2
+          concurrentReporterCount: 1
+        - seq: 3
+          basis: PAUSE_OVERRUN
+          issuedAt: '2026-08-12T10:41:00+09:00'
+          absenceStartedAt: null
+          absenceEndedAt: null
+          absentSeconds: null
+          reportSkewSeconds: null
+          concurrentReporterCount: null
     AppealProcessRequest:
       type: object
       required:
@@ -3351,7 +3515,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '429':
-          description: '`ABSENCE_RATE_LIMITED` 이벤트 보고 간격이 너무 짧음'
+          description: '`ABSENCE_RATE_LIMITED` 이벤트 보고 간격이 너무 짧음.
+            버리지 말고 **같은 `clientSeq`로 5초 뒤 재전송**해야 합니다 — 새 번호를 매기면 멱등키가 다른 이벤트로 취급해
+            재전송 중복 제거가 깨집니다. 특히 `END`가 유실되면 짝 없는 `START`가 되어 세션 종료 시각까지 자리비움으로 정산됩니다'
           content:
             application/json:
               schema:
@@ -3635,6 +3801,15 @@ paths:
         \ 수 없는 `identity`는 200으로 흡수하고 로그만 남깁니다. 처리 실패도 200입니다 — 5xx를 내면 재시도가 반복돼 중복\
         \ 처리가 늘어납니다.\n"
       security: []
+      parameters:
+      - name: Authorization
+        in: header
+        required: true
+        description: 'LiveKit 웹훅 서명(LiveKit이 `livekit.api-secret`으로 서명한 토큰).
+          불일치·누락은 401 `INVALID_WEBHOOK_SIGNATURE`'
+        schema:
+          type: string
+        example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
       requestBody:
         required: true
         content:
@@ -3703,7 +3878,10 @@ paths:
 
             · `FORBIDDEN` 본인의 퇴출 건이 아니거나 존재하지 않는 퇴출 건
 
-            · `WITHDRAWAL_PENDING` / `MEMBER_SANCTIONED` / `AGE_NOT_VERIFIED` 게이트 차단
+            · `WITHDRAWAL_PENDING` / `AGE_NOT_VERIFIED` 게이트 차단
+
+            · `MEMBER_SANCTIONED`는 발생하지 않습니다 — 이의는 제재 게이트의 예외라 제재 중에도 신청할 수 있습니다.
+            구제 경로를 제재로 막으면 이의 기한이 손도 못 대고 지나갑니다
 
             '
           content:
@@ -4273,6 +4451,35 @@ paths:
         '403':
           $ref: '#/components/responses/AdminForbidden'
   /admin/appeals/{appealId}:
+    get:
+      tags:
+      - 관리자
+      summary: AD-9 이의 심사 상세
+      operationId: getAppealDetail
+      description: "인용·기각 판단의 재료를 한 번에 내립니다.\n\n- `reasonText`는 관리자가 판단할 유일한\
+        \ 당사자 진술입니다.\n- 경고별 근거 구간은 판정에 쓰인 것과 같은 규칙으로 되짚습니다. Pause 초과 경고는 근거 이벤트가\
+        \ 없어 구간 계열 필드가 전부 null입니다.\n- `concurrentReporterCount`는 같은 구간에 미검출을 보고한 다른\
+        \ 참가자 수입니다 — 집계 수치만 내리고 명단은 내리지 않습니다.\n- 영상은 저장하지 않으므로 재실 여부를 확정하는 필드는 없습니다.\
+        \ 개연성 판단의 재료입니다.\n"
+      parameters:
+      - $ref: '#/components/parameters/AppealId'
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppealDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AdminForbidden'
+        '404':
+          description: '`APPEAL_NOT_FOUND` 존재하지 않는 이의'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     patch:
       tags:
       - 관리자

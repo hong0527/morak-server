@@ -95,7 +95,7 @@
 | PY-2 충전 승인 확인 | — | ✓ | ✓ | ✓ | — | 본인 | `READY`·`APPROVED` |
 | PY-3 결제 웹훅 | — | 예외 | 예외 | 예외 | — | — | 서명 검증 |
 | RP-1 신고 | — | ✓ | ✓ | **—** | 대상 유형별 | — | — |
-| AD-1~AD-8 관리자 | ADMIN | ✓ | — | — | — | — | 각 API |
+| AD-1~AD-9 관리자 | ADMIN | ✓ | — | — | — | — | 각 API |
 | DEV-2~4 개발 전용 | — | — | — | — | — | — | 이중 스위치 |
 
 **연령 게이트 제외 2종의 이유** (구 v1.0 판단 승계)
@@ -336,6 +336,7 @@ morak:
 | AD-6 | PATCH /api/admin/appeals/{appealId} | 이의 처리 | 10 |
 | AD-7 | GET /api/admin/sessions | 진행 중 세션 모니터 | 10 |
 | AD-8 | GET /api/admin/withdrawals | 탈퇴 처리 결과 | 10 |
+| AD-9 | GET /api/admin/appeals/{appealId} | 이의 심사 상세 | 10 |
 | DEV-2 | POST /api/dev/clock | 개발 전용 시각 조작 | 1 |
 | DEV-2 | GET /api/dev/clock | 개발 전용 현재 시각·모드 조회 | 1 |
 | DEV-3 | POST /api/dev/sessions/seed | 개발 전용 완주 이력 시드 | 5 |
@@ -1125,7 +1126,7 @@ UPDATE session_participant
 {"reasonText": "카메라 각도 때문에 얼굴이 안 잡혔습니다. 자리를 비운 적 없습니다."}
 ```
 
-`reasonText`는 필수이며 최대 200자다. 빈 문자열·누락·초과는 400 `VALIDATION_FAILED`. 관리자가 AD-6에서 판단할 유일한 사용자 측 근거이므로 선택 항목으로 두지 않는다.
+`reasonText`는 필수이며 최대 200자다. 빈 문자열·누락·초과는 400 `VALIDATION_FAILED`. 관리자가 AD-6에서 판단할 유일한 사용자 측 근거이므로 선택 항목으로 두지 않는다. 관리자는 이 진술을 AD-9 상세로 본다.
 
 응답 201
 
@@ -1642,6 +1643,8 @@ UPDATE session_participant
 
 정렬은 AD-1과 같이 `sla_due_at` 오름차순(동률은 `appealId` 오름차순)이다 — 기한이 임박한 건이 위로 온다. `status`·`overdue`는 생략하면 조건 자체를 만들지 않는다. `sessionId`·`warningCount`는 이의의 컬럼이 아니라 근거 퇴출(`eviction`)의 값이고, `nickname`은 서버가 만든 익명 닉네임이다.
 
+`reasonText`는 목록에 싣지 않는다. 큐의 선별·정렬은 기한 기준이라 진술이 관여하지 않고, 200자 텍스트를 페이지마다 실을 이유가 없다 — 심사 재료는 AD-9 상세가 내린다.
+
 발생 에러: 403 `FORBIDDEN_ROLE`
 
 게이트: ③ ADMIN · ② ✓
@@ -1653,6 +1656,8 @@ UPDATE session_participant
 ```json
 {"decision": "ACCEPTED", "note": "자리비움 이벤트 로그상 카메라 각도 문제로 확인. 퇴출 취소."}
 ```
+
+위 `note` 예시 같은 판단이 성립하려면 심사 재료의 조회가 선행이다 — 당사자 진술과 경고별 근거 구간은 AD-9가 내린다.
 
 응답 200
 
@@ -1728,6 +1733,49 @@ UPDATE session_participant
 발생 에러: 403 `FORBIDDEN_ROLE` / 400 `VALIDATION_FAILED`(조회 대상이 아닌 `status`)
 
 게이트: ③ ADMIN · ② ✓
+
+### AD-9 이의 심사 상세
+
+`GET /api/admin/appeals/{appealId}` — FR-701, NFR-402
+
+목적: 인용·기각 판단의 재료를 한 번에 내린다. `reasonText`는 관리자가 판단할 유일한 당사자 진술이고(AP-1), 경고별 근거 구간은 판정(★D4)에 쓰인 것과 같은 규칙으로 되짚는다.
+
+응답 200
+
+```json
+{
+  "appealId": 41, "evictionId": 77, "memberId": 1042, "nickname": "익명 치타037",
+  "status": "PENDING", "overdue": false,
+  "reasonText": "자리에 있었습니다. 카메라 각도가 틀어져 있었습니다.",
+  "createdAt": "2026-08-12T11:20:00+09:00", "slaDueAt": "2026-08-15T11:20:00+09:00",
+  "decidedBy": null, "decidedAt": null, "note": null,
+  "eviction": {"sessionId": 5501, "evictedAt": "2026-08-12T10:41:00+09:00",
+               "warningCount": 3, "pointPenalty": 300, "revokedAt": null},
+  "sessionParticipantCount": 6,
+  "warnings": [
+    {"seq": 1, "basis": "ABSENCE", "issuedAt": "2026-08-12T09:42:19+09:00",
+     "absenceStartedAt": "2026-08-12T09:41:12+09:00", "absenceEndedAt": "2026-08-12T09:42:17+09:00",
+     "absentSeconds": 65, "reportSkewSeconds": 2, "concurrentReporterCount": 1},
+    {"seq": 3, "basis": "PAUSE_OVERRUN", "issuedAt": "2026-08-12T10:41:00+09:00",
+     "absenceStartedAt": null, "absenceEndedAt": null, "absentSeconds": null,
+     "reportSkewSeconds": null, "concurrentReporterCount": null}
+  ]
+}
+```
+
+필드 의미
+
+- `warnings[].basis`: `ABSENCE` | `PAUSE_OVERRUN`. 저장 컬럼이 아니라 근거 이벤트 유무로 파생한다 — Pause 초과 경고(D9)는 근거 이벤트가 없어 구간 계열 필드가 전부 `null`이다
+- `absenceStartedAt`·`absenceEndedAt`: 판정에 쓰인 구간 그대로다. END 없이 세션이 끝나 정산된 경고(§5)는 세션 종료 시각이 END를 대신한다
+- `reportSkewSeconds`: 근거 이벤트의 서버 수신 시각 − 단말 관측 시각. 크게 양수면 전송 지연이나 시각 조작 신호라 인용 판단의 재료가 된다
+- `concurrentReporterCount`: 같은 구간에 미검출을 보고한 **다른** 참가자 수. 여럿이 몰렸으면 개인의 이석이 아니라 조명·회선 같은 공통 원인을 의심할 수 있다. **집계 수치만 내린다** — 명단을 실으면 이의 심사가 같은 세션 참가자들의 행동 기록을 열람하는 경로가 된다. 분모는 `sessionParticipantCount`다
+- 영상은 저장하지 않으므로(D17) "실제로 자리에 있었는가"를 확정하는 필드는 없다. 이 응답이 주는 것은 개연성 판단의 재료다 — 구간이 임계에 얼마나 근접했는지(65초와 30분은 다르다), 시각이 얼마나 벌어졌는지, 같은 시간대에 몇 명이 겹쳤는지
+
+발생 에러: 404 `APPEAL_NOT_FOUND` / 403 `FORBIDDEN_ROLE`
+
+게이트: ③ ADMIN · ② ✓
+
+부수효과: 없음. 조회 전용이다.
 
 ### DEV-2~4 개발 전용
 
@@ -1840,7 +1888,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 신고·운영 | REPORT_NOT_FOUND | 404 | AD-2, AD-3 | 없는 케이스 |
 | 신고·운영 | ALREADY_PROCESSED | 409 | AD-3, AD-6 | 이미 종결된 케이스·이의 |
 | 신고·운영 | **APPEAL_ALREADY_FILED** | 409 | AP-1 | 퇴출 1건당 1회 초과 |
-| 신고·운영 | **APPEAL_NOT_FOUND** | 404 | AD-6 | 없는 이의 |
+| 신고·운영 | **APPEAL_NOT_FOUND** | 404 | AD-6, AD-9 | 없는 이의 |
 
 굵은 코드는 v2.0 신설 또는 개명이다.
 

@@ -410,18 +410,18 @@ com.morak
 
 ## O단계 — OpenAPI 재생성
 
-**목표**: `docs/openapi.yaml`을 40 오퍼레이션으로 다시 쓴다. 프론트가 이 파일을 계약으로 보고 병렬 작업하므로, 코드보다 먼저 확정돼야 한다.
+**목표**: `docs/openapi.yaml`을 41 오퍼레이션으로 다시 쓴다. 프론트가 이 파일을 계약으로 보고 병렬 작업하므로, 코드보다 먼저 확정돼야 한다.
 
 ### 만들 것
-api-spec §3 총람의 **44행**을 그대로 옮긴다. AU 7 · MT 3 · SS 11 · AP 1 · PT 1 · SR 5 · PY 3 · RP 1 · AD 8 · **DEV 4**. DEV가 4행인 것은 DEV-2가 시각 조작(POST)과 조회(GET) 두 행이기 때문이다 — 오퍼레이션 수와 총람 행 수를 같은 단위로 센다.
+api-spec §3 총람의 **45행**을 그대로 옮긴다. AU 7 · MT 3 · SS 11 · AP 1 · PT 1 · SR 5 · PY 3 · RP 1 · AD 9 · **DEV 4**. DEV가 4행인 것은 DEV-2가 시각 조작(POST)과 조회(GET) 두 행이기 때문이다 — 오퍼레이션 수와 총람 행 수를 같은 단위로 센다. (AD-9 이의 심사 상세는 10단계 이후 추가분이다.)
 **DEV-1(`POST /api/auth/dev-login`)은 1단계에서 폐기가 확정됐다** — dev 로그인은 AU-1 + `DevSocialClient`가 처리하므로 별도 경로가 없다. 남은 개발 전용은 DEV-2·3·4 셋이다.
-**DEV 계열은 프론트 계약이 아니므로 openapi.yaml에 넣지 않는다** — 이 문서가 정의처다. 실제 openapi.yaml 오퍼레이션은 40개다.
+**DEV 계열은 프론트 계약이 아니다.** openapi.yaml에는 `개발 전용`으로 표시해 싣는다(api-spec DEV 절과 동일 결정) — 공개 41개 + DEV 4개로 파일 총계는 45다.
 공통 스키마: `ErrorResponse`(`{"error":{code,message,details}}`), `PageResponse<T>`(Spring `Page` 직렬화 금지), Bearer 보안 스킴.
 `docs/api-spec.md`(처리 절차)·`docs/screen-api-map.md`(화면-API 대응)도 함께 갱신한다.
 
 ### 완료 게이트
 - openapi.yaml 파싱 성공(Swagger Editor 또는 `npx @redocly/cli lint`)
-- 오퍼레이션 40개, `operationId` 중복 0
+- 오퍼레이션 45개(공개 41 + 개발 전용 4), `operationId` 중복 0
 - 응답에 등장하는 모든 `error.code`가 0.5단계 `ErrorCode`에 실존
 - 프론트에 갱신 통지 + `docs/frontend-change-requests.md`에 변경분 기록
 
@@ -839,7 +839,7 @@ Q5 확정 시 재실측: 신고 시 세션 처리 정책.
 **목표**: 퇴출당한 사람이 이의를 제기하고 관리자가 되돌릴 수 있는 경로. **인용 시 포인트 원복(역분개)과 완주 소급 재판정**이 이 단계의 난도다 — 이미 확정된 결과를 되돌리는 유일한 지점이다.
 
 ### 만들 것
-- **엔드포인트**: AP-1 이의 신청 · AD-5 이의 큐 · AD-6 이의 처리 · AD-7 진행 중 세션 모니터 · AD-8 탈퇴 처리 결과
+- **엔드포인트**: AP-1 이의 신청 · AD-5 이의 큐 · AD-6 이의 처리 · AD-7 진행 중 세션 모니터 · AD-8 탈퇴 처리 결과 · AD-9 이의 심사 상세
   (AD-8은 조회 전용이라 파기 배치 B4보다 먼저 놓을 수 있다. 오히려 순서가 이쪽이 맞다 —
    **B4가 조용히 멈춘 것을 확인할 창구 없이 파기 배치부터 켜면 늦은 파기가 드러나지 않는다.**
    11단계에서 B4가 붙으면 이 화면의 `deletedAt`이 채워지기 시작한다)
@@ -870,7 +870,8 @@ Q5 확정 시 재실측: 신고 시 세션 처리 정책.
 6. 인용 후 AU-2의 `streak.current`가 재계산 반영
 7. AD-6 기각 → 상태 REJECTED, 포인트·Streak 불변
 8. AD-7 → 진행 중 세션 목록 + 참가자·경고 현황
-9. 참여자 토큰으로 AD-5~AD-7 → 403 `FORBIDDEN_ROLE`
+9. 참여자 토큰으로 AD-5~AD-7·AD-9 → 403 `FORBIDDEN_ROLE`
+10. AD-9 → `reasonText` + 경고별 근거 구간·보고 지연·동시 보고 집계. 타 참가자 식별자 비노출
 
 ### 강의 포인트
 1. **역분개(reversing entry).** 회계에서 온 개념 — 잘못된 기록을 지우지 않고 반대 기록을 더한다. 감사 가능성과 정정을 동시에 얻는 방법이다.
