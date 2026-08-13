@@ -95,7 +95,9 @@ public class AbsenceJudgeService {
      */
     public AbsenceEventResponse report(Long memberId, Long sessionId,
                                        AbsenceEventRequest request) {
-        LiveSession session = liveSessionRepository.findById(sessionId)
+        // 세션 행을 먼저 잡는다(SessionClosingService의 LOCK_ORDER). 이 경로는 경고·퇴출로
+        // 참가자 행을 고친 뒤 종료 판정까지 이어지므로, 잠금을 뒤에서 잡으면 B1과 서로를 기다린다.
+        LiveSession session = liveSessionRepository.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.SESSION_NOT_FOUND));
         SessionParticipant participant = sessionParticipantRepository
                 .findBySessionIdAndMemberId(sessionId, memberId)

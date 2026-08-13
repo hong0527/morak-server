@@ -35,6 +35,34 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     List<MemberNickname> findByIdIn(Collection<Long> ids);
 
     /**
+     * 회원 상태만 읽는다. <b>엔티티가 아니라 스칼라로 읽는 것이 요점이다</b> — 같은
+     * 트랜잭션이 이미 읽은 회원은 영속성 컨텍스트에 남아 있어, {@code findById}로 다시 읽으면
+     * 그때의 값이 그대로 돌아온다. 잠금을 얻은 뒤 "그 사이 상태가 바뀌었나"를 묻는 자리에서는
+     * 그 캐시가 곧 오답이라, DB 값을 직접 받는 이 조회를 쓴다.
+     */
+    @Query("""
+            SELECT m.status
+              FROM Member m
+             WHERE m.id = :memberId
+            """)
+    Optional<MemberStatus> findStatusById(@Param("memberId") Long memberId);
+
+    /**
+     * 대기열에서 뺄 회원. 탈퇴 신청(AU-4)과 매칭 요청(MT-1)이 동시에 들어오면 요청 쪽이 회원
+     * 행 잠금을 늦게 얻어, AU-4가 이미 지나간 뒤에 대기 요청이 남을 수 있다. MT-1 게이트가
+     * 그 창을 막지만 6인 확정 직전에 한 번 더 묻는다 — 들어오지 못하는 사람이 남의 세션에서
+     * 자리를 차지하는 것이 이 도메인에서 가장 비싼 오염이라, 방어선을 하나만 두지 않는다.
+     */
+    @Query("""
+            SELECT m.id
+              FROM Member m
+             WHERE m.id IN :memberIds
+               AND m.status <> :status
+            """)
+    List<Long> findIdsWithStatusOtherThan(@Param("memberIds") Collection<Long> memberIds,
+                                          @Param("status") MemberStatus status);
+
+    /**
      * 잔액이 있을 때만 깎는다(SR-3). <b>잔액을 읽고 서비스에서 비교한 뒤 깎으면 동시 주문 두
      * 건이 같은 잔액을 보고 둘 다 통과해 마이너스가 된다.</b> 검사와 차감을 한 문장에 넣어야
      * DB가 행을 잠근 상태로 판정한다.

@@ -9,6 +9,7 @@ import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.type.SessionStatus;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.function.IntSupplier;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,19 +55,42 @@ public class SessionClosingBatch implements DevBatch {
         LocalDateTime now = LocalDateTime.now(clock);
         int processed = 0;
         for (Long sessionId : liveSessionRepository.findIdsToClose(SessionStatus.LIVE, now)) {
-            processed += closingService.closeDueSession(sessionId);
+            processed += guarded("세션 종료", sessionId,
+                    () -> closingService.closeDueSession(sessionId));
         }
         for (Long participantId
                 : sessionParticipantRepository.findIdsAwaitingAward(SessionStatus.ENDED)) {
-            processed += closingService.awardCompletion(participantId);
+            processed += guarded("완주 흡수 지급", participantId,
+                    () -> closingService.awardCompletion(participantId));
         }
         for (Long evictionId : evictionRepository.findIdsToSettle(
                 PointReason.EVICTION_PENALTY, PointLedger.refTypeOf(PointReason.EVICTION_PENALTY))) {
-            processed += closingService.settleEvictionPenalty(evictionId);
+            processed += guarded("퇴출 패널티 소급", evictionId,
+                    () -> closingService.settleEvictionPenalty(evictionId));
         }
         if (processed > 0) {
             log.info("세션 종료 배치 처리 {}건", processed);
         }
         return processed;
+    }
+
+    /**
+     * 한 건의 실패가 나머지를 막지 않게 한다. <b>대상 하나가 트랜잭션 하나라는 설계는 이
+     * try/catch가 있어야 완성된다</b> — 없으면 롤백된 건의 예외가 루프 밖으로 나가, 같은
+     * 실행에서 아직 손대지 않은 세션들이 통째로 다음 회차로 밀린다. 실측에서 종료 대상
+     * 2건 중 1건이 {@code room_finished} 웹훅과 부딪히자 나머지 1건이 22회 중 14회 남았다.
+     *
+     * <p>WARN인 것은 이것이 오류가 아니라 경합이기 때문이다. 다른 경로가 같은 일을 먼저
+     * 끝냈다는 뜻이고({@code uk_pl_dedup}이 이중 지급을 막은 결과다), 남은 미결은 다음
+     * 회차가 거둔다. ERROR로 올리면 정상 동작이 매분 알람을 울린다.
+     */
+    private int guarded(String step, Long targetId, IntSupplier work) {
+        try {
+            return work.getAsInt();
+        } catch (Exception e) {
+            log.warn("{} 건너뜀 — 다른 경로와 경합했다: target={}, 원인={}",
+                    step, targetId, e.getClass().getSimpleName());
+            return 0;
+        }
     }
 }

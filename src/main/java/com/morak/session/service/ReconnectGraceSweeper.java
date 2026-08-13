@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * {@code Clock}에서 읽는 훑기라야 개발용 시계 조작(DEV-2)으로 유예 초과를 실측할 수 있고,
  * 운영에서도 판정 기준이 코드 한 곳(설정값)에만 남는다.
  *
- * <p>이것은 명세의 배치(B1·B2·B4)가 아니다. 세션 하나의 수명 안에서만 의미가 있는 정리라
+ * <p>이것은 명세의 배치(B1·B2·B4·B5)가 아니다. 세션 하나의 수명 안에서만 의미가 있는 정리라
  * {@code DevBatch}로 등록하지 않는다.
  */
 @Component

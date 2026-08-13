@@ -68,7 +68,8 @@ public class SessionExitService {
      * 상태를 다시 확인한다 — 그 사이 퇴출됐거나 세션이 끝났으면 할 일이 없다.
      */
     public void leaveOnGraceExpired(Long sessionId, Long memberId) {
-        LiveSession session = liveSessionRepository.findById(sessionId).orElse(null);
+        // 세션 행이 첫 자리다(SessionClosingService의 LOCK_ORDER).
+        LiveSession session = liveSessionRepository.findByIdForUpdate(sessionId).orElse(null);
         if (session == null || !session.isLive()) {
             return;
         }
@@ -96,7 +97,8 @@ public class SessionExitService {
      * 클라이언트가 한쪽에서만 이의 신청(AP-1) 경로를 그린다.
      */
     public void leaveOnRequest(Long memberId, Long sessionId, LeftReason reason) {
-        LiveSession session = liveSessionRepository.findById(sessionId)
+        // 세션 행이 첫 자리다(SessionClosingService의 LOCK_ORDER).
+        LiveSession session = liveSessionRepository.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.SESSION_NOT_FOUND));
         SessionParticipant participant = sessionParticipantRepository
                 .findBySessionIdAndMemberId(sessionId, memberId)
@@ -139,6 +141,11 @@ public class SessionExitService {
                     .orElseThrow(() -> new IllegalStateException(
                             "퇴장 대상 참가자가 사라졌다: " + participantId));
             Long sessionId = participant.getSessionId();
+            // 참가자 행을 고치기 전에 세션 행을 잡는다(SessionClosingService의 LOCK_ORDER).
+            // 위의 findById는 잠금이 아닌 읽기라 순서가 뒤집히지 않는다.
+            if (liveSessionRepository.findByIdForUpdate(sessionId).isEmpty()) {
+                continue;
+            }
             participant.leave(reason, now);
             graceRegistry.close(sessionId, memberId);
             closingService.closeIfUnderMinimum(sessionId, now);

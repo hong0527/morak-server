@@ -184,13 +184,22 @@ public class MemberService {
 
     @Transactional
     public WithdrawalResponse requestWithdrawal(Long memberId) {
-        if (findMember(memberId).getStatus() == MemberStatus.WITHDRAW_PENDING) {
-            throw new BusinessException(ErrorCode.WITHDRAWAL_PENDING);
-        }
+        // 존재·파기 확인이 먼저다. 잠금 행은 회원과 함께 만들어지므로, 없는 회원을 잠그려
+        // 하면 잠금 행이 없다는 500이 나간다 — 그 자리의 정답은 401이다.
+        findMember(memberId);
         // 잠금 순서는 회원 행 → 조건 행 고정이다(MatchService 주석). 조건 행은 아래 호출이 잡는다.
         matchLockRepository.findByLockKey(MatchLock.memberKey(memberId))
                 .orElseThrow(() -> new IllegalStateException(
                         "회원 잠금 행이 없다. 가입 트랜잭션이 깨진 계정이다: " + memberId));
+        // 중복 신청 판정은 잠금을 얻은 뒤에 한다. 앞에서 읽은 값은 이 트랜잭션이 회원 행을
+        // 잡기 전의 것이라, 동시에 들어온 다른 신청이 커밋한 결과를 보지 못한다. 엔티티가
+        // 아니라 상태만 다시 읽는 이유는 영속성 컨텍스트에 남은 인스턴스가 그 값을 덮기
+        // 때문이다(MemberRepository#findStatusById 주석).
+        if (memberRepository.findStatusById(memberId).orElseThrow(
+                () -> new BusinessException(ErrorCode.UNAUTHORIZED))
+                == MemberStatus.WITHDRAW_PENDING) {
+            throw new BusinessException(ErrorCode.WITHDRAWAL_PENDING);
+        }
         // 순서는 SanctionService.apply와 같다 — 퇴장 먼저, 매칭 요청 해제가 나중이다. 두 경로가
         // 같은 두 자원을 반대 순서로 건드리면 동시에 실행됐을 때 서로를 기다린다.
         // 진행 중인 세션에 남겨 두면 탈퇴한 회원이 남의 세션에서 계속 자리를 차지한다.

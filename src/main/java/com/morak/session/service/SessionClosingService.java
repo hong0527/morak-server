@@ -61,6 +61,24 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 public class SessionClosingService {
 
+    /**
+     * 세션 안에서 잠금을 잡는 순서. <b>참가자 상태를 바꾸면서 종료 판정까지 하는 경로는 예외
+     * 없이 세션 행부터 잡는다</b>({@link LiveSessionRepository#findByIdForUpdate}) — SS-4 자리비움,
+     * SS-5·SS-6 화장실 모드, SS-7 자율 퇴장, SS-10 유예 초과·{@code room_finished}, AU-4 탈퇴,
+     * B1이 전부 그 경로다.
+     *
+     * <p><b>순서를 정해 두지 않으면 교착이 생긴다.</b> 퇴출은 참가자 행을 먼저 고치고 종료
+     * 판정으로 넘어오는데, 같은 순간 B1이 세션 행을 잡은 채 그 참가자 행을 정산하려 하면
+     * 둘이 서로를 기다린다. 세션 행이 언제나 첫 자리면 그 교차가 성립하지 않는다.
+     *
+     * <p>매칭 쪽 규약({@code member:{id} → match:{minutes}},
+     * {@link com.morak.match.service.MatchService})과는 겹치는 쌍이 없다 — 종료 경로는
+     * {@code match_lock}을 잡지 않고, 매칭 경로는 세션 행을
+     * 잡지 않는다. 두 규약이 만나는 곳은 AU-4 하나이고, 거기서도 회원 행이 먼저이며 세션 행은
+     * 그 안쪽이라 순환이 없다.
+     */
+    private static final String LOCK_ORDER = "live_session → session_participant → member";
+
     private static final Logger log = LoggerFactory.getLogger(SessionClosingService.class);
 
     private static final Set<ParticipantStatus> PRESENT =
@@ -141,6 +159,12 @@ public class SessionClosingService {
      * {@link SessionExitService}가, 퇴출은 {@link EvictionService}의 호출자가 부른다.
      */
     public void closeIfUnderMinimum(Long sessionId, LocalDateTime now) {
+        // 세는 것보다 잠그는 것이 먼저다. 이 순서를 뒤집으면 동시에 빠지는 사람들이 서로의
+        // 미커밋 상태를 "남아 있는 사람"으로 세어 전원이 종료를 건너뛴다(LOCK_ORDER 주석).
+        LiveSession session = lockSession(sessionId);
+        if (session == null || !session.isLive()) {
+            return;
+        }
         if (presentParticipantIds(sessionId).size() >= minParticipants) {
             return;
         }
@@ -155,7 +179,7 @@ public class SessionClosingService {
      * @return 실제로 닫았으면 1, 이미 닫혀 있었으면 0
      */
     public int closeSession(Long sessionId, SessionEndReason reason, LocalDateTime endedAt) {
-        LiveSession session = liveSessionRepository.findById(sessionId).orElse(null);
+        LiveSession session = lockSession(sessionId);
         if (session == null || !session.isLive()) {
             return 0;
         }
@@ -193,9 +217,11 @@ public class SessionClosingService {
         if (participant == null || !participant.isCompleted() || participant.getPointAwarded() > 0) {
             return 0;
         }
-        LiveSession session = liveSessionRepository.findById(participant.getSessionId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "참가자의 세션이 없다: participant=" + participantId));
+        // 지급은 참가자·회원 행을 고친다. 세션 행이 첫 자리다(LOCK_ORDER).
+        LiveSession session = lockSession(participant.getSessionId());
+        if (session == null) {
+            throw new IllegalStateException("참가자의 세션이 없다: participant=" + participantId);
+        }
         settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
                 session.getEndedAt(), false);
         return 1;
@@ -223,9 +249,10 @@ public class SessionClosingService {
         if (participant == null || participant.isCompleted()) {
             return false;
         }
-        LiveSession session = liveSessionRepository.findById(participant.getSessionId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "참가자의 세션이 없다: participant=" + participantId));
+        LiveSession session = lockSession(participant.getSessionId());
+        if (session == null) {
+            throw new IllegalStateException("참가자의 세션이 없다: participant=" + participantId);
+        }
         // 아직 진행 중인 세션은 완주 여부가 정해지지 않았다. 지금 완주로 찍으면 남은 시간을
         // 채우지 않은 사람이 완주자가 된다 — 판정은 종료 시각에 종료 루틴이 한다.
         if (session.getEndedAt() == null) {
@@ -289,6 +316,17 @@ public class SessionClosingService {
         } else {
             streakService.recordCompletion(memberId, completedOn, sessionId, endedAt);
         }
+    }
+
+    /**
+     * 세션 행 잠금. {@value #LOCK_ORDER}의 첫 자리이므로 이 호출보다 앞에서 참가자·회원 행을
+     * 잡는 경로를 만들면 안 된다.
+     *
+     * <p>없는 세션에 {@code null}을 돌려주는 것은 호출부가 전부 "이미 끝났거나 사라진 세션은
+     * 할 일이 없다"로 답하기 때문이다 — 여기서 예외를 던지면 웹훅·배치가 남의 사정으로 죽는다.
+     */
+    private LiveSession lockSession(Long sessionId) {
+        return liveSessionRepository.findByIdForUpdate(sessionId).orElse(null);
     }
 
     private SessionParticipant loadParticipant(Long participantId) {

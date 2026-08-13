@@ -122,7 +122,9 @@ public class PauseService {
      * 세션 상태를 먼저 보면 참가자가 아닌 사람이 세션 번호를 훑어 남의 세션이 끝났는지를 알 수 있다.
      */
     private LiveSession findSession(Long sessionId) {
-        return liveSessionRepository.findById(sessionId)
+        // 세션 행을 먼저 잡는다(SessionClosingService의 LOCK_ORDER). 초과 복귀가 3회째 경고면
+        // 여기서 퇴출과 조기 종료까지 이어지므로 이 경로도 종료 판정 경로다.
+        return liveSessionRepository.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.SESSION_NOT_FOUND));
     }
 

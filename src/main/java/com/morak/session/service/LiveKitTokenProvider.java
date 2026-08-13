@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
  * SS-2 접속 토큰 서명. 서버는 토큰만 발급하고 미디어는 경유하지 않는다.
  *
  * <p><b>identity = memberId 문자열</b>이라는 규약이 이 클래스와 {@link LiveKitWebhookService}
- * 양쪽에 걸려 있다(blueprint §10.5). 별도 매핑 컬럼을 두지 않으므로 이 규칙을 바꾸면 토큰
+ * 양쪽에 걸려 있다(api-spec §0-5·SS-2). 별도 매핑 컬럼을 두지 않으므로 이 규칙을 바꾸면 토큰
  * 발급과 웹훅 참가자 조회가 함께 깨진다. 그래서 문자열 변환을 두 곳에 흩지 않고
  * {@link #identityOf}·{@link LiveKitWebhookService}가 같은 규칙을 공유한다.
  *

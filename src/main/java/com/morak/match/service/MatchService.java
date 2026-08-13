@@ -14,6 +14,8 @@ import com.morak.match.repository.MatchLockRepository;
 import com.morak.match.repository.MatchRequestRepository;
 import com.morak.match.type.MatchEventType;
 import com.morak.match.type.MatchRequestStatus;
+import com.morak.member.repository.MemberRepository;
+import com.morak.member.type.MemberStatus;
 import com.morak.report.entity.Sanction;
 import com.morak.report.repository.SanctionRepository;
 import com.morak.session.entity.LiveSession;
@@ -73,6 +75,7 @@ public class MatchService {
     private final SessionParticipantRepository sessionParticipantRepository;
     private final EvictionRepository evictionRepository;
     private final SanctionRepository sanctionRepository;
+    private final MemberRepository memberRepository;
     private final Clock clock;
     private final List<Integer> targetMinutesOptions;
     private final int waitExpireMinutes;
@@ -87,6 +90,7 @@ public class MatchService {
                         SessionParticipantRepository sessionParticipantRepository,
                         EvictionRepository evictionRepository,
                         SanctionRepository sanctionRepository,
+                        MemberRepository memberRepository,
                         Clock clock,
                         @Value("${morak.match.target-minutes-options}")
                         List<Integer> targetMinutesOptions,
@@ -102,6 +106,7 @@ public class MatchService {
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.evictionRepository = evictionRepository;
         this.sanctionRepository = sanctionRepository;
+        this.memberRepository = memberRepository;
         this.clock = clock;
         this.targetMinutesOptions = targetMinutesOptions;
         this.waitExpireMinutes = waitExpireMinutes;
@@ -121,6 +126,7 @@ public class MatchService {
         LocalDateTime now = LocalDateTime.now(clock);
 
         lockMemberRow(memberId);
+        rejectIfNotActive(memberId);
         rejectIfAlreadyWaiting(memberId);
         rejectIfInSession(memberId);
         rejectIfInRematchCooldown(memberId, now);
@@ -233,6 +239,29 @@ public class MatchService {
         return targetMinutes;
     }
 
+    /**
+     * <b>회원 상태는 잠금을 얻은 뒤에 다시 읽는다.</b> 인터셉터(§0-2)가 본 값은 이 트랜잭션이
+     * 회원 행을 잡기 전의 것이라, 그 뒤에 커밋된 탈퇴 신청을 보지 못한다. 실측에서 MT-1과
+     * AU-4를 동시에 보내면 10건 중 7건이 탈퇴 대기 회원의 대기 요청으로 남았고, 그 요청이
+     * 6인 확정에 뽑히면 입장할 수 없는 사람(SS-2가 403이다)이 남의 세션에서 자리를 차지한
+     * 채 완주로 집계됐다.
+     *
+     * <p>회원 행을 잡은 뒤라는 것이 판정의 근거다 — AU-4도 같은 행을 잡고 커밋하므로,
+     * 여기까지 왔다는 것은 상대 트랜잭션이 이미 끝났다는 뜻이다.
+     */
+    private void rejectIfNotActive(Long memberId) {
+        MemberStatus status = memberRepository.findStatusById(memberId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED));
+        // 코드는 인터셉터와 같은 것을 쓴다. 같은 상태를 API마다 다른 코드로 내리면
+        // 클라이언트가 한쪽에서만 재로그인·탈퇴 안내 화면을 그린다.
+        if (status == MemberStatus.WITHDRAW_PENDING) {
+            throw new BusinessException(ErrorCode.WITHDRAWAL_PENDING);
+        }
+        if (status != MemberStatus.ACTIVE) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED);
+        }
+    }
+
     private void rejectIfAlreadyWaiting(Long memberId) {
         if (matchRequestRepository.findByActiveMemberId(memberId).isPresent()) {
             throw new BusinessException(ErrorCode.DUPLICATE_MATCH_REQUEST);
@@ -275,6 +304,7 @@ public class MatchService {
 
         Set<Long> excluded = new HashSet<>(findMembersInSession(queuedMembers));
         excluded.addAll(findSanctionedMembers(queuedMembers, now));
+        excluded.addAll(findInactiveMembers(queuedMembers));
         Map<Long, Set<Long>> blocks = blocksAmong(queuedMembers);
 
         List<MatchRequest> picked = new ArrayList<>();
@@ -339,6 +369,19 @@ public class MatchService {
         }
         return sessionParticipantRepository.findMemberIdsInSession(
                 memberIds, PARTICIPATING, SessionStatus.LIVE);
+    }
+
+    /**
+     * 참여할 수 없는 상태의 회원. {@link #rejectIfNotActive}가 이미 막는 자리지만, 대기열에
+     * 남은 요청은 그 게이트를 지난 지 오래된 것일 수 있다 — 요청 뒤에 탈퇴한 회원의 행이
+     * 만료 전까지 대기열에 남는다(AU-4가 회수하지 못한 경우).
+     */
+    private Set<Long> findInactiveMembers(List<Long> memberIds) {
+        if (memberIds.isEmpty()) {
+            return Set.of();
+        }
+        return Set.copyOf(memberRepository.findIdsWithStatusOtherThan(
+                memberIds, MemberStatus.ACTIVE));
     }
 
     private Set<Long> findSanctionedMembers(List<Long> memberIds, LocalDateTime now) {

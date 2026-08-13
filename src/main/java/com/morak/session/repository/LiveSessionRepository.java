@@ -2,12 +2,14 @@ package com.morak.session.repository;
 
 import com.morak.session.entity.LiveSession;
 import com.morak.session.type.SessionStatus;
+import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -19,6 +21,24 @@ public interface LiveSessionRepository extends JpaRepository<LiveSession, Long> 
 
     /** SS-10이 방 이름으로 세션을 되짚는 경로. uk_ls_room이 유일성을 보장한다. */
     Optional<LiveSession> findByLivekitRoomName(String livekitRoomName);
+
+    /**
+     * 세션 행을 FOR UPDATE로 잡는다. <b>참가자 상태를 바꾸면서 세션 종료 판정까지 하는 경로는
+     * 예외 없이 이 조회로 시작한다</b>({@link com.morak.session.service.SessionClosingService}
+     * 잠금 순서 주석).
+     *
+     * <p>잠그지 않으면 잔여 인원 판정이 성립하지 않는다. 여섯 명이 동시에 퇴출되면 각
+     * 트랜잭션이 아직 커밋되지 않은 남들을 "남아 있는 사람"으로 세어 전부 종료를 건너뛰고,
+     * 참가자가 0명인 세션이 LIVE로 남는다. 이 행을 잡아 직렬화해야 마지막 한 명이 앞선
+     * 커밋들을 보고 닫는다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            SELECT ls
+              FROM LiveSession ls
+             WHERE ls.id = :sessionId
+            """)
+    Optional<LiveSession> findByIdForUpdate(@Param("sessionId") Long sessionId);
 
     /**
      * AD-7 세션 모니터의 상태 필터. {@code status IS NULL}을 한 쿼리에 섞지 않고 메서드를
