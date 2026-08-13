@@ -101,6 +101,28 @@ class SessionCompletionPersistenceTest extends IntegrationTest {
                 .isEqualTo(fixtures.ledgerSum(memberId));
     }
 
+    @Test
+    @DisplayName("자정을 넘긴 세션도 시작한 날의 완주로 기록된다")
+    void 자정을_넘긴_세션은_시작일에_귀속된다() {
+        // 이 테스트가 죽으면: 심야 세션이 다음 날로 넘어가 시작한 날에는 완주 기록이 없다.
+        // 매일 23시에 공부하는 사람은 하루도 빠짐없이 완주해도 연속이 매일 끊긴다.
+        LocalDateTime startedAt = BASE_TIME.toLocalDate().atTime(23, 30);
+        Long memberId = fixtures.joinMember();
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, startedAt, List.of(memberId));
+        LocalDateTime endsAt = startedAt.plusMinutes(TARGET_MINUTES);
+        clock.fixAt(endsAt.plusMinutes(1));
+
+        assertThat(sessionClosingBatch.run()).isEqualTo(1);
+
+        // 끝난 날이 아니라 시작한 날이다. 둘은 다른 날짜다
+        assertThat(endsAt.toLocalDate()).isNotEqualTo(startedAt.toLocalDate());
+        assertThat(fixtures.count("streak_day", "member_id = ? AND completed_on = ?",
+                memberId, startedAt.toLocalDate())).isEqualTo(1);
+        assertThat(fixtures.count("streak_day", "member_id = ? AND completed_on = ?",
+                memberId, endsAt.toLocalDate())).isZero();
+        assertThat(fixtures.participant(sessionId, memberId).isCompleted()).isTrue();
+    }
+
     private void markEndedWithUnpaidCompletion(Long sessionId, Long memberId) {
         fixtures.execute("""
                 UPDATE live_session

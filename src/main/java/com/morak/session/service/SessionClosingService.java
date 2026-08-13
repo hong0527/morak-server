@@ -190,6 +190,7 @@ public class SessionClosingService {
         }
         // 지급이 시작되면 여기서 읽은 세션은 준영속이 된다. 뒤에 쓸 값은 지금 꺼내 둔다.
         int targetMinutes = session.getTargetMinutes();
+        LocalDate completedOn = completionDate(session);
         // 끝난 세션의 유예 창은 판정할 이유가 없다. 두면 스위퍼가 이미 끝난 세션을 집어 든다.
         graceRegistry.discardSession(sessionId);
 
@@ -197,7 +198,7 @@ public class SessionClosingService {
 
         List<Long> completerIds = presentParticipantIds(sessionId);
         for (Long participantId : completerIds) {
-            settleCompletion(participantId, sessionId, targetMinutes, endedAt, false);
+            settleCompletion(participantId, sessionId, targetMinutes, endedAt, completedOn, false);
         }
         log.info("세션 종료 처리: session={}, reason={}, 완주 {}명",
                 sessionId, reason, completerIds.size());
@@ -223,7 +224,7 @@ public class SessionClosingService {
             throw new IllegalStateException("참가자의 세션이 없다: participant=" + participantId);
         }
         settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
-                session.getEndedAt(), false);
+                session.getEndedAt(), completionDate(session), false);
         return 1;
     }
 
@@ -259,7 +260,7 @@ public class SessionClosingService {
             return false;
         }
         settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
-                session.getEndedAt(), true);
+                session.getEndedAt(), completionDate(session), true);
         return true;
     }
 
@@ -305,17 +306,33 @@ public class SessionClosingService {
      *                   증분이 아니라 재계산으로 갱신해야 하는 유일한 차이다
      */
     private void settleCompletion(Long participantId, Long sessionId, int targetMinutes,
-                                  LocalDateTime endedAt, boolean backfilled) {
+                                  LocalDateTime endedAt, LocalDate completedOn,
+                                  boolean backfilled) {
         Long memberId = loadParticipant(participantId).getMemberId();
         int amount = completePointPerHour * targetMinutes / MINUTES_PER_HOUR;
         pointService.award(memberId, amount, PointReason.SESSION_COMPLETE, participantId, endedAt);
         loadParticipant(participantId).complete(amount);
-        LocalDate completedOn = endedAt.toLocalDate();
         if (backfilled) {
             streakService.recordBackfilledCompletion(memberId, completedOn, sessionId, endedAt);
         } else {
             streakService.recordCompletion(memberId, completedOn, sessionId, endedAt);
         }
+    }
+
+    /**
+     * 완주가 어느 날짜로 기록되는가 — <b>끝난 날이 아니라 시작한 날이다.</b>
+     *
+     * <p>종료 시각을 쓰면 자정을 넘긴 세션이 다음 날로 넘어간다. 23시 30분에 시작한 60분
+     * 세션은 0시 30분에 끝나므로 시작한 날에는 완주 기록이 남지 않고, 매일 심야에 공부하는
+     * 사람은 하루도 빠짐없이 세션을 채워도 연속이 매일 끊긴다. 실제로 8월 14일 23시 30분
+     * 세션을 완주한 회원의 Streak가 0으로 초기화되는 것을 확인했다.
+     *
+     * <p>시작일 기준이면 그 사람이 "오늘 공부했다"고 인식하는 날과 기록이 같아진다. 하루
+     * 한 행이라는 제약(uk_streak_day)도 그대로 성립한다 — 같은 날 시작한 세션을 여러 개
+     * 완주해도 그날은 한 번이고, 자정 직후 새로 시작한 세션은 다음 날의 첫 완주가 된다.
+     */
+    private LocalDate completionDate(LiveSession session) {
+        return session.getStartedAt().toLocalDate();
     }
 
     /**
