@@ -2,6 +2,8 @@ package com.morak.point.repository;
 
 import com.morak.point.entity.PointLedger;
 import com.morak.point.type.PointReason;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -28,6 +30,15 @@ public interface PointLedgerRepository extends JpaRepository<PointLedger, Long> 
     Optional<PointLedger> findByMemberIdAndReasonAndRefTypeAndRefId(Long memberId,
                                                                     PointReason reason,
                                                                     String refType, Long refId);
+
+    /**
+     * 같은 사유의 원장 줄을 근거 행 여러 개에 대해 한 번에 읽는다. AP-2가 인용된 이의들의
+     * 환급액을 페이지 단위로 붙일 때 쓴다 — 행마다 조회하면 페이지가 쿼리 묶음이 된다.
+     */
+    List<PointLedger> findByMemberIdAndReasonAndRefTypeAndRefIdIn(Long memberId,
+                                                                  PointReason reason,
+                                                                  String refType,
+                                                                  Collection<Long> refIds);
 
     /** PT-1 내역. 정렬은 호출부가 {@code Pageable}에 실어 준다 — {@code idx_pl_member}가 받는다. */
     Page<PointLedger> findByMemberId(Long memberId, Pageable pageable);

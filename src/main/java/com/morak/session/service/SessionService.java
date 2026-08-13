@@ -12,6 +12,7 @@ import com.morak.member.repository.StreakDayRepository;
 import com.morak.member.service.StreakService;
 import com.morak.member.type.GoalStatus;
 import com.morak.session.dto.request.SessionGoalRequest;
+import com.morak.session.dto.response.ActiveSessionResponse;
 import com.morak.session.dto.response.LivekitTokenResponse;
 import com.morak.session.dto.response.MySessionSummaryResponse;
 import com.morak.session.dto.response.SessionDetailResponse;
@@ -62,6 +63,7 @@ public class SessionService {
     private final EvictionRepository evictionRepository;
     private final StreakService streakService;
     private final LiveKitTokenProvider liveKitTokenProvider;
+    private final WarningTraceService warningTraceService;
 
     public SessionService(LiveSessionRepository liveSessionRepository,
                           SessionParticipantRepository sessionParticipantRepository,
@@ -71,7 +73,8 @@ public class SessionService {
                           MemberGoalRepository memberGoalRepository,
                           EvictionRepository evictionRepository,
                           StreakService streakService,
-                          LiveKitTokenProvider liveKitTokenProvider) {
+                          LiveKitTokenProvider liveKitTokenProvider,
+                          WarningTraceService warningTraceService) {
         this.liveSessionRepository = liveSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.memberRepository = memberRepository;
@@ -81,6 +84,7 @@ public class SessionService {
         this.evictionRepository = evictionRepository;
         this.streakService = streakService;
         this.liveKitTokenProvider = liveKitTokenProvider;
+        this.warningTraceService = warningTraceService;
     }
 
     /** SS-1. 참가 이력이 있으면 상태와 무관하게 볼 수 있다 — 퇴장한 사람도 결과 화면을 연다. */
@@ -135,7 +139,24 @@ public class SessionService {
                 memberId, GoalStatus.ACHIEVED, session.getEndedAt());
         return SessionResultResponse.of(session, participants, nicknames, me,
                 streakService.snapshotOn(memberId, completedOn), countedToday, goalAchieved,
-                myEvictionId(me, sessionId, memberId));
+                myEvictionId(me, sessionId, memberId), myWarnings(me, sessionId, session));
+    }
+
+    /**
+     * 본인 경고의 근거 구간(SS-8). 되짚기는 AD-9와 같은 {@link WarningTraceService}다 —
+     * 영상을 저장하지 않으므로 이 구간이 당사자가 이의 사유를 쓸 유일한 재료이고, 관리자와
+     * 다른 값을 보여 주면 그 차이가 분쟁거리가 된다. 본인 것만 만든다는 원칙은
+     * {@link #myEvictionId}와 같고, 경고가 없으면 조회하지 않는 이유도 같다.
+     */
+    private List<SessionResultResponse.WarningItem> myWarnings(SessionParticipant me,
+                                                               Long sessionId,
+                                                               LiveSession session) {
+        if (me.getWarningCount() == 0) {
+            return List.of();
+        }
+        return warningTraceService.traceAll(sessionId, me.getMemberId(), session).stream()
+                .map(SessionResultResponse.WarningItem::from)
+                .toList();
     }
 
     /**
@@ -229,6 +250,22 @@ public class SessionService {
                 .collect(Collectors.toMap(LiveSession::getId, Function.identity()));
         return PageResponse.of(participants, participant -> MySessionSummaryResponse.of(
                 participant, sessions.get(participant.getSessionId())));
+    }
+
+    /**
+     * AU-2의 {@code activeSession}. 판정식은 MT-1 3단계(ALREADY_IN_ACTIVE_SESSION)와 같다 —
+     * 참가 행이 ACTIVE·PAUSED이고 세션이 LIVE. 그 검사가 이중 참가를 막으므로 결과는 최대
+     * 1건이고, 여럿이 잡히면 데이터가 이미 깨진 것이라 첫 행을 내리고 로그로 남기는 대신
+     * 그대로 첫 행을 쓴다(같은 식을 쓰는 AU-4 퇴장 처리와 동일).
+     */
+    public ActiveSessionResponse getMyActiveSession(Long memberId) {
+        return sessionParticipantRepository
+                .findParticipating(memberId, PRESENT, SessionStatus.LIVE)
+                .stream()
+                .findFirst()
+                .map(participant -> ActiveSessionResponse.of(
+                        participant, findSession(participant.getSessionId())))
+                .orElse(null);
     }
 
     private LiveSession findSession(Long sessionId) {

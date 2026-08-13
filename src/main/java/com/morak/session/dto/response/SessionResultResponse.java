@@ -4,10 +4,12 @@ import com.morak.common.type.BadgeCode;
 import com.morak.member.service.StreakService;
 import com.morak.session.entity.LiveSession;
 import com.morak.session.entity.SessionParticipant;
+import com.morak.session.service.WarningTraceService;
 import com.morak.session.type.LeftReason;
 import com.morak.session.type.ParticipantStatus;
 import com.morak.session.type.SessionEndReason;
 import com.morak.session.type.SessionStatus;
+import com.morak.session.type.WarningBasis;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -35,9 +37,34 @@ public record SessionResultResponse(
     public record Streak(int before, int after, boolean countedToday) {}
 
     /**
+     * 본인 경고 1건과 그 근거 구간. 영상을 저장하지 않으므로(D17) 이 구간이 당사자가 이의
+     * 사유(AP-1)를 쓸 유일한 재료다. 되짚기는 관리자 심사(AD-9)와 같은
+     * {@link WarningTraceService}를 쓴다 — 관리자와 본인이 다른 구간을 보면 그 차이 자체가
+     * 분쟁거리가 된다. Pause 초과 경고는 자리비움 구간이 없어 구간 세 필드가 null이다.
+     */
+    public record WarningItem(
+            int seq,
+            WarningBasis basis,
+            LocalDateTime issuedAt,
+            LocalDateTime absenceStartedAt,
+            LocalDateTime absenceEndedAt,
+            Long absentSeconds) {
+
+        public static WarningItem from(WarningTraceService.WarningTrace trace) {
+            // reportSkewSeconds는 싣지 않는다 — 전송 지연·시각 조작을 가리는 관리자용
+            // 분석 신호라, 당사자에게 주면 다음 위조의 교본이 된다
+            return new WarningItem(trace.seq(), trace.basis(), trace.issuedAt(),
+                    trace.startedAt(), trace.endedAt(), trace.absentSeconds());
+        }
+    }
+
+    /**
      * {@code evictionId}는 퇴출된 본인에게만 값이 있고 아니면 null이다. 이의 신청(AP-1)의
      * 진입 번호라 결과 화면에서 그대로 이의 버튼을 그릴 수 있어야 한다 — 퇴출 순간의 SS-4
      * 응답 한 번에만 실려 있으면 그 응답을 놓친 사용자는 3일짜리 기한을 흘려보낸다.
+     *
+     * <p>{@code warnings}도 같은 이유로 본인 정보에만 있다. 남의 행({@link Participant})에
+     * 근거 구간이 실리면 같은 세션에 있었다는 이유로 타인의 자리비움 이력이 새어 나간다.
      */
     public record My(
             boolean completed,
@@ -48,10 +75,12 @@ public record SessionResultResponse(
             Streak streak,
             boolean goalAchieved,
             BadgeCode badgeCode,
-            Long evictionId) {
+            Long evictionId,
+            List<WarningItem> warnings) {
 
         static My of(SessionParticipant participant, StreakService.StreakSnapshot snapshot,
-                     boolean countedToday, boolean goalAchieved, Long evictionId) {
+                     boolean countedToday, boolean goalAchieved, Long evictionId,
+                     List<WarningItem> warnings) {
             return new My(
                     participant.isCompleted(),
                     participant.getStatus(),
@@ -62,7 +91,8 @@ public record SessionResultResponse(
                     goalAchieved,
                     // 뱃지는 저장하지 않고 목표 달성 여부에서 파생한다(D3)
                     goalAchieved ? BadgeCode.GOAL_ACHIEVED : null,
-                    evictionId);
+                    evictionId,
+                    warnings);
         }
     }
 
@@ -93,7 +123,8 @@ public record SessionResultResponse(
                                            StreakService.StreakSnapshot snapshot,
                                            boolean countedToday,
                                            boolean goalAchieved,
-                                           Long evictionId) {
+                                           Long evictionId,
+                                           List<WarningItem> myWarnings) {
         return new SessionResultResponse(
                 session.getId(),
                 session.getStatus(),
@@ -101,7 +132,7 @@ public record SessionResultResponse(
                 session.getStartedAt(),
                 session.getEndedAt(),
                 session.getEndReason(),
-                My.of(me, snapshot, countedToday, goalAchieved, evictionId),
+                My.of(me, snapshot, countedToday, goalAchieved, evictionId, myWarnings),
                 participants.stream()
                         .map(participant -> Participant.of(
                                 participant,

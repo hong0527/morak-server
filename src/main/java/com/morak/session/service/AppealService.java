@@ -1,19 +1,34 @@
 package com.morak.session.service;
 
+import com.morak.common.dto.PageParams;
+import com.morak.common.dto.PageResponse;
 import com.morak.common.error.BusinessException;
 import com.morak.common.error.ErrorCode;
+import com.morak.point.entity.PointLedger;
+import com.morak.point.repository.PointLedgerRepository;
+import com.morak.point.type.PointReason;
 import com.morak.session.dto.request.AppealCreateRequest;
 import com.morak.session.dto.response.AppealCreateResponse;
+import com.morak.session.dto.response.MyAppealResponse;
 import com.morak.session.entity.AppealCase;
 import com.morak.session.entity.Eviction;
+import com.morak.session.entity.SessionParticipant;
 import com.morak.session.repository.AppealCaseRepository;
 import com.morak.session.repository.EvictionRepository;
+import com.morak.session.repository.SessionParticipantRepository;
+import com.morak.session.type.AppealStatus;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,14 +49,22 @@ public class AppealService {
 
     private static final Logger log = LoggerFactory.getLogger(AppealService.class);
 
+    /** AP-2 정렬 — 최근 접수가 위. 동률은 번호 큰 쪽이 앞이라 페이지 경계가 흔들리지 않는다. */
+    private static final Sort MY_APPEALS_SORT =
+            Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
+
     private final AppealCaseRepository appealCaseRepository;
     private final EvictionRepository evictionRepository;
+    private final SessionParticipantRepository sessionParticipantRepository;
+    private final PointLedgerRepository pointLedgerRepository;
     private final Clock clock;
     private final int slaHours;
     private final int fileDeadlineDays;
 
     public AppealService(AppealCaseRepository appealCaseRepository,
                          EvictionRepository evictionRepository,
+                         SessionParticipantRepository sessionParticipantRepository,
+                         PointLedgerRepository pointLedgerRepository,
                          Clock clock,
                          // 이의에는 신고 같은 등급 구분이 없다. 24시간은 피해자가 계속
                          // 노출되는 고위험 신고의 기한이고, 이의는 이미 벌어진 퇴출을
@@ -50,6 +73,8 @@ public class AppealService {
                          @Value("${morak.appeal.file-deadline-days}") int fileDeadlineDays) {
         this.appealCaseRepository = appealCaseRepository;
         this.evictionRepository = evictionRepository;
+        this.sessionParticipantRepository = sessionParticipantRepository;
+        this.pointLedgerRepository = pointLedgerRepository;
         this.clock = clock;
         this.slaHours = slaHours;
         this.fileDeadlineDays = fileDeadlineDays;
@@ -85,5 +110,53 @@ public class AppealService {
         log.info("퇴출 이의 접수: appeal={}, eviction={}, member={}, 기한={}",
                 appeal.getId(), evictionId, memberId, appeal.getSlaDueAt());
         return AppealCreateResponse.from(appeal);
+    }
+
+    /**
+     * AP-2 내 이의 목록. URL이 본인 스코프({@code /members/me})라 소유권 검사가 따로 없고,
+     * 남의 evictionId를 훑는 경로 자체가 성립하지 않는다 — AP-1이 403으로 감추는 것을 여기서는
+     * 조회 조건이 대신한다.
+     *
+     * <p>인용의 원복 두 값은 저장하지 않고 남긴 기록에서 되짚는다. 환급액은 원장
+     * ({@code APPEAL_REFUND}) 줄이고, 원장에 없으면 0이다 — 되돌릴 차감이 없어 역분개도 없던
+     * 경우(AD-6)까지 처리 응답과 같은 답을 내야 한다. 완주 소급은 참가 행의 {@code completed}다
+     * — 퇴출자의 완주 표시는 인용 소급으로만 생긴다.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<MyAppealResponse> getMyAppeals(Long memberId, Integer page, Integer size) {
+        PageParams params = PageParams.of(page, size);
+        Page<AppealCase> appeals = appealCaseRepository.findByMemberId(
+                memberId, params.toPageable(MY_APPEALS_SORT));
+        // 페이지 분량의 근거를 한 번에 읽는다. 행마다 퇴출·원장·참가를 조회하면
+        // 20건짜리 페이지가 쿼리 61개가 된다.
+        Map<Long, Eviction> evictions = evictionRepository
+                .findAllById(appeals.getContent().stream().map(AppealCase::getEvictionId).toList())
+                .stream()
+                .collect(Collectors.toMap(Eviction::getId, Function.identity()));
+        List<Long> acceptedEvictionIds = appeals.getContent().stream()
+                .filter(appeal -> appeal.getStatus() == AppealStatus.ACCEPTED)
+                .map(AppealCase::getEvictionId)
+                .toList();
+        Map<Long, Integer> refunds = pointLedgerRepository
+                .findByMemberIdAndReasonAndRefTypeAndRefIdIn(memberId, PointReason.APPEAL_REFUND,
+                        PointLedger.REF_EVICTION, acceptedEvictionIds)
+                .stream()
+                .collect(Collectors.toMap(PointLedger::getRefId, PointLedger::getDelta));
+        Map<Long, Boolean> completedBySession = sessionParticipantRepository
+                .findBySessionIdInOrderByIdAsc(acceptedEvictionIds.stream()
+                        .map(id -> evictions.get(id).getSessionId())
+                        .toList())
+                .stream()
+                .filter(participant -> participant.getMemberId().equals(memberId))
+                .collect(Collectors.toMap(SessionParticipant::getSessionId,
+                        SessionParticipant::isCompleted));
+        return PageResponse.of(appeals, appeal -> {
+            Eviction eviction = evictions.get(appeal.getEvictionId());
+            boolean accepted = appeal.getStatus() == AppealStatus.ACCEPTED;
+            return MyAppealResponse.of(appeal, eviction,
+                    accepted ? refunds.getOrDefault(eviction.getId(), 0) : null,
+                    accepted ? completedBySession.getOrDefault(eviction.getSessionId(), false)
+                             : null);
+        });
     }
 }

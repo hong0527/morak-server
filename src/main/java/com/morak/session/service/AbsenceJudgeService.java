@@ -126,12 +126,14 @@ public class AbsenceJudgeService {
                 request.clientSeq(), occurredAt, now));
         if (!isAbsenceClosed(request, previous, participant)) {
             return AbsenceEventResponse.of(participant.getWarningCount(), null,
-                    evictionService.getPointPenalty());
+                    evictionService.getPointPenalty(), null);
         }
         long absentSeconds = Duration.between(previous.getOccurredAt(), occurredAt).getSeconds();
         if (absentSeconds <= thresholdSeconds) {
+            // 경고가 없어도 닫힌 구간의 초는 내린다 — 임계에 얼마나 가까웠는지를 보여 줘야
+            // 사용자가 다음 자리비움을 조절할 수 있다(SS-5의 closedAbsenceSeconds와 같은 계약)
             return AbsenceEventResponse.of(participant.getWarningCount(), null,
-                    evictionService.getPointPenalty());
+                    evictionService.getPointPenalty(), absentSeconds);
         }
         return warn(sessionId, participant, event, absentSeconds, now);
     }
@@ -268,6 +270,7 @@ public class AbsenceJudgeService {
             closingService.closeIfUnderMinimum(sessionId, now);
         }
         return AbsenceEventResponse.of(participant.getWarningCount(),
-                eviction == null ? null : eviction.getId(), evictionService.getPointPenalty());
+                eviction == null ? null : eviction.getId(), evictionService.getPointPenalty(),
+                absentSeconds);
     }
 }

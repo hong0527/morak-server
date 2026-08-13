@@ -1,6 +1,8 @@
 package com.morak.session.repository;
 
 import com.morak.session.entity.AppealCase;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
@@ -21,4 +23,7 @@ public interface AppealCaseRepository
      * 재신청을 제약 위반이 아니라 409로 되돌려 주기 위해서다.
      */
     boolean existsByEvictionId(Long evictionId);
+
+    /** AP-2 내 이의 목록. 정렬은 호출부가 {@code Pageable}에 실어 준다. */
+    Page<AppealCase> findByMemberId(Long memberId, Pageable pageable);
 }

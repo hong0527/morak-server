@@ -24,6 +24,7 @@ import com.morak.member.type.MemberStatus;
 import com.morak.report.entity.Sanction;
 import com.morak.report.repository.SanctionRepository;
 import com.morak.session.service.SessionExitService;
+import com.morak.session.service.SessionService;
 import com.morak.session.type.LeftReason;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -57,6 +58,7 @@ public class MemberService {
     private final MatchLockRepository matchLockRepository;
     private final MatchService matchService;
     private final SessionExitService sessionExitService;
+    private final SessionService sessionService;
     private final MemberAccountPurger memberAccountPurger;
     private final Clock clock;
     private final TransactionTemplate transactionTemplate;
@@ -69,6 +71,7 @@ public class MemberService {
                          MatchLockRepository matchLockRepository,
                          MatchService matchService,
                          SessionExitService sessionExitService,
+                         SessionService sessionService,
                          MemberAccountPurger memberAccountPurger,
                          Clock clock,
                          PlatformTransactionManager transactionManager,
@@ -80,6 +83,7 @@ public class MemberService {
         this.matchLockRepository = matchLockRepository;
         this.matchService = matchService;
         this.sessionExitService = sessionExitService;
+        this.sessionService = sessionService;
         this.memberAccountPurger = memberAccountPurger;
         this.clock = clock;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
@@ -105,7 +109,8 @@ public class MemberService {
         // 끊긴 날 캐시를 0으로 쓰는 배치가 없어서, 끊겼는지만 오늘 날짜로 판정해 내린다.
         // 동의 여부는 행의 존재 그 자체다 — 미동의를 저장하지 않으므로 false 행이 없다(AU-6).
         return MemberMeResponse.from(member, now.toLocalDate(),
-                mediaConsentRepository.existsById(memberId), goal, sanction);
+                mediaConsentRepository.existsById(memberId), goal,
+                sessionService.getMyActiveSession(memberId), sanction);
     }
 
     /**

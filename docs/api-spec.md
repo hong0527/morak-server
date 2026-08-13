@@ -39,7 +39,7 @@
 | ① | JWT 유효성 | 401 `UNAUTHORIZED` / `TOKEN_EXPIRED` | `/api/auth/**`(AU-1), `/api/dev/**`(DEV-2~4), **`POST /api/webhooks/livekit`(SS-10)**, **`POST /api/webhooks/payment`(PY-3)**, `/h2-console/**`, `/error` |
 | ② | 회원 상태 `member.status` | WITHDRAW_PENDING → 403 `WITHDRAWAL_PENDING` / DELETED → 401 `UNAUTHORIZED` | AU-1, AU-2, AU-5(철회), 웹훅 2종, DEV |
 | ③ | 관리자 역할 (`/api/admin/**`) | 403 `FORBIDDEN_ROLE` | — |
-| ④ | 유효 제재 `starts_at <= now AND (ends_at IS NULL OR ends_at > now)` | 403 `MEMBER_SANCTIONED` (details: 종료 시각) | AU-1, AU-2, AU-4(탈퇴), AU-5(철회 — 막으면 계정 복구가 영구 불가해진다), **AP-1(퇴출 이의 — 막으면 잘못된 퇴출의 구제 경로가 함께 닫힌다, NFR-402)**, 웹훅 2종, DEV |
+| ④ | 유효 제재 `starts_at <= now AND (ends_at IS NULL OR ends_at > now)` | 403 `MEMBER_SANCTIONED` (details: 종료 시각) | AU-1, AU-2, AU-4(탈퇴), AU-5(철회 — 막으면 계정 복구가 영구 불가해진다), **AP-1·AP-2(퇴출 이의와 그 결과 조회 — 막으면 잘못된 퇴출의 구제 경로가 함께 닫힌다, NFR-402)**, 웹훅 2종, DEV |
 | ⑤ | 연령 `age_verification` | REQUIRED → 403 `AGE_NOT_VERIFIED` | §0-3 매트릭스 참조 |
 
 **JWT skip 경로의 신원 확인 방식**
@@ -85,6 +85,7 @@
 | SS-10 LiveKit 웹훅 | — | 예외 | 예외 | 예외 | — | — | 서명 검증 |
 | SS-11 스티커 목록 | — | ✓ | ✓ | ✓ | — | — | — |
 | AP-1 퇴출 이의 신청 | — | ✓ | **예외** | ✓ | — | 본인 eviction | 이의 미제출 |
+| AP-2 내 이의 목록 | — | ✓ | **예외** | ✓ | — | 본인 | — |
 | PT-1 포인트 조회 | — | ✓ | ✓ | ✓ | — | 본인 | — |
 | SR-1 상품 목록 | — | ✓ | ✓ | ✓ | — | — | `HIDDEN` 제외 |
 | SR-2 상품 상세 | — | ✓ | ✓ | ✓ | — | — | `HIDDEN` 제외 |
@@ -103,7 +104,7 @@
 - SS-9 내 세션 이력 — 본인 상태 확인은 막지 않는다. 참여 자체는 MT-1에서 이미 막힌다.
 - RP-1 신고 — 안전 도구는 절대 막지 않는다. 생년월일 미입력 상태의 유저가 유해 상황을 보고도 신고하지 못하는 상태를 방지한다.
 
-**제재 게이트 제외에 AP-1이 들어간 이유** — 퇴출 이의는 잘못된 퇴출을 되돌리는 유일한 수단이고(NFR-402), 이의 기한은 3일이다. 별개 사유의 제재가 걸려 있다는 이유로 함께 닫으면 그 3일이 손도 못 대고 지나간다. AU-5 탈퇴 철회를 열어 두는 것과 같은 논리다 — 구제 경로는 제재로 막지 않는다.
+**제재 게이트 제외에 AP-1·AP-2가 들어간 이유** — 퇴출 이의는 잘못된 퇴출을 되돌리는 유일한 수단이고(NFR-402), 이의 기한은 3일이다. 별개 사유의 제재가 걸려 있다는 이유로 함께 닫으면 그 3일이 손도 못 대고 지나간다. AU-5 탈퇴 철회를 열어 두는 것과 같은 논리다 — 구제 경로는 제재로 막지 않는다. 결과 조회(AP-2)도 같은 이유로 연다 — 신청은 되는데 인용·기각을 볼 수 없으면 반쪽 창구다.
 
 **세션 API의 검사 순서** — SS-1~SS-8은 **세션 존재(404) → 참가 자격(403) → 세션 상태(409)** 순으로 판정한다. 상태를 먼저 보면 참가자가 아닌 사람이 세션 번호를 훑어 "그 세션이 존재하고 끝났다"를 알아낼 수 있다. 참가자에게만 `SESSION_ENDED`·`SESSION_NOT_ENDED`가 보인다.
 
@@ -319,6 +320,7 @@ morak:
 | SS-10 | POST /api/webhooks/livekit | LiveKit 입퇴장 웹훅 | 3 |
 | SS-11 | GET /api/stickers | 스티커 종류 목록 | 3 |
 | AP-1 | POST /api/evictions/{evictionId}/appeals | 퇴출 이의 신청 | 10 |
+| AP-2 | GET /api/members/me/appeals | 내 이의 목록·결과 | 10 |
 | PT-1 | GET /api/members/me/points | 포인트 잔액·원장 | 6 |
 | SR-1 | GET /api/store/products | 상품 목록 | 7 |
 | SR-2 | GET /api/store/products/{id} | 상품 상세 | 7 |
@@ -428,6 +430,13 @@ morak:
     "achievedAt": null
   },
   "streak": {"current": 5, "lastCompletedOn": "2026-08-11"},
+  "activeSession": {
+    "sessionId": 5501,
+    "participantStatus": "ACTIVE",
+    "targetMinutes": 120,
+    "startedAt": "2026-08-12T09:00:00+09:00",
+    "endsAt": "2026-08-12T11:00:00+09:00"
+  },
   "sanction": null
 }
 ```
@@ -435,6 +444,8 @@ morak:
 목표 미설정이면 `"goal": null`. 유효 제재 보유 시 `"sanction": {"type": "TEMP", "endsAt": "2026-08-15T00:00:00+09:00"}`.
 
 `streak.current`는 저장된 캐시가 아니라 조회 시점 기준 판정값이다(§0-6 Streak 리셋). `lastCompletedOn`이 오늘도 어제도 아니면 `current`는 0으로 내려가지만 `lastCompletedOn`은 마지막 완주일 그대로다 — 둘이 어긋나 보이는 것이 정상이고, 그것이 "언제 끊겼는지"를 화면에 그릴 수 있는 유일한 재료다.
+
+`activeSession`은 진행 중(`LIVE`) 세션에 `ACTIVE`·`PAUSED`로 참가 중인 행이 있으면 그 세션이고, 없으면 `null`이다(MT-1 3단계와 같은 판정식이라 최대 1건). 앱을 재시작한 클라이언트가 재접속 유예(D13) 안에 SS-2를 다시 받으러 갈 진입점이다 — 이 필드가 없으면 90초 안에 세션 번호를 되찾을 계약상 경로가 없다. `LEFT`·`EVICTED` 참가와 끝난 세션은 실리지 않는다.
 
 발생 에러: 401 `UNAUTHORIZED` / 401 `TOKEN_EXPIRED`
 
@@ -833,14 +844,16 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 응답 200 (경고 부여)
 
 ```json
-{"accepted": true, "warningCount": 2, "evicted": false, "evictionId": null, "pointDelta": 0}
+{"accepted": true, "warningCount": 2, "evicted": false, "evictionId": null, "pointDelta": 0, "closedAbsenceSeconds": 74}
 ```
 
 응답 200 (퇴출)
 
 ```json
-{"accepted": true, "warningCount": 3, "evicted": true, "evictionId": 77, "pointDelta": -300}
+{"accepted": true, "warningCount": 3, "evicted": true, "evictionId": 77, "pointDelta": -300, "closedAbsenceSeconds": 81}
 ```
+
+`closedAbsenceSeconds`는 이 보고로 닫힌 자리비움 구간의 지속 초다. 닫힌 구간이 없으면(START 보고, 짝 없는 END) `null`이다. 경고가 붙는 순간 몇 초로 판정됐는지 당사자가 즉시 알아야 하고, 임계 이하로 닫혀 경고가 없을 때도 값을 내린다 — 임계에 얼마나 가까웠는지가 다음 자리비움을 조절할 근거다. 이름·형태는 SS-5의 같은 필드와 같다.
 
 발생 에러: 400 `VALIDATION_FAILED`(`occurredAt`이 [세션 시작 −5초, 현재 +5초]를 벗어남) / 409 `DUPLICATE_ABSENCE_EVENT`(같은 `clientSeq` 재수신 — 서버 상태는 바뀌지 않으므로 클라이언트는 정상 종료로 취급한다) / 429 `ABSENCE_RATE_LIMITED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND`
 
@@ -991,7 +1004,10 @@ UPDATE session_participant
     "streak": {"before": 4, "after": 5, "countedToday": true},
     "goalAchieved": false,
     "badgeCode": null,
-    "evictionId": null
+    "evictionId": null,
+    "warnings": [
+      {"seq": 1, "basis": "ABSENCE", "issuedAt": "2026-08-12T09:42:00+09:00", "absenceStartedAt": "2026-08-12T09:40:46+09:00", "absenceEndedAt": "2026-08-12T09:42:00+09:00", "absentSeconds": 74}
+    ]
   },
   "participants": [
     {"memberId": 1042, "nickname": "익명 치타037", "isMe": true, "participantStatus": "ACTIVE", "completed": true, "warningCount": 1},
@@ -1010,6 +1026,8 @@ UPDATE session_participant
 `participantStatus`가 `LEFT`이고 `leftReason=DEVICE_ISSUE`인데 본인이 퇴장을 누른 적이 없다면, 연결이 90초 넘게 끊겨 서버가 자동 처리한 경우다 (SS-10, D13). 이때도 경고나 포인트 차감은 없고 그 세션만 미완주다.
 
 `my.evictionId`는 **본인이 그 세션에서 퇴출된 경우에만** 값이 있고 아니면 `null`이다. 이의 신청(AP-1)의 진입 번호이므로 결과 화면에서 그대로 이의 버튼을 그릴 수 있다. `participants[]`에는 실리지 않는다 — 남의 퇴출 번호는 어떤 경우에도 내려가지 않는다.
+
+`my.warnings`는 본인 경고 전량과 그 근거 구간이다(경고가 없으면 빈 배열). 영상을 저장하지 않으므로(D17) 이 구간이 당사자가 이의 사유를 쓸 유일한 재료다. 되짚기는 관리자 심사(AD-9)와 같은 경로를 쓴다 — 관리자와 본인이 같은 경고에 다른 구간을 보면 그 차이 자체가 분쟁거리가 된다. `basis=PAUSE_OVERRUN`(화장실 모드 초과)은 자리비움 구간이 없어 `absenceStartedAt`·`absenceEndedAt`·`absentSeconds`가 전부 `null`이다 — 되짚지 못하는 시각은 지어내지 않는다. AD-9 전용 분석값(`reportSkewSeconds`·`concurrentReporterCount`)은 싣지 않으며, `evictionId`와 같은 원칙으로 `participants[]`의 남의 행에는 어떤 경우에도 구간이 내려가지 않는다.
 
 **지급은 세션이 끝나는 그 트랜잭션에서 함께 끝난다.** 정시 종료·조기 종료·`room_finished` 어느 경로든 마찬가지라, 종료 직후 이 API를 열어도 `pointAwarded`는 이미 확정값이다(§5). 종료 트랜잭션이 지급을 남기지 못하고 끊긴 경우에만 B1의 흡수 지급이 최대 1분 뒤에 채운다.
 
@@ -1158,6 +1176,47 @@ UPDATE session_participant
 제재 게이트를 건너뛴다(§0-2 ④). 이의는 잘못된 퇴출의 유일한 구제 수단이고(NFR-402) 기한이 3일인데, 별개 사유의 제재가 함께 닫으면 그 3일이 손도 못 대고 지나간다.
 
 부수효과: `appeal_case` INSERT (`eviction_id` UNIQUE, `status=PENDING`, `reason_text`, `created_at`, `sla_due_at = now + report.sla-hours.normal`). AD-5 큐에 등재된다. `overdue`는 저장하지 않고 조회 시 `status=PENDING AND sla_due_at < now`로 파생한다. 이의 신청만으로는 퇴출·포인트 차감이 되돌아가지 않는다. 원복은 AD-6 인용 시에만 일어난다.
+
+### AP-2 내 이의 목록
+
+`GET /api/members/me/appeals?page=&size=` — NFR-402
+
+목적: 신청한 이의의 처리 상태와 결과를 확인한다. AD-6의 인용·기각을 사용자가 알 수 있는 유일한 화면이다 — 이 API가 없으면 사용자는 포인트 내역의 `APPEAL_REFUND`로 결과를 역추적해야 한다.
+
+퇴출 1건당 이의가 1회라 퇴출 기준 단건 조회도 가능하지만 **목록으로 둔다** — 회원은 여러 퇴출을 겪을 수 있어 이력 화면은 목록이 자연스럽고, URL이 본인 스코프(`/members/me`)라 남의 `evictionId`를 훑는 경로 자체가 성립하지 않는다(AP-1이 403으로 감추는 것을 여기서는 조회 조건이 대신한다).
+
+응답 200 — `PageResponse<T>`
+
+```json
+{
+  "content": [
+    {
+      "appealId": 41, "evictionId": 77, "sessionId": 5501,
+      "evictedAt": "2026-08-12T10:41:00+09:00", "pointPenalty": 300,
+      "status": "ACCEPTED",
+      "reasonText": "카메라 각도 때문에 얼굴이 안 잡혔습니다. 자리를 비운 적 없습니다.",
+      "createdAt": "2026-08-12T11:20:00+09:00",
+      "slaDueAt": "2026-08-15T11:20:00+09:00",
+      "decidedAt": "2026-08-13T09:10:00+09:00",
+      "pointRefunded": 300,
+      "sessionCompletedRestored": true
+    }
+  ],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1
+}
+```
+
+`PENDING`이면 `decidedAt`·`pointRefunded`·`sessionCompletedRestored`는 전부 `null`이다. `REJECTED`면 `decidedAt`만 채워진다. 정렬은 `createdAt` 내림차순(동률은 `appealId` 내림차순).
+
+관리자 `note`는 내려가지 않는다 — 사용자에게 보일 것을 전제하지 않고 쓰인 내부 판단 기록이다. 결과는 `status`(인용·기각)와 원복 사실(`pointRefunded`·`sessionCompletedRestored`)로 설명한다.
+
+`evictedAt`·`pointPenalty`는 근거 퇴출(`eviction`)의 값이다 — 어떤 퇴출에 대한 이의인지를 이 목록만으로 그릴 수 있어야 한다. `pointRefunded`는 원장의 `APPEAL_REFUND` 줄에서 파생하며, 되돌릴 차감이 원장에 없어 역분개도 없던 인용(AD-6)은 `0`이다. `sessionCompletedRestored`는 완주 소급의 결과(`session_participant.completed`)다.
+
+발생 에러: 400 `VALIDATION_FAILED`(size 초과)
+
+게이트: ② ✓ · ④ **예외**(AP-1과 같은 논리 — 결과 확인도 구제 경로의 일부다) · ⑤ ✓ · 소유권 본인
+
+부수효과: 없음.
 
 ### PT-1 포인트 잔액·원장 조회
 
@@ -1987,7 +2046,7 @@ METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_
 | NFR-203 영상 데이터 처리 | AU-6, SS-2. 저장하지 않으므로 암호화·접근 통제 대상이 없다 (D17) |
 | NFR-204 결제 정보 보호 | PY-1~PY-3. 카드 정보는 서버에 오지 않고 PG가 보유한다 |
 | NFR-302 운영진 SLA | AD-1, AD-5 (overdue는 조회 시 파생. 준수율 집계는 보류) |
-| NFR-402 이의 신청 접근성 | AP-1, AD-5, AD-6 |
+| NFR-402 이의 신청 접근성 | AP-1, AP-2, AD-5, AD-6 |
 | NFR-205 배송지 정보 보호 | 보류(FR-505 배송지 보류에 연동) |
 | NFR-303 공석 충원 | 보류(FR-306에 연동) |
 | NFR-101·102·301 | 성능·오탐률 목표치. API 계약 사항 아님 |

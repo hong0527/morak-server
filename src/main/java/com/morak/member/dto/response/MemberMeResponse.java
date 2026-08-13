@@ -5,6 +5,7 @@ import com.morak.member.type.AgeVerification;
 import com.morak.member.type.MemberRole;
 import com.morak.member.type.MemberStatus;
 import com.morak.report.type.SanctionType;
+import com.morak.session.dto.response.ActiveSessionResponse;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
@@ -24,6 +25,7 @@ public record MemberMeResponse(
         int pointBalance,
         GoalResponse goal,
         Streak streak,
+        ActiveSessionResponse activeSession,
         Sanction sanction) {
 
     /**
@@ -41,7 +43,8 @@ public record MemberMeResponse(
     }
 
     public static MemberMeResponse from(Member member, LocalDate today, boolean mediaConsented,
-                                        GoalResponse goal, Sanction sanction) {
+                                        GoalResponse goal, ActiveSessionResponse activeSession,
+                                        Sanction sanction) {
         return new MemberMeResponse(
                 member.getId(),
                 member.getNickname(),
@@ -52,6 +55,7 @@ public record MemberMeResponse(
                 member.getPointBalance(),
                 goal,
                 new Streak(member.currentStreakOn(today), member.getLastCompletedOn()),
+                activeSession,
                 sanction);
     }
 }

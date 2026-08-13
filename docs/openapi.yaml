@@ -616,6 +616,12 @@ components:
           description: 목표 미설정이면 `null`
         streak:
           $ref: '#/components/schemas/StreakSummary'
+        activeSession:
+          allOf:
+          - $ref: '#/components/schemas/ActiveSessionSummary'
+          nullable: true
+          description: 진행 중(LIVE) 세션에 ACTIVE·PAUSED로 참가 중인 행. 없으면 `null`.
+            앱을 재시작한 클라이언트가 재접속 유예(D13) 안에 SS-2를 다시 받으러 갈 진입점입니다
         sanction:
           allOf:
           - $ref: '#/components/schemas/SanctionSummary'
@@ -638,7 +644,37 @@ components:
         streak:
           current: 5
           lastCompletedOn: '2026-08-11'
+        activeSession:
+          sessionId: 5501
+          participantStatus: ACTIVE
+          targetMinutes: 120
+          startedAt: '2026-08-12T09:00:00+09:00'
+          endsAt: '2026-08-12T11:00:00+09:00'
         sanction: null
+    ActiveSessionSummary:
+      type: object
+      description: LEFT·EVICTED 참가와 끝난 세션은 실리지 않습니다(MT-1 3단계와 같은 판정식이라
+        최대 1건)
+      required:
+      - sessionId
+      - participantStatus
+      - targetMinutes
+      - startedAt
+      - endsAt
+      properties:
+        sessionId:
+          type: integer
+          format: int64
+        participantStatus:
+          $ref: '#/components/schemas/ParticipantStatus'
+        targetMinutes:
+          type: integer
+        startedAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
     BirthDateRequest:
       type: object
       required:
@@ -956,12 +992,20 @@ components:
         pointDelta:
           type: integer
           description: 이 요청으로 발생한 포인트 증감. 퇴출이면 패널티만큼 음수
+        closedAbsenceSeconds:
+          type: integer
+          format: int64
+          nullable: true
+          description: 이 보고로 닫힌 자리비움 구간의 지속 초. 닫힌 구간이 없으면(START 보고,
+            짝 없는 END) null이고, 임계 이하로 닫혀 경고가 없을 때도 값은 실립니다 — 몇 초로
+            판정됐는지가 당사자가 이의를 쓸 근거입니다. SS-5의 같은 필드와 이름·형태가 같습니다
       example:
         accepted: true
         warningCount: 3
         evicted: true
         evictionId: 77
         pointDelta: -300
+        closedAbsenceSeconds: 81
     PauseStartResponse:
       type: object
       required:
@@ -1064,6 +1108,7 @@ components:
       - pointAwarded
       - streak
       - goalAchieved
+      - warnings
       properties:
         completed:
           type: boolean
@@ -1095,6 +1140,47 @@ components:
           description: >-
             이의 신청(AP-1)의 진입 번호. 본인이 그 세션에서 퇴출된 경우에만 값이 있고 아니면
             `null`입니다. `participants[]`에는 실리지 않습니다
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/MyWarningItem'
+          description: >-
+            본인 경고 전량과 근거 구간. 경고가 없으면 빈 배열입니다. 되짚기는 관리자
+            심사(AD-9)와 같은 경로라 두 화면이 같은 구간을 봅니다. `participants[]`의
+            남의 행에는 어떤 경우에도 실리지 않습니다
+    MyWarningItem:
+      type: object
+      description: >-
+        본인 경고 1건과 근거 자리비움 구간. AppealWarningItem에서 관리자 전용
+        분석값(`reportSkewSeconds`·`concurrentReporterCount`)을 뺀 모양입니다
+      required:
+      - seq
+      - basis
+      - issuedAt
+      properties:
+        seq:
+          type: integer
+          description: 세션 안에서의 경고 번호 1~3
+        basis:
+          $ref: '#/components/schemas/WarningBasis'
+        issuedAt:
+          type: string
+          format: date-time
+        absenceStartedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 판정에 쓰인 자리비움 구간의 시작. Pause 초과 경고는 null
+        absenceEndedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 구간의 끝. END 없이 세션이 끝나 정산된 경고는 세션 종료 시각
+        absentSeconds:
+          type: integer
+          format: int64
+          nullable: true
+          description: 구간 길이(초). 이의 사유(AP-1)를 쓸 때 본인이 댈 근거입니다
     SessionResultParticipant:
       type: object
       required:
@@ -1171,6 +1257,13 @@ components:
           goalAchieved: false
           badgeCode: null
           evictionId: null
+          warnings:
+          - seq: 1
+            basis: ABSENCE
+            issuedAt: '2026-08-12T09:42:00+09:00'
+            absenceStartedAt: '2026-08-12T09:40:46+09:00'
+            absenceEndedAt: '2026-08-12T09:42:00+09:00'
+            absentSeconds: 74
         participants:
         - memberId: 1042
           nickname: 익명 치타037
@@ -1362,6 +1455,90 @@ components:
         reasonText: 카메라 각도 때문에 얼굴이 안 잡혔습니다. 자리를 비운 적 없습니다.
         createdAt: '2026-08-12T11:20:00+09:00'
         slaDueAt: '2026-08-15T11:20:00+09:00'
+    MyAppealItem:
+      type: object
+      description: 관리자 처리 사유(note)는 내려가지 않습니다 — 내부 판단 기록이라, 결과는
+        `status`와 원복 사실(`pointRefunded`·`sessionCompletedRestored`)로 설명합니다
+      required:
+      - appealId
+      - evictionId
+      - sessionId
+      - evictedAt
+      - pointPenalty
+      - status
+      - reasonText
+      - createdAt
+      - slaDueAt
+      properties:
+        appealId:
+          type: integer
+          format: int64
+        evictionId:
+          type: integer
+          format: int64
+        sessionId:
+          type: integer
+          format: int64
+        evictedAt:
+          type: string
+          format: date-time
+          description: 근거 퇴출의 발생 시각
+        pointPenalty:
+          type: integer
+          description: 퇴출 시점의 차감액 스냅샷
+        status:
+          $ref: '#/components/schemas/AppealStatus'
+        reasonText:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        slaDueAt:
+          type: string
+          format: date-time
+        decidedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: PENDING이면 `null`
+        pointRefunded:
+          type: integer
+          nullable: true
+          description: ACCEPTED에만 값이 있습니다. 원장의 `APPEAL_REFUND` 줄에서 파생하며,
+            되돌릴 차감이 원장에 없어 역분개도 없던 인용은 `0`입니다
+        sessionCompletedRestored:
+          type: boolean
+          nullable: true
+          description: ACCEPTED에만 값이 있습니다. 완주 소급의 결과입니다
+    MyAppealPageResponse:
+      allOf:
+      - $ref: '#/components/schemas/PageMeta'
+      - type: object
+        required:
+        - content
+        properties:
+          content:
+            type: array
+            items:
+              $ref: '#/components/schemas/MyAppealItem'
+      example:
+        content:
+        - appealId: 41
+          evictionId: 77
+          sessionId: 5501
+          evictedAt: '2026-08-12T10:41:00+09:00'
+          pointPenalty: 300
+          status: ACCEPTED
+          reasonText: 카메라 각도 때문에 얼굴이 안 잡혔습니다. 자리를 비운 적 없습니다.
+          createdAt: '2026-08-12T11:20:00+09:00'
+          slaDueAt: '2026-08-15T11:20:00+09:00'
+          decidedAt: '2026-08-13T09:10:00+09:00'
+          pointRefunded: 300
+          sessionCompletedRestored: true
+        page: 0
+        size: 20
+        totalElements: 1
+        totalPages: 1
     PointLedgerItem:
       type: object
       required:
@@ -3913,6 +4090,43 @@ paths:
             · `APPEAL_ALREADY_FILED` 이 퇴출 건에 이미 이의를 신청함 — 기한이 지난 뒤의 재전송에도 이 코드가 먼저입니다
 
             · `APPEAL_DEADLINE_PASSED` 퇴출 시각부터 3일 초과
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /members/me/appeals:
+    get:
+      tags:
+      - 이의 신청
+      summary: AP-2 내 이의 목록
+      operationId: getMyAppeals
+      description: "신청한 이의의 처리 상태와 결과를 확인합니다. 인용·기각을 사용자가 알 수 있는 유일한 화면입니다.\n\n\
+        - `PENDING`이면 `decidedAt`·`pointRefunded`·`sessionCompletedRestored`는 전부 `null`입니다.\
+        \ `REJECTED`면 `decidedAt`만 채워집니다.\n- 관리자 처리 사유(note)는 내려가지 않습니다 — 내부 판단 기록입니다.\n\
+        - 정렬은 접수 시각 내림차순(동률은 이의 번호 내림차순)입니다.\n- **제재 중에도 조회할 수 있습니다** — 신청(AP-1)과 같은\
+        \ 게이트 예외입니다. 결과 확인도 구제 경로의 일부입니다.\n"
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyAppealPageResponse'
+        '400':
+          $ref: '#/components/responses/PageValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '게이트 차단
+
+            · `WITHDRAWAL_PENDING` / `AGE_NOT_VERIFIED`
+
+            · `MEMBER_SANCTIONED`는 발생하지 않습니다 — 결과 확인도 구제 경로의 일부라 제재 게이트의 예외입니다
 
             '
           content:

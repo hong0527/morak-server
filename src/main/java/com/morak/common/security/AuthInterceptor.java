@@ -80,6 +80,9 @@ public class AuthInterceptor implements HandlerInterceptor {
             // 별개의 제재가 구제 경로까지 함께 닫아 3일짜리 이의 기한이 그대로 지나간다.
             // AU-5 철회를 열어 두는 것과 같은 논리다
             rule("POST", "/api/evictions/*/appeals", Set.of(Gate.SANCTION)),
+            // AP-2: 결과 확인도 구제 경로의 일부다. 신청은 되는데 인용·기각을 볼 수 없으면
+            // 제재 중인 회원에게 이의는 넣고 답은 못 받는 반쪽 창구가 된다
+            rule("GET", "/api/members/me/appeals", Set.of(Gate.SANCTION)),
             // SS-10·PY-3: 호출 주체가 회원이 아니라 외부 서버다. 회원 상태·제재·연령 검사가
             // 성립하지 않으므로 전 게이트를 건너뛰고, 신원 보장은 각 컨트롤러의 서명 검증이 진다
             rule("POST", "/api/webhooks/livekit", EnumSet.allOf(Gate.class)),
