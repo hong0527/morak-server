@@ -2,8 +2,10 @@ package com.morak.session;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.morak.session.dto.response.SessionResultResponse;
 import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.service.SessionClosingBatch;
+import com.morak.session.service.SessionService;
 import com.morak.session.type.SessionEndReason;
 import com.morak.session.type.SessionStatus;
 import com.morak.support.IntegrationTest;
@@ -32,6 +34,9 @@ class SessionCompletionPersistenceTest extends IntegrationTest {
 
     @Autowired
     private SessionParticipantRepository sessionParticipantRepository;
+
+    @Autowired
+    private SessionService sessionService;
 
     @Value("${morak.point.welcome}")
     private int welcomePoint;
@@ -121,6 +126,12 @@ class SessionCompletionPersistenceTest extends IntegrationTest {
         assertThat(fixtures.count("streak_day", "member_id = ? AND completed_on = ?",
                 memberId, endsAt.toLocalDate())).isZero();
         assertThat(fixtures.participant(sessionId, memberId).isCompleted()).isTrue();
+
+        // 결과 화면도 같은 날짜로 되물어야 한다. 종료일로 물으면 자기가 남긴 완주 기록을
+        // 못 찾아, 집계된 사람에게 "오늘 집계 안 됨"이 뜬다
+        SessionResultResponse result = sessionService.getResult(memberId, sessionId);
+        assertThat(result.my().streak().countedToday()).isTrue();
+        assertThat(result.my().streak().after()).isEqualTo(1);
     }
 
     private void markEndedWithUnpaidCompletion(Long sessionId, Long memberId) {

@@ -120,7 +120,9 @@ public class SessionService {
                 .findByIdIn(participants.stream().map(SessionParticipant::getMemberId).toList())
                 .stream()
                 .collect(Collectors.toMap(MemberNickname::getId, MemberNickname::getNickname));
-        LocalDate completedOn = session.getEndedAt().toLocalDate();
+        // 완주가 기록된 날은 세션이 시작한 날이다(§0-6). 종료일로 되물으면 자정을 넘긴
+        // 세션이 자기 완주 기록을 못 찾아, 집계된 사람에게 "오늘 집계 안 됨"이 뜬다
+        LocalDate completedOn = session.getStartedAt().toLocalDate();
         // 그날의 완주가 이 세션으로 성립했는지. 다른 세션이 먼저 기록했으면 Streak는
         // 이미 올라 있고 이 세션은 중복 증가시키지 않았다는 뜻이다(★D2).
         boolean countedToday = streakDayRepository
