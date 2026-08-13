@@ -77,6 +77,7 @@ db-schema.md v2.0                  테이블 정본 — 컬럼·제약
         ↓
 implementation-plan.md v4          구현 순서 0~12단계 + 단계별 curl 게이트
 open-decisions.md                  팀 확인 대기 목록과 그동안 적용할 잠정값
+ai-pipeline.md                     자리비움 감지의 모델·임계값·측정 절차 (앱 담당자용)
 ```
 
 - 프론트가 계약으로 보는 것은 `api-spec.md`다. 구현 중 오류를 발견하면 코드만

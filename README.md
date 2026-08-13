@@ -126,6 +126,7 @@ com.morak
 | [docs/functional-spec.md](docs/functional-spec.md) | 요구 정본 |
 | [docs/implementation-plan.md](docs/implementation-plan.md) | 구현 순서와 단계별 게이트 |
 | [docs/open-decisions.md](docs/open-decisions.md) | 아직 확정되지 않은 정책 |
+| [docs/ai-pipeline.md](docs/ai-pipeline.md) | 자리비움 감지 파이프라인. 모델 선정, 판정 임계값, 오탐률 측정 절차 |
 | [docs/git-convention.md](docs/git-convention.md) | 브랜치, 커밋, PR 규칙 |
 | [docs/screen-api-map.md](docs/screen-api-map.md) | 화면별 호출 API (구판 — 새 와이어프레임 수령 후 재작성) |
 | [docs/frontend-change-requests.md](docs/frontend-change-requests.md) | 프론트 전달 사항 (구판 — 새 와이어프레임 수령 후 재작성) |
