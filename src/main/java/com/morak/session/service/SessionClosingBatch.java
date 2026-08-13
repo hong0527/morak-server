@@ -1,5 +1,6 @@
 package com.morak.session.service;
 
+import com.morak.common.batch.BatchGuard;
 import com.morak.dev.DevBatch;
 import com.morak.point.entity.PointLedger;
 import com.morak.point.type.PointReason;
@@ -9,11 +10,9 @@ import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.type.SessionStatus;
 import java.time.Clock;
 import java.time.LocalDateTime;
-import java.util.function.IntSupplier;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -56,17 +55,17 @@ public class SessionClosingBatch implements DevBatch {
         LocalDateTime now = LocalDateTime.now(clock);
         int processed = 0;
         for (Long sessionId : liveSessionRepository.findIdsToClose(SessionStatus.LIVE, now)) {
-            processed += guarded("세션 종료", sessionId,
+            processed += BatchGuard.guarded(log, "세션 종료", sessionId,
                     () -> closingService.closeDueSession(sessionId));
         }
         for (Long participantId
                 : sessionParticipantRepository.findIdsAwaitingAward(SessionStatus.ENDED)) {
-            processed += guarded("완주 흡수 지급", participantId,
+            processed += BatchGuard.guarded(log, "완주 흡수 지급", participantId,
                     () -> closingService.awardCompletion(participantId));
         }
         for (Long evictionId : evictionRepository.findIdsToSettle(
                 PointReason.EVICTION_PENALTY, PointLedger.refTypeOf(PointReason.EVICTION_PENALTY))) {
-            processed += guarded("퇴출 패널티 소급", evictionId,
+            processed += BatchGuard.guarded(log, "퇴출 패널티 소급", evictionId,
                     () -> closingService.settleEvictionPenalty(evictionId));
         }
         if (processed > 0) {
@@ -75,32 +74,4 @@ public class SessionClosingBatch implements DevBatch {
         return processed;
     }
 
-    /**
-     * 한 건의 실패가 나머지를 막지 않게 한다. <b>대상 하나가 트랜잭션 하나라는 설계는 이
-     * try/catch가 있어야 완성된다</b> — 없으면 롤백된 건의 예외가 루프 밖으로 나가, 같은
-     * 실행에서 아직 손대지 않은 세션들이 통째로 다음 회차로 밀린다. 실측에서 종료 대상
-     * 2건 중 1건이 {@code room_finished} 웹훅과 부딪히자 나머지 1건이 22회 중 14회 남았다.
-     *
-     * <p>실패를 두 갈래로 나눈다. 데이터 접근 예외는 경합이라 WARN이다 — 다른 경로가 같은
-     * 일을 먼저 끝냈다는 뜻이고({@code uk_pl_dedup}이 이중 지급을 막은 결과다), 남은 미결은
-     * 다음 회차가 거둔다. ERROR로 올리면 정상 동작이 매분 알람을 울린다. 그 밖의 예외는
-     * 경합이 아니므로 스택과 함께 ERROR로 남긴다. 전부 한 문장으로 삼키면 진짜 결함이
-     * 정상 상황으로 위장돼, 매분 조용히 건너뛰는 대상이 생겨도 아무도 모른다.
-     */
-    private int guarded(String step, Long targetId, IntSupplier work) {
-        try {
-            return work.getAsInt();
-        } catch (DataAccessException e) {
-            // 경합은 정상 상황이다. 다른 경로가 먼저 끝냈다는 뜻이고 제약이 이중 처리를
-            // 막은 결과다. 남은 미결은 다음 회차가 거둔다 — 알람 대상이 아니다.
-            log.warn("{} 건너뜀 — 다른 경로와 경합했다: target={}, 원인={}",
-                    step, targetId, e.getClass().getSimpleName());
-            return 0;
-        } catch (Exception e) {
-            // 경합이 아닌 것까지 같은 문장으로 삼키면 진짜 결함이 정상 상황으로 위장된다.
-            // 건너뛰는 동작은 같지만(나머지 대상은 처리해야 한다) 스택을 남겨 눈에 띄게 한다.
-            log.error("{} 건너뜀 — 예상하지 못한 실패: target={}", step, targetId, e);
-            return 0;
-        }
-    }
 }

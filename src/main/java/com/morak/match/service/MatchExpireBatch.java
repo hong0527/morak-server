@@ -1,5 +1,6 @@
 package com.morak.match.service;
 
+import com.morak.common.batch.BatchGuard;
 import com.morak.dev.DevBatch;
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -43,7 +44,8 @@ public class MatchExpireBatch implements DevBatch {
         LocalDateTime now = LocalDateTime.now(clock);
         int expired = 0;
         for (int targetMinutes : matchService.findConditionsWithExpired(now)) {
-            expired += matchService.expireWaiting(targetMinutes, now);
+            expired += BatchGuard.guarded(log, "매칭 만료", targetMinutes,
+                    () -> matchService.expireWaiting(targetMinutes, now));
         }
         if (expired > 0) {
             log.info("매칭 대기 만료 {}건", expired);

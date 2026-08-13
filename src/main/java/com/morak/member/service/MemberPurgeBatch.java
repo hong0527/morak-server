@@ -1,5 +1,6 @@
 package com.morak.member.service;
 
+import com.morak.common.batch.BatchGuard;
 import com.morak.dev.DevBatch;
 import com.morak.member.entity.Member;
 import com.morak.member.repository.MemberRepository;
@@ -55,7 +56,8 @@ public class MemberPurgeBatch implements DevBatch {
                 MemberStatus.WITHDRAW_PENDING, now);
         int purged = 0;
         for (Member target : targets) {
-            purged += memberPurgeService.purgeWithdrawn(target.getId());
+            purged += BatchGuard.guarded(log, "탈퇴 파기", target.getId(),
+                    () -> memberPurgeService.purgeWithdrawn(target.getId()));
         }
         if (purged > 0) {
             log.info("탈퇴 계정 파기 {}건", purged);
