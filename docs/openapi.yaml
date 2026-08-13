@@ -532,6 +532,7 @@ components:
       - goalId
       - periodDays
       - startedOn
+      - progressDays
       - status
       properties:
         goalId:
@@ -544,6 +545,13 @@ components:
           type: string
           format: date
           example: '2026-08-01'
+        progressDays:
+          type: integer
+          description: 달성 진행도 — `min(streak.current, started_on 이후 완주일 수)`.
+            달성이 두 조건의 AND라 진행률도 최솟값이며, 화면은 `progressDays / periodDays`로
+            그립니다. `streak.current`로 그리면 목표 시작 전의 연속이 진행으로 잘못 보입니다.
+            ACHIEVED 목표는 `periodDays`로 고정됩니다
+          example: 5
         status:
           $ref: '#/components/schemas/GoalStatus'
         achievedAt:
@@ -627,6 +635,12 @@ components:
           - $ref: '#/components/schemas/SanctionSummary'
           nullable: true
           description: 유효 제재가 없으면 `null`
+        badges:
+          type: array
+          description: 보유 뱃지. ACHIEVED 목표 행에서 파생하며, 같은 코드는 첫 획득 시각으로
+            한 번만 실립니다. 없으면 빈 배열입니다
+          items:
+            $ref: '#/components/schemas/BadgeSummary'
       example:
         memberId: 1042
         nickname: 익명 치타037
@@ -639,6 +653,7 @@ components:
           goalId: 88
           periodDays: 14
           startedOn: '2026-08-01'
+          progressDays: 5
           status: ACTIVE
           achievedAt: null
         streak:
@@ -651,6 +666,20 @@ components:
           startedAt: '2026-08-12T09:00:00+09:00'
           endsAt: '2026-08-12T11:00:00+09:00'
         sanction: null
+        badges:
+        - code: GOAL_ACHIEVED
+          earnedAt: '2026-08-10T21:00:00+09:00'
+    BadgeSummary:
+      type: object
+      required:
+      - code
+      - earnedAt
+      properties:
+        code:
+          $ref: '#/components/schemas/BadgeCode'
+        earnedAt:
+          type: string
+          format: date-time
     ActiveSessionSummary:
       type: object
       description: LEFT·EVICTED 참가와 끝난 세션은 실리지 않습니다(MT-1 3단계와 같은 판정식이라
@@ -2811,8 +2840,9 @@ components:
       properties:
         fixedAt:
           type: string
-          format: date-time
-          description: 이 시각으로 고정합니다
+          description: 이 시각으로 고정합니다. 오프셋 없는 LocalDateTime만 받습니다
+            (`2026-09-15T00:00:00`) — `+09:00`을 붙이면 400입니다
+          example: '2026-09-15T00:00:00'
         offsetMinutes:
           type: integer
           description: 가변 Clock에 더할 오프셋(분). 누적이 아니라 시스템 시각 기준 절대값입니다
@@ -2929,7 +2959,7 @@ components:
 
         · `WITHDRAWAL_PENDING` 탈퇴 신청 중인 계정 → 탈퇴 철회 안내
 
-        · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details`에 해제 시각)
+        · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details: {"endsAt": ...}` — 영구 제재는 `{"endsAt": null}`)
 
         · `AGE_NOT_VERIFIED` 생년월일 미입력 → 생년월일 입력 화면으로
 
@@ -2943,7 +2973,7 @@ components:
 
         · `WITHDRAWAL_PENDING` 탈퇴 신청 중인 계정 → 탈퇴 철회 안내
 
-        · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details`에 해제 시각)
+        · `MEMBER_SANCTIONED` 이용 제한된 계정 (`details: {"endsAt": ...}` — 영구 제재는 `{"endsAt": null}`)
 
         '
       content:
@@ -2987,7 +3017,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     LockAcquisitionFailed:
-      description: '`LOCK_ACQUISITION_FAILED` 매칭 잠금 획득에 실패함 → 잠시 후 재시도 안내'
+      description: '`LOCK_ACQUISITION_FAILED` 매칭 잠금 획득에 실패함 — 일시 경합이며 서버 상태를 바꾸지 않았습니다. 1~2초 뒤 1회 재시도해도 안전합니다'
       content:
         application/json:
           schema:
@@ -3324,6 +3354,7 @@ paths:
                 goalId: 88
                 periodDays: 14
                 startedOn: '2026-08-12'
+                progressDays: 0
                 status: ACTIVE
                 achievedAt: null
         '400':
@@ -3396,7 +3427,8 @@ paths:
 
             · `DUPLICATE_MATCH_REQUEST` 이미 대기 중인 요청이 있음
 
-            · `ALREADY_IN_ACTIVE_SESSION` 진행 중인 세션에 참가 중
+            · `ALREADY_IN_ACTIVE_SESSION` 진행 중인 세션에 참가 중 (`details.sessionId`에 그 세션 번호 —
+            앱 재시작 후의 재매칭 시도가 이 오류의 대표 경우라, 번호로 그 세션에 바로 복귀합니다)
 
             · `REMATCH_COOLDOWN` 퇴출 후 30분이 지나지 않음 (`details.availableAt`)
 
@@ -3541,7 +3573,8 @@ paths:
         '403':
           description: '차단
 
-            · `NOT_SESSION_PARTICIPANT` 참가자가 아니거나 이미 퇴장한 참가자
+            · `NOT_SESSION_PARTICIPANT` 참가자가 아니거나 이미 퇴장한 참가자 — `LEFT` 본인도 이 코드입니다.
+            "참가자가 아닙니다"를 그대로 띄우지 말고, 문구를 가르려면 SS-1 본인 행의 `status`를 보세요
 
             · `CONSENT_REQUIRED` 캠 영상 온디바이스 분석에 동의하지 않음 → 동의 화면으로
 
@@ -3962,7 +3995,7 @@ paths:
       - name: status
         in: query
         required: false
-        description: 세션 상태 필터. 생략하면 전체
+        description: 세션 상태(`LIVE`·`ENDED`) 필터. 생략하면 전체 — 참가자 상태(`participantStatus`) 필터가 아닙니다
         schema:
           $ref: '#/components/schemas/SessionStatus'
       - $ref: '#/components/parameters/Page'

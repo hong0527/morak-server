@@ -3,6 +3,7 @@ package com.morak.member.repository;
 import com.morak.member.entity.MemberGoal;
 import com.morak.member.type.GoalStatus;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -20,6 +21,9 @@ public interface MemberGoalRepository extends JpaRepository<MemberGoal, Long> {
 
     /** B1 목표 달성 검사(★D3). 활성 목표는 최대 1건이지만 순서를 고정해 둔다. */
     Optional<MemberGoal> findFirstByMemberIdAndStatusOrderByIdDesc(Long memberId, GoalStatus status);
+
+    /** AU-2 뱃지 파생. 뱃지는 별도 테이블 없이 ACHIEVED 목표 행에서 파생한다(★D3). */
+    List<MemberGoal> findByMemberIdAndStatus(Long memberId, GoalStatus status);
 
     /**
      * SS-8의 {@code goalAchieved}. 달성 시각을 세션 종료 시각으로 못 박아 기록하기 때문에

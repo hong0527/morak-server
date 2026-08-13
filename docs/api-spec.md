@@ -39,7 +39,7 @@
 | ① | JWT 유효성 | 401 `UNAUTHORIZED` / `TOKEN_EXPIRED` | `/api/auth/**`(AU-1), `/api/dev/**`(DEV-2~4), **`POST /api/webhooks/livekit`(SS-10)**, **`POST /api/webhooks/payment`(PY-3)**, `/h2-console/**`, `/error` |
 | ② | 회원 상태 `member.status` | WITHDRAW_PENDING → 403 `WITHDRAWAL_PENDING` / DELETED → 401 `UNAUTHORIZED` | AU-1, AU-2, AU-5(철회), 웹훅 2종, DEV |
 | ③ | 관리자 역할 (`/api/admin/**`) | 403 `FORBIDDEN_ROLE` | — |
-| ④ | 유효 제재 `starts_at <= now AND (ends_at IS NULL OR ends_at > now)` | 403 `MEMBER_SANCTIONED` (details: 종료 시각) | AU-1, AU-2, AU-4(탈퇴), AU-5(철회 — 막으면 계정 복구가 영구 불가해진다), **AP-1·AP-2(퇴출 이의와 그 결과 조회 — 막으면 잘못된 퇴출의 구제 경로가 함께 닫힌다, NFR-402)**, 웹훅 2종, DEV |
+| ④ | 유효 제재 `starts_at <= now AND (ends_at IS NULL OR ends_at > now)` | 403 `MEMBER_SANCTIONED` (details: `{"endsAt": "2026-08-19T14:30:00+09:00"}` — `PERMANENT` 제재는 `{"endsAt": null}`) | AU-1, AU-2, AU-4(탈퇴), AU-5(철회 — 막으면 계정 복구가 영구 불가해진다), **AP-1·AP-2(퇴출 이의와 그 결과 조회 — 막으면 잘못된 퇴출의 구제 경로가 함께 닫힌다, NFR-402)**, 웹훅 2종, DEV |
 | ⑤ | 연령 `age_verification` | REQUIRED → 403 `AGE_NOT_VERIFIED` | §0-3 매트릭스 참조 |
 
 **JWT skip 경로의 신원 확인 방식**
@@ -223,6 +223,18 @@ morak:
 | 경고 카운터 범위 | 세션 스코프. 세션 종료 시 소멸 | 계정 누적 매너 점수는 Phase 4 (D11) |
 | 재매칭 가능 시각 | `eviction.created_at + match.rematch-cooldown-minutes` | (D14) |
 | 세션 종료 예정 | `started_at + target_minutes` | `started_at` = 6인 확정 시각 (D21) |
+
+### 0-7. 상태 동기화·폴링 규약 (프론트 필수)
+
+서버는 클라이언트에 아무것도 밀어 넣지 않는다. v1에는 푸시 알림·웹소켓·SSE가 없고(D18), 상태 변화는 ①내 호출의 동기 응답 ②재조회(폴링) ③LiveKit 미디어 이벤트 세 경로로만 전달된다. 어느 변화를 어느 경로로 아는지가 이 절이다.
+
+**내 경고·퇴출은 항상 내 호출의 응답에 실린다.** 세션이 `LIVE`인 동안 서버가 경고를 만드는 경로는 SS-4(자리비움 정산)·SS-5(Pause 시작 시 열린 구간 마감)·SS-6(초과 복귀)뿐이고, 셋 다 본인 요청의 동기 응답에 `warningCount`가 실린다. 요청 없이 경고가 생기는 것은 세션 종료 정산(§5)뿐인데 그때는 세션이 끝난 뒤라 SS-8이 알려준다. 그러므로 "경고를 놓쳤을까"를 위해 폴링할 필요가 없다 — 응답의 `warningCount`·`evicted`를 그리면 전부다.
+
+**다른 참가자의 상태는 SS-1 재조회로 안다.** 퇴장·퇴출·Pause로 인한 미디어 소실은 LiveKit 이벤트(참가자 이탈·트랙 종료)로 즉시 감지되지만, 그것이 `LEFT`인지 `EVICTED`인지 `PAUSED`인지는 SS-1을 다시 조회해야 안다. 규약: LiveKit 참가자 이벤트를 받으면 즉시 1회, 그 외에는 20초 간격(잠정 — 팀 확인 대기)으로 SS-1을 재조회한다. 타인의 `warningCount`처럼 미디어에 나타나지 않는 변화도 이 주기로 따라온다.
+
+**세션 종료는 LiveKit 연결 종료로 감지한다.** 종료 루틴(§5)이 LiveKit 룸을 닫으므로 정시·조기 종료 모두 클라이언트에는 연결 종료로 나타난다. 그 직후 SS-8을 조회하되, **정시 종료는 B1이 매분 돌므로 `endsAt` 도래 후 최대 1분간 세션이 아직 `LIVE`일 수 있다.** 이 창에서 SS-8의 409 `SESSION_NOT_ENDED`는 오류가 아니라 "아직 정산 전"이라는 뜻이다 — 5초 간격으로 재시도한다. 90초를 넘겨도 409면 그때가 이상 상황이다. 종료가 아니라 내 쪽 일시 단절(D13)인지 가르려면: 연결이 끊겼는데 SS-1이 여전히 `LIVE`이고 내 상태가 `ACTIVE`·`PAUSED`면 SS-2를 다시 받아 재접속한다(SS-2는 부수효과가 없어 몇 번을 다시 불러도 안전하다). 앱 자체가 재시작돼 세션 번호를 잃었으면 AU-2의 `activeSession`이 진입점이다.
+
+**매칭 폴링(MT-2).** 권장 주기 3초(잠정 — 팀 확인 대기). 중단 조건은 셋이다 — `MATCHED`(sessionId로 전이), `EXPIRED`(재시도 안내), 404 `NO_ACTIVE_MATCH_REQUEST`(요청이 없음 — 대기 화면을 닫는다). MT-1 응답이 `WAITING`이어도 동시 요청 성사로 이미 `MATCHED`일 수 있으므로 MT-1 직후부터 폴링한다. **만료 판정은 B2가 매분 하므로 `expiresAt`이 지나도 최대 1분간 `WAITING`이 유지된다.** 카운트다운이 0이 되어도 `EXPIRED`를 받을 때까지 대기 상태를 유지한다 — 이 창에서 성사가 배제되지 않는다.
 
 ---
 
@@ -426,6 +438,7 @@ morak:
     "goalId": 88,
     "periodDays": 14,
     "startedOn": "2026-08-01",
+    "progressDays": 5,
     "status": "ACTIVE",
     "achievedAt": null
   },
@@ -437,7 +450,10 @@ morak:
     "startedAt": "2026-08-12T09:00:00+09:00",
     "endsAt": "2026-08-12T11:00:00+09:00"
   },
-  "sanction": null
+  "sanction": null,
+  "badges": [
+    {"code": "GOAL_ACHIEVED", "earnedAt": "2026-08-10T21:00:00+09:00"}
+  ]
 }
 ```
 
@@ -446,6 +462,10 @@ morak:
 `streak.current`는 저장된 캐시가 아니라 조회 시점 기준 판정값이다(§0-6 Streak 리셋). `lastCompletedOn`이 오늘도 어제도 아니면 `current`는 0으로 내려가지만 `lastCompletedOn`은 마지막 완주일 그대로다 — 둘이 어긋나 보이는 것이 정상이고, 그것이 "언제 끊겼는지"를 화면에 그릴 수 있는 유일한 재료다.
 
 `activeSession`은 진행 중(`LIVE`) 세션에 `ACTIVE`·`PAUSED`로 참가 중인 행이 있으면 그 세션이고, 없으면 `null`이다(MT-1 3단계와 같은 판정식이라 최대 1건). 앱을 재시작한 클라이언트가 재접속 유예(D13) 안에 SS-2를 다시 받으러 갈 진입점이다 — 이 필드가 없으면 90초 안에 세션 번호를 되찾을 계약상 경로가 없다. `LEFT`·`EVICTED` 참가와 끝난 세션은 실리지 않는다.
+
+`goal.progressDays`는 달성 진행도다 — `min(streak.current, started_on 이후 streak_day 행 수)`. 달성은 두 값이 모두 `periodDays`에 닿아야 하므로(§0-6) 진행률은 둘의 최솟값이고, 화면은 `progressDays / periodDays`로 그린다. `streak.current`로 그리면 목표 시작 전의 연속이 진행으로 잘못 표시된다. `ACHIEVED` 목표는 `periodDays`로 고정된다 — 이미 닫힌 목표의 진행이 이후 완주로 계속 자라는 것은 화면에 의미가 없다.
+
+`badges`는 보유 뱃지다. 별도 테이블 없이 `ACHIEVED` 목표 행에서 파생하며, 같은 코드는 첫 획득 시각으로 한 번만 실린다 — "보유"의 답은 종류이지 횟수가 아니다. 없으면 빈 배열이다. 지급 순간의 표시는 SS-8 `my.badgeCode`가 담당하고, 마이페이지의 상시 조회는 여기가 담당한다.
 
 발생 에러: 401 `UNAUTHORIZED` / 401 `TOKEN_EXPIRED`
 
@@ -569,10 +589,13 @@ morak:
   "goalId": 88,
   "periodDays": 14,
   "startedOn": "2026-08-12",
+  "progressDays": 0,
   "status": "ACTIVE",
   "achievedAt": null
 }
 ```
+
+`progressDays`는 설정 직후에도 0이 아닐 수 있다 — 오늘 완주를 마친 뒤 목표를 걸면 시작일(오늘)의 완주가 이미 있고, 달성 판정(`>= started_on`, §0-6)도 그 하루를 세므로 응답도 1을 내린다. 판정과 화면이 같은 날 달성해야 한다.
 
 발생 에러: 409 `GOAL_ALREADY_ACTIVE`(진행 중 목표가 있으면 새 목표를 만들지 않는다) / 400 `VALIDATION_FAILED`
 
@@ -596,7 +619,7 @@ morak:
 
 1. `match_lock` **회원 행** 잠금 — `@Lock(PESSIMISTIC_WRITE) findByLockKey("member:{memberId}")`
 2. 활성 `WAITING` 요청 없음 → 있으면 409 `DUPLICATE_MATCH_REQUEST`
-3. 활성 세션 참가 없음(`session_participant.status ∈ {ACTIVE, PAUSED}` + 세션 `LIVE`) → 있으면 409 `ALREADY_IN_ACTIVE_SESSION`
+3. 활성 세션 참가 없음(`session_participant.status ∈ {ACTIVE, PAUSED}` + 세션 `LIVE`) → 있으면 409 `ALREADY_IN_ACTIVE_SESSION` (details: `{"sessionId": 5501}` — 이 오류를 받는 대표 경우가 앱 재시작 후의 재매칭 시도라, 번호가 있어야 클라이언트가 그 세션으로 바로 전이한다. `REMATCH_COOLDOWN`의 `availableAt`, `DUPLICATE_ORDER`의 `orderId`와 같은 패턴)
 4. 퇴출 쿨다운 — 최근 `eviction.created_at + 30분`이 아직 지나지 않았으면 409 `REMATCH_COOLDOWN` (details: `availableAt`) (D14)
 5. `match_lock` **조건 행** 잠금 — `"match:{targetMinutes}"`
 6. 내 요청 INSERT (`status=WAITING`, `active_member_id=member_id`, `expires_at = now + match.wait-expire-minutes`)
@@ -642,7 +665,9 @@ H2 URL에 `;LOCK_TIMEOUT=3000`. `PessimisticLockingFailureException` → 503 `LO
 }
 ```
 
-발생 에러: 409 `DUPLICATE_MATCH_REQUEST` / 409 `ALREADY_IN_ACTIVE_SESSION` / 409 `REMATCH_COOLDOWN` / 503 `LOCK_ACQUISITION_FAILED` / 400 `VALIDATION_FAILED`
+발생 에러: 409 `DUPLICATE_MATCH_REQUEST` / 409 `ALREADY_IN_ACTIVE_SESSION`(details: `sessionId`) / 409 `REMATCH_COOLDOWN` / 503 `LOCK_ACQUISITION_FAILED` / 400 `VALIDATION_FAILED`
+
+503 `LOCK_ACQUISITION_FAILED`는 일시 경합이며 서버 상태를 바꾸지 않았다는 뜻이다. 1~2초 뒤 1회 재시도해도 안전하다.
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓
 
@@ -778,7 +803,7 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 1. 세션 존재 → 없으면 404 `SESSION_NOT_FOUND`
 2. 세션 `LIVE` → 아니면 409 `SESSION_ENDED`
 3. 참가자 본인 → 아니면 403 `NOT_SESSION_PARTICIPANT`
-4. 참가자 상태가 `EVICTED`면 409 `ALREADY_EVICTED`, `LEFT`면 403 `NOT_SESSION_PARTICIPANT`
+4. 참가자 상태가 `EVICTED`면 409 `ALREADY_EVICTED`, `LEFT`면 403 `NOT_SESSION_PARTICIPANT`. `LEFT` 본인도 이 코드를 받는다 — "참가자가 아닙니다"를 그대로 띄우면 방금까지 있던 사용자가 혼란하므로, 문구를 가르려면 SS-1 본인 행의 `status`를 본다(SS-1은 이력 보유자에게 열려 있다)
 5. 캠 영상 분석 동의(AU-6) 없으면 403 `CONSENT_REQUIRED`
 6. LiveKit AccessToken 발급 — `identity = String.valueOf(memberId)`, grant는 해당 룸의 **비디오 publish + subscribe**만. 오디오 publish와 룸 생성·관리 권한은 주지 않는다 (D23)
 
@@ -1042,6 +1067,8 @@ UPDATE session_participant
 ### SS-9 내 세션 이력
 
 `GET /api/members/me/sessions?status=&page=&size=` — FR-152
+
+`status`는 세션 상태(`LIVE`·`ENDED`) 필터이며 생략 시 전체다. 참가자 상태(`participantStatus`) 필터가 아니다.
 
 응답 200 — `PageResponse<T>`
 
@@ -1850,7 +1877,7 @@ UPDATE session_participant
 
 활성 조건: `@Profile("dev")` AND `morak.dev.enabled=true` (이중 스위치). 운영 프로필에서는 빈이 등록되지 않아 404 `ENDPOINT_NOT_FOUND`.
 
-- **DEV-2** `POST /api/dev/clock` · `{"offsetMinutes": 1440}` → 가변 Clock 오프셋 설정. Streak 일 경계 테스트에 쓴다. `fixedAt`·`offsetMinutes`·`reset` 중 정확히 하나만 받으며 둘 이상이면 400. `GET /api/dev/clock`은 현재 모드(`SYSTEM`·`FIXED`·`OFFSET`)·오프셋·서버 시각을 돌려준다
+- **DEV-2** `POST /api/dev/clock` · `{"offsetMinutes": 1440}` → 가변 Clock 오프셋 설정. Streak 일 경계 테스트에 쓴다. `fixedAt`·`offsetMinutes`·`reset` 중 정확히 하나만 받으며 둘 이상이면 400. **`fixedAt`은 오프셋 없는 LocalDateTime**(`"2026-09-15T00:00:00"`)이다 — `+09:00`을 붙이면 역직렬화가 깨져 400이다(서버 타임존이 이미 `morak.timezone`이라 오프셋을 받을 이유가 없다). `GET /api/dev/clock`은 현재 모드(`SYSTEM`·`FIXED`·`OFFSET`)·오프셋·서버 시각을 돌려준다
 - **DEV-3** `POST /api/dev/sessions/seed` · `{"memberId": 1042, "dates": ["2026-08-08", "2026-08-09", "2026-08-10"]}` → 해당 일자에 완주한 `live_session`(ENDED) + `session_participant`(completed=true) + `streak_day`를 만든다. 구 `POST /api/dev/proofs/seed`의 대체다
 - **DEV-4** `POST /api/dev/batches/{B1|B2|B4|B5}` → 해당 배치 즉시 실행. B3(SLA 마킹)은 폐지되어 트리거 대상이 아니다. 응답은 `{"batch": "B2", "processed": 2}`(처리 건수 — 게이트 실측용, 개발 전용이라 공개 계약 아님). 없는 배치 이름은 404
 
@@ -1858,6 +1885,19 @@ UPDATE session_participant
 
 - **시계를 민 채 재기동하면 시계만 리셋되고 미래 시각 데이터는 남는다.** 오프셋은 프로세스 메모리에 있어 재기동으로 사라지지만, 그 시계로 만들어진 `ends_at`·`expires_at`은 DB에 미래 시각으로 남는다. 실측에서 이상 3종이 나왔다 — 이미 끝났어야 할 세션이 `LIVE`로 계속 살아 있고, 만료됐어야 할 매칭 요청이 대기열을 점유하며, B1·B2가 대상을 찾지 못해 둘 다 0건을 돌려준다. **재기동 전 `POST /api/dev/clock` `{"reset": true}`(또는 `offsetMinutes: 0`)로 시계를 되돌리는 것이 규약이다.** 이미 벌어졌다면 남은 미래 시각 행을 지우거나 같은 오프셋으로 시계를 다시 밀어야 한다.
 - **`offsetMinutes`를 토큰 유효 기간 이상 밀면 모든 API 호출이 막힌다.** JWT는 `jwt.expire-hours: 24`, 즉 1440분짜리다. 1440 이상을 밀면 발급돼 있던 토큰이 전부 만료로 판정돼 401 `UNAUTHORIZED`가 되고, 재발급을 받으려면 로그인을 해야 하는데 그 호출도 같은 시계를 본다. Streak 일 경계처럼 하루를 넘겨야 하는 실측은 **1440분 미만으로 밀고 그 안에서 날짜만 넘기거나**, 시계를 민 뒤 토큰을 새로 발급받아 진행한다.
+
+**개발 환경에서 관리자 계정 만들기.** 관리자 계정은 어느 API로도 만들 수 없다(AU-1 참조 — `role` 파라미터 없음). 운영은 DB 수동 UPDATE뿐이고, 개발(H2 인메모리)은 재기동마다 사라지므로 기동 인자로 시드하는 쪽이 재현 가능하다:
+
+1. 시드 SQL을 만든다 — `provider='DEV'`, `provider_user_id`를 아는 값으로 둔 ADMIN 행:
+   ```sql
+   INSERT INTO member (provider, provider_user_id, nickname, role, age_verification, status, point_balance, current_streak, created_at)
+   SELECT 'DEV', 'admin-1', '익명 관리자00', 'ADMIN', 'VERIFIED', 'ACTIVE', 0, 0, NOW()
+   WHERE NOT EXISTS (SELECT 1 FROM member WHERE provider = 'DEV' AND provider_user_id = 'admin-1');
+   ```
+2. 기동 인자 3개를 붙인다(설정 파일 수정 없음): `--spring.jpa.defer-datasource-initialization=true --spring.sql.init.mode=always --spring.sql.init.data-locations=file:<시드.sql 경로>`
+3. AU-1을 `provider=DEV`, `authorizationCode=admin-1`로 부르면 DevSocialClient가 그 행으로 로그인된다(코드가 곧 `provider_user_id`인 규약).
+
+주의: 시드 회원에는 `match_lock` 회원 행이 없다. 관리자 API(AD-1~9)만 쓰면 문제없지만, 이 계정으로 AU-7·MT-1 같은 참여 API를 부르면 잠금 행 부재로 500이 난다 — 관리자는 참여자가 아니다.
 
 **DEV 3종의 응답은 공개 계약이 아니다.** 개발 프로필에서만 뜨고 프론트가 호출할 일이 없으므로 openapi에 스키마를 두되 `개발 전용`으로 표시한다. DEV-2에는 조회(`GET /api/dev/clock`)도 있어 현재 모드·오프셋·서버 시각을 돌려준다 — 게이트가 "지금 서버가 몇 시로 보고 있는가"를 알아야 시각 기반 판정을 실측할 수 있다.
 
@@ -1921,18 +1961,18 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 회원·인증 | NOT_WITHDRAWING | 409 | AU-5 | 탈퇴 상태 아님 |
 | 회원·인증 | ALREADY_VERIFIED | 409 | AU-3 | 이미 연령 검증됨 |
 | 회원·인증 | AGE_NOT_VERIFIED | 403 | 전역⑤ | 생년월일 미입력 |
-| 회원·인증 | MEMBER_SANCTIONED | 403 | 전역④ | 유효 제재 |
+| 회원·인증 | MEMBER_SANCTIONED | 403 | 전역④ | 유효 제재. `details: {"endsAt": ...}`, 영구 제재는 `{"endsAt": null}` |
 | 회원·인증 | **UNDER_AGE_SIGNUP_BLOCKED** | 403 | AU-1, AU-3 | 만 14세 미만 — 계정 생성 차단 (★D7) |
 | 회원·인증 | **AGREEMENT_REQUIRED** | 400 | AU-1 | 필수 약관 2종 미동의 |
 | 회원·인증 | **GOAL_ALREADY_ACTIVE** | 409 | AU-7 | 진행 중 목표 존재 |
 | 매칭 | DUPLICATE_MATCH_REQUEST | 409 | MT-1 | 활성 대기 요청 존재 |
-| 매칭 | **ALREADY_IN_ACTIVE_SESSION** | 409 | MT-1 | 활성 세션 참가 중 |
+| 매칭 | **ALREADY_IN_ACTIVE_SESSION** | 409 | MT-1 | 활성 세션 참가 중. `details.sessionId`에 그 세션 번호 |
 | 매칭 | NO_ACTIVE_MATCH_REQUEST | 404 | MT-2 | 요청 없음 |
 | 매칭 | ALREADY_MATCHED | 409 | MT-3 | 이미 성사 |
 | 매칭 | LOCK_ACQUISITION_FAILED | 503 | MT-1, MT-3, B2 | 잠금 타임아웃 |
 | 매칭 | **REMATCH_COOLDOWN** | 409 | MT-1 | 퇴출 후 30분 미경과 (D14) |
 | 세션 | **SESSION_NOT_FOUND** | 404 | SS-1~8 | 없는 세션 |
-| 세션 | **NOT_SESSION_PARTICIPANT** | 403 | SS-1~8, RP-1 | 참가 자격 없음 |
+| 세션 | **NOT_SESSION_PARTICIPANT** | 403 | SS-1~8, RP-1 | 참가 이력이 없거나, 본인이 이미 `LEFT`로 나간 세션의 참여 API(SS-2~7) |
 | 세션 | **SESSION_ENDED** | 409 | SS-2~7 | 종료된 세션에 대한 참여 요청 |
 | 세션 | **SESSION_NOT_ENDED** | 409 | SS-8, AD-6 | 진행 중 세션의 결과 조회 / 진행 중 세션의 이의 인용 |
 | 세션 | ALREADY_LEFT | 409 | SS-7 | 이미 퇴장 |

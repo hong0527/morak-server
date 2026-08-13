@@ -2,6 +2,7 @@ package com.morak.member.service;
 
 import com.morak.common.error.BusinessException;
 import com.morak.common.error.ErrorCode;
+import com.morak.common.type.BadgeCode;
 import com.morak.match.entity.MatchLock;
 import com.morak.match.repository.MatchLockRepository;
 import com.morak.match.service.MatchService;
@@ -18,6 +19,7 @@ import com.morak.member.entity.MemberGoal;
 import com.morak.member.repository.MediaConsentRepository;
 import com.morak.member.repository.MemberGoalRepository;
 import com.morak.member.repository.MemberRepository;
+import com.morak.member.repository.StreakDayRepository;
 import com.morak.member.type.AgeVerification;
 import com.morak.member.type.GoalStatus;
 import com.morak.member.type.MemberStatus;
@@ -53,6 +55,7 @@ public class MemberService {
 
     private final MemberRepository memberRepository;
     private final MemberGoalRepository memberGoalRepository;
+    private final StreakDayRepository streakDayRepository;
     private final MediaConsentRepository mediaConsentRepository;
     private final SanctionRepository sanctionRepository;
     private final MatchLockRepository matchLockRepository;
@@ -66,6 +69,7 @@ public class MemberService {
 
     public MemberService(MemberRepository memberRepository,
                          MemberGoalRepository memberGoalRepository,
+                         StreakDayRepository streakDayRepository,
                          MediaConsentRepository mediaConsentRepository,
                          SanctionRepository sanctionRepository,
                          MatchLockRepository matchLockRepository,
@@ -78,6 +82,7 @@ public class MemberService {
                          @Value("${morak.withdrawal.grace-days}") int withdrawalGraceDays) {
         this.memberRepository = memberRepository;
         this.memberGoalRepository = memberGoalRepository;
+        this.streakDayRepository = streakDayRepository;
         this.mediaConsentRepository = mediaConsentRepository;
         this.sanctionRepository = sanctionRepository;
         this.matchLockRepository = matchLockRepository;
@@ -102,7 +107,8 @@ public class MemberService {
                 : new MemberMeResponse.Sanction(
                         Sanction.representativeType(effective), Sanction.latestEndsAt(effective));
         GoalResponse goal = memberGoalRepository.findFirstByMemberIdOrderByIdDesc(memberId)
-                .map(GoalResponse::from)
+                .map(latest -> GoalResponse.of(latest,
+                        goalProgressDays(member, latest, now.toLocalDate())))
                 .orElse(null);
         // Streak와 포인트 잔액은 member의 캐시 컬럼에서 읽는다. 진실은 streak_day·point_ledger지만
         // 홈 화면 조회마다 역방향 연속 일수를 세고 원장을 합산할 비용이 아니다. 다만 연속이
@@ -110,7 +116,35 @@ public class MemberService {
         // 동의 여부는 행의 존재 그 자체다 — 미동의를 저장하지 않으므로 false 행이 없다(AU-6).
         return MemberMeResponse.from(member, now.toLocalDate(),
                 mediaConsentRepository.existsById(memberId), goal,
-                sessionService.getMyActiveSession(memberId), sanction);
+                sessionService.getMyActiveSession(memberId), sanction, badges(memberId));
+    }
+
+    /**
+     * 목표 진행도. 달성 판정(§0-6)이 연속 캐시 AND 시작일 이후 완주일 수의 두 조건이므로
+     * 진행률도 둘의 최솟값이다 — 연속만 내리면 달성 직후 새로 건 목표가 이전 연속 때문에
+     * "기간/기간 직전"으로 그려지고, 완주일 수만 보면 중간에 끊긴 날이 무시된다.
+     *
+     * <p>ACHIEVED 목표는 기간값을 그대로 내린다. 달성 뒤에도 완주가 쌓이면 최솟값이 기간을
+     * 넘어가는데, 이미 닫힌 목표의 진행이 계속 자라는 것은 화면에 의미가 없다.
+     */
+    private int goalProgressDays(Member member, MemberGoal goal, LocalDate today) {
+        if (goal.getStatus() == GoalStatus.ACHIEVED) {
+            return goal.getPeriodDays();
+        }
+        int daysSinceStart = streakDayRepository.countByMemberIdAndCompletedOnGreaterThanEqual(
+                member.getId(), goal.getStartedOn());
+        return Math.min(member.currentStreakOn(today), daysSinceStart);
+    }
+
+    /** 보유 뱃지. ACHIEVED 목표 행에서 파생하며, 같은 코드는 첫 획득 시각으로 한 번만 싣는다. */
+    private List<MemberMeResponse.Badge> badges(Long memberId) {
+        return memberGoalRepository.findByMemberIdAndStatus(memberId, GoalStatus.ACHIEVED)
+                .stream()
+                .map(MemberGoal::getAchievedAt)
+                .min(LocalDateTime::compareTo)
+                .map(earnedAt -> List.of(
+                        new MemberMeResponse.Badge(BadgeCode.GOAL_ACHIEVED, earnedAt)))
+                .orElse(List.of());
     }
 
     /**
@@ -173,7 +207,7 @@ public class MemberService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED,
                     Map.of("periodDays", "허용값은 7, 14, 30입니다."));
         }
-        findMember(memberId);
+        Member member = findMember(memberId);
         // 활성 1건 제약이 DB에 없어서(부분 인덱스를 못 쓴다) 이 잠금이 유일한 방어선이다.
         // 잠그지 않으면 동시 요청 두 건이 각각 "활성 목표 없음"을 보고 둘 다 통과한다.
         matchLockRepository.findByLockKey(MatchLock.memberKey(memberId))
@@ -182,9 +216,12 @@ public class MemberService {
         if (memberGoalRepository.existsByMemberIdAndStatus(memberId, GoalStatus.ACTIVE)) {
             throw new BusinessException(ErrorCode.GOAL_ALREADY_ACTIVE);
         }
+        LocalDate today = LocalDate.now(clock);
         MemberGoal goal = memberGoalRepository.save(
-                MemberGoal.start(memberId, request.periodDays(), LocalDate.now(clock)));
-        return GoalResponse.from(goal);
+                MemberGoal.start(memberId, request.periodDays(), today));
+        // 설정 직후에도 0이 아닐 수 있다 — 오늘 완주를 마친 뒤 목표를 걸면 시작일(오늘)의
+        // 완주가 이미 있고, 달성 판정(>= started_on)도 그 하루를 세기 때문이다.
+        return GoalResponse.of(goal, goalProgressDays(member, goal, today));
     }
 
     @Transactional

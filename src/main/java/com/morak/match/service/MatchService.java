@@ -269,9 +269,17 @@ public class MatchService {
     }
 
     private void rejectIfInSession(Long memberId) {
-        if (!findMembersInSession(List.of(memberId)).isEmpty()) {
-            throw new BusinessException(ErrorCode.ALREADY_IN_ACTIVE_SESSION);
-        }
+        // details에 세션 번호를 싣는다 — 이 오류를 받는 대표 경우가 앱 재시작 후의 복귀라,
+        // 번호가 없으면 클라이언트는 어느 방으로 돌아갈지 몰라 재접속 유예(D13)가 그냥 지나간다.
+        // REMATCH_COOLDOWN의 availableAt, DUPLICATE_ORDER의 orderId와 같은 패턴이다.
+        sessionParticipantRepository
+                .findParticipating(memberId, PARTICIPATING, SessionStatus.LIVE)
+                .stream()
+                .findFirst()
+                .ifPresent(participant -> {
+                    throw new BusinessException(ErrorCode.ALREADY_IN_ACTIVE_SESSION,
+                            Map.of("sessionId", participant.getSessionId()));
+                });
     }
 
     private void rejectIfInRematchCooldown(Long memberId, LocalDateTime now) {

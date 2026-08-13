@@ -1,5 +1,6 @@
 package com.morak.member.dto.response;
 
+import com.morak.common.type.BadgeCode;
 import com.morak.member.entity.Member;
 import com.morak.member.type.AgeVerification;
 import com.morak.member.type.MemberRole;
@@ -8,6 +9,7 @@ import com.morak.report.type.SanctionType;
 import com.morak.session.dto.response.ActiveSessionResponse;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * AU-2 내 정보 응답. openapi.yaml MemberMeResponse 스키마와 1:1 대응.
@@ -26,7 +28,8 @@ public record MemberMeResponse(
         GoalResponse goal,
         Streak streak,
         ActiveSessionResponse activeSession,
-        Sanction sanction) {
+        Sanction sanction,
+        List<Badge> badges) {
 
     /**
      * 연속 완주일. 한 번도 완주하지 않았으면 current=0, lastCompletedOn=null.
@@ -42,9 +45,16 @@ public record MemberMeResponse(
     public record Sanction(SanctionType type, LocalDateTime endsAt) {
     }
 
+    /**
+     * 보유 뱃지. 별도 테이블 없이 ACHIEVED 목표 행에서 파생하며, 같은 코드는 첫 획득 시각으로
+     * 한 번만 실린다 — "보유"의 답은 종류이지 횟수가 아니다. 없으면 빈 배열이다.
+     */
+    public record Badge(BadgeCode code, LocalDateTime earnedAt) {
+    }
+
     public static MemberMeResponse from(Member member, LocalDate today, boolean mediaConsented,
                                         GoalResponse goal, ActiveSessionResponse activeSession,
-                                        Sanction sanction) {
+                                        Sanction sanction, List<Badge> badges) {
         return new MemberMeResponse(
                 member.getId(),
                 member.getNickname(),
@@ -56,6 +66,7 @@ public record MemberMeResponse(
                 goal,
                 new Streak(member.currentStreakOn(today), member.getLastCompletedOn()),
                 activeSession,
-                sanction);
+                sanction,
+                badges);
     }
 }
