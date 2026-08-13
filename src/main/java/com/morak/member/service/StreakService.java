@@ -118,6 +118,17 @@ public class StreakService {
     }
 
     /**
+     * 완주일 기록으로 캐시를 다시 세워 덮어쓴다. 소급 인용(AD-6)이 안에서 쓰는 재계산을
+     * DEV-3 시드도 이 공개 경로로 쓴다 — 같은 계산이 두 벌이면 언젠가 한쪽만 고쳐지고,
+     * 그때부터 시드가 만든 상태와 운영 경로가 만든 상태가 갈라진다.
+     */
+    public void recountStreak(Long memberId) {
+        Member member = memberRepository.findById(memberId)
+                .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 재계산: " + memberId));
+        recountStreak(member);
+    }
+
+    /**
      * 완주일 기록을 근거로 캐시를 다시 센다.
      *
      * <p>기준점은 오늘이 아니라 <b>가장 최근 완주일</b>이다. 오늘부터 세면 어제 완주하고 오늘

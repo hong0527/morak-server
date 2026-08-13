@@ -6,7 +6,7 @@ import com.morak.dev.dto.request.DevSessionSeedRequest;
 import com.morak.dev.dto.response.DevSessionSeedResponse;
 import com.morak.member.entity.Member;
 import com.morak.member.repository.MemberRepository;
-import com.morak.member.repository.StreakDayRepository;
+import com.morak.member.service.StreakService;
 import com.morak.session.entity.LiveSession;
 import com.morak.session.entity.SessionParticipant;
 import com.morak.session.repository.LiveSessionRepository;
@@ -15,14 +15,11 @@ import com.morak.session.service.SessionClosingService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,28 +41,25 @@ public class DevSessionSeedService {
     /** 과거 세션의 시작 시각. 자정 경계에 걸리지 않는 값이면 무엇이든 된다. */
     private static final int SEED_START_HOUR = 9;
 
-    /** 재계산이 읽는 완주일 상한. StreakService.MAX_LOOKBACK_DAYS와 같은 근거의 값이다. */
-    private static final int MAX_LOOKBACK_DAYS = 400;
-
     private final MemberRepository memberRepository;
-    private final StreakDayRepository streakDayRepository;
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final SessionClosingService sessionClosingService;
+    private final StreakService streakService;
     private final List<Integer> targetMinutesOptions;
 
     public DevSessionSeedService(MemberRepository memberRepository,
-                                 StreakDayRepository streakDayRepository,
                                  LiveSessionRepository liveSessionRepository,
                                  SessionParticipantRepository sessionParticipantRepository,
                                  SessionClosingService sessionClosingService,
+                                 StreakService streakService,
                                  @Value("${morak.match.target-minutes-options}")
                                  List<Integer> targetMinutesOptions) {
         this.memberRepository = memberRepository;
-        this.streakDayRepository = streakDayRepository;
         this.liveSessionRepository = liveSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.sessionClosingService = sessionClosingService;
+        this.streakService = streakService;
         this.targetMinutesOptions = targetMinutesOptions;
     }
 
@@ -84,33 +78,14 @@ public class DevSessionSeedService {
         // 처음 읽은 참조를 그대로 쓰면 Streak도 잔액도 시드 이전 값이 응답에 실린다.
         Member member = memberRepository.findById(memberId)
                 .orElseThrow(() -> new IllegalStateException("시드 대상 회원이 사라졌다: " + memberId));
-        recountStreakFromHistory(member);
+        // 지급 경로의 증분 갱신(Member#recordCompletion)은 마지막 완주일보다 과거인 날짜를
+        // 무시한다. 이미 오늘 완주한 회원에게 어제 이전을 백필하면 streak_day에는 행이
+        // 쌓이는데 캐시는 그대로라, 시드 직후의 AU-2와 이 응답이 실제 연속과 다른 값을
+        // 보인다. 재계산은 AD-6 소급 인용과 같은 StreakService 경로다 — 시드용 복제본을
+        // 두면 언젠가 한쪽만 고쳐진다.
+        streakService.recountStreak(memberId);
         return new DevSessionSeedResponse(memberId, sessionIds, member.getCurrentStreak(),
                 member.getPointBalance());
-    }
-
-    /**
-     * 시드 후 Streak 캐시를 완주일 기록으로 다시 센다.
-     *
-     * <p>지급 경로의 증분 갱신({@code Member#recordCompletion})은 마지막 완주일보다 과거인
-     * 날짜를 무시한다. 이미 오늘 완주한 회원에게 어제 이전을 백필하면 {@code streak_day}에는
-     * 행이 쌓이는데 캐시는 그대로라, 시드 직후의 AU-2와 이 응답이 실제 연속과 다른 값을
-     * 보인다 — 검증 도구가 틀린 상태를 만드는 셈이다. 그래서 AD-6 소급 인용과 같은 방식
-     * ({@code StreakService#recountStreak})으로 전체를 다시 세어 덮어쓴다.
-     */
-    private void recountStreakFromHistory(Member member) {
-        List<LocalDate> completedDays = streakDayRepository.findAllCompletedOn(
-                member.getId(), PageRequest.ofSize(MAX_LOOKBACK_DAYS));
-        if (completedDays.isEmpty()) {
-            return;
-        }
-        Set<LocalDate> days = new HashSet<>(completedDays);
-        LocalDate latest = completedDays.getFirst();
-        int streak = 0;
-        for (LocalDate day = latest; days.contains(day); day = day.minusDays(1)) {
-            streak++;
-        }
-        member.applyRecountedStreak(latest, streak);
     }
 
     /**
