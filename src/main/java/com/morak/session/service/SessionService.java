@@ -4,9 +4,9 @@ import com.morak.common.dto.PageParams;
 import com.morak.common.dto.PageResponse;
 import com.morak.common.error.BusinessException;
 import com.morak.common.error.ErrorCode;
-import com.morak.member.entity.Member;
 import com.morak.member.repository.MediaConsentRepository;
 import com.morak.member.repository.MemberGoalRepository;
+import com.morak.member.repository.MemberNickname;
 import com.morak.member.repository.MemberRepository;
 import com.morak.member.repository.StreakDayRepository;
 import com.morak.member.service.StreakService;
@@ -94,8 +94,8 @@ public class SessionService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_SESSION_PARTICIPANT));
         List<Long> memberIds = participants.stream().map(SessionParticipant::getMemberId).toList();
         // 익명 닉네임만 꺼낸다. 실명·SNS 값은 어떤 경우에도 내려가지 않는다.
-        Map<Long, String> nicknames = memberRepository.findAllById(memberIds).stream()
-                .collect(Collectors.toMap(Member::getId, Member::getNickname));
+        Map<Long, String> nicknames = memberRepository.findByIdIn(memberIds).stream()
+                .collect(Collectors.toMap(MemberNickname::getId, MemberNickname::getNickname));
         return SessionDetailResponse.of(session, participants, nicknames, memberId,
                 myEvictionId(me, sessionId, memberId));
     }
@@ -117,9 +117,9 @@ public class SessionService {
             throw new BusinessException(ErrorCode.SESSION_NOT_ENDED);
         }
         Map<Long, String> nicknames = memberRepository
-                .findAllById(participants.stream().map(SessionParticipant::getMemberId).toList())
+                .findByIdIn(participants.stream().map(SessionParticipant::getMemberId).toList())
                 .stream()
-                .collect(Collectors.toMap(Member::getId, Member::getNickname));
+                .collect(Collectors.toMap(MemberNickname::getId, MemberNickname::getNickname));
         LocalDate completedOn = session.getEndedAt().toLocalDate();
         // 그날의 완주가 이 세션으로 성립했는지. 다른 세션이 먼저 기록했으면 Streak는
         // 이미 올라 있고 이 세션은 중복 증가시키지 않았다는 뜻이다(★D2).

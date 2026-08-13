@@ -2,7 +2,7 @@ package com.morak.session.service;
 
 import com.morak.common.dto.PageParams;
 import com.morak.common.dto.PageResponse;
-import com.morak.member.entity.Member;
+import com.morak.member.repository.MemberNickname;
 import com.morak.member.repository.MemberRepository;
 import com.morak.session.dto.response.AdminSessionResponse;
 import com.morak.session.entity.LiveSession;
@@ -72,7 +72,7 @@ public class SessionAdminService {
         if (memberIds.isEmpty()) {
             return Map.of();
         }
-        return memberRepository.findAllById(memberIds).stream()
-                .collect(Collectors.toMap(Member::getId, Member::getNickname));
+        return memberRepository.findByIdIn(memberIds).stream()
+                .collect(Collectors.toMap(MemberNickname::getId, MemberNickname::getNickname));
     }
 }

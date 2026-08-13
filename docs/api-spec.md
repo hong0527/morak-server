@@ -26,6 +26,8 @@
 - 목록 응답은 커스텀 `PageResponse<T>` = `{content[], page, size, totalElements, totalPages}` (Spring `Page` 직렬화 금지)
 - 페이지 파라미터: `page`(0-base, 기본 0), `size`(기본 20, 최대 50). 초과 시 400 `VALIDATION_FAILED`
 - 에러 코드 하나에는 HTTP status 하나만 대응한다. 같은 코드가 상황에 따라 다른 status를 내지 않는다.
+- **405·415는 전 엔드포인트 공통이다.** 경로는 맞는데 메서드가 다르면 405 `METHOD_NOT_ALLOWED`, 본문 요청의 `Content-Type`이 `application/json`이 아니거나 없으면 415 `UNSUPPORTED_MEDIA_TYPE`. 위 공통 실패 포맷을 그대로 따르므로 API별로 다시 적지 않는다(OpenAPI 문서도 마찬가지로 개별 오퍼레이션에 넣지 않는다).
+- **스프링 기본 `/error` 경로는 이 계약 밖이다.** 도달하면 위 포맷이 아닌 응답이 나가므로 프론트는 이 경로를 직접 호출하지 않는다. `/api/**`의 모든 실패는 전역 핸들러가 공통 포맷으로 내린다.
 - 금액·포인트는 정수. 포인트 잔액의 진실은 `point_ledger`이며 `member.point_balance`는 캐시다.
 
 ### 0-2. 전역 인터셉터 (검문소 — 개별 API가 아니라 여기 한 곳에서 판정)
@@ -1787,6 +1789,8 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 공통 | FORBIDDEN_ROLE | 403 | 전역③ | ADMIN 아님 |
 | 공통 | FORBIDDEN | 403 | MT-3, AP-1, SR-5 | 소유권 없음 |
 | 공통 | ENDPOINT_NOT_FOUND | 404 | 전역 | 없는 경로, 운영 프로필의 DEV 경로 |
+| 공통 | **METHOD_NOT_ALLOWED** | 405 | 전 엔드포인트 공통 | 경로는 있으나 해당 메서드 없음 |
+| 공통 | **UNSUPPORTED_MEDIA_TYPE** | 415 | 전 엔드포인트 공통 | 본문 요청의 `Content-Type`이 JSON이 아니거나 없음 |
 | 공통 | VALIDATION_FAILED | 400 | 전역 | 입력 검증 실패 |
 | 공통 | INTERNAL_SERVER_ERROR | 500 | 전역 | 미분류 |
 | 회원·인증 | INVALID_SOCIAL_TOKEN | 401 | AU-1 | 소셜 인증 실패 |
@@ -1872,7 +1876,9 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 
 **신설**
 
-UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_REQUIRED, GOAL_ALREADY_ACTIVE, REMATCH_COOLDOWN, DUPLICATE_ABSENCE_EVENT, ABSENCE_RATE_LIMITED, ALREADY_EVICTED, PAUSE_ALREADY_USED, PAUSE_NOT_ACTIVE, INVALID_WEBHOOK_SIGNATURE, INSUFFICIENT_POINT, PRODUCT_NOT_FOUND, OUT_OF_STOCK, DUPLICATE_ORDER, ORDER_NOT_FOUND, CHARGE_NOT_FOUND, PAYMENT_AMOUNT_MISMATCH, PAYMENT_NOT_APPROVED, APPEAL_ALREADY_FILED, APPEAL_NOT_FOUND
+METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_REQUIRED, GOAL_ALREADY_ACTIVE, REMATCH_COOLDOWN, DUPLICATE_ABSENCE_EVENT, ABSENCE_RATE_LIMITED, ALREADY_EVICTED, PAUSE_ALREADY_USED, PAUSE_NOT_ACTIVE, INVALID_WEBHOOK_SIGNATURE, INSUFFICIENT_POINT, PRODUCT_NOT_FOUND, OUT_OF_STOCK, DUPLICATE_ORDER, ORDER_NOT_FOUND, CHARGE_NOT_FOUND, PAYMENT_AMOUNT_MISMATCH, PAYMENT_NOT_APPROVED, APPEAL_ALREADY_FILED, APPEAL_NOT_FOUND
+
+신설 22종, 전체 52종이다. `METHOD_NOT_ALLOWED`·`UNSUPPORTED_MEDIA_TYPE`은 3부-A 이후에 추가했다 — 잡지 않으면 전역 `Exception` 핸들러가 500으로 덮어, 프론트가 잘못 부른 요청을 서버 장애로 읽고 재시도한다.
 
 ---
 

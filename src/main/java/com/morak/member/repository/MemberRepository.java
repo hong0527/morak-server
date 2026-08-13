@@ -29,6 +29,12 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     Page<Member> findByStatusIn(Collection<MemberStatus> statuses, Pageable pageable);
 
     /**
+     * 표시용 닉네임만 필요한 화면(세션 상세·결과, AD-5·AD-7 콘솔)이 쓰는 일괄 조회.
+     * 엔티티를 읽는 {@code findAllById}와 달리 개인정보 컬럼이 메모리에 올라오지 않는다.
+     */
+    List<MemberNickname> findByIdIn(Collection<Long> ids);
+
+    /**
      * 잔액이 있을 때만 깎는다(SR-3). <b>잔액을 읽고 서비스에서 비교한 뒤 깎으면 동시 주문 두
      * 건이 같은 잔액을 보고 둘 다 통과해 마이너스가 된다.</b> 검사와 차감을 한 문장에 넣어야
      * DB가 행을 잠근 상태로 판정한다.

@@ -7,6 +7,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -69,6 +71,30 @@ public class GlobalExceptionHandler {
         log.warn("잠금 획득 실패", e);
         return ResponseEntity.status(ErrorCode.LOCK_ACQUISITION_FAILED.getStatus())
                 .body(ErrorResponse.of(ErrorCode.LOCK_ACQUISITION_FAILED, Map.of()));
+    }
+
+    /**
+     * 경로는 있는데 메서드가 없는 요청. 잡지 않으면 아래 {@code Exception} 핸들러가 500으로
+     * 덮어, 프론트가 "서버가 죽었다"로 읽고 재시도한다. 실제로는 잘못 부른 것이라 405가 맞다.
+     *
+     * <p>외부에서 얼마든지 유발할 수 있으므로 ERROR가 아니라 warn 한 줄이다. 스택을 남기면
+     * 스캐너 한 번에 로그가 스택으로 덮여 진짜 500을 찾을 수 없게 된다.
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotAllowed(
+            HttpRequestMethodNotSupportedException e) {
+        log.warn("허용되지 않은 메서드: {}", e.getMethod());
+        return ResponseEntity.status(ErrorCode.METHOD_NOT_ALLOWED.getStatus())
+                .body(ErrorResponse.of(ErrorCode.METHOD_NOT_ALLOWED, Map.of()));
+    }
+
+    /** Content-Type이 없거나 JSON이 아닌 본문 요청. 405와 같은 이유로 warn 한 줄만 남긴다. */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleUnsupportedMediaType(
+            HttpMediaTypeNotSupportedException e) {
+        log.warn("지원하지 않는 Content-Type: {}", e.getContentType());
+        return ResponseEntity.status(ErrorCode.UNSUPPORTED_MEDIA_TYPE.getStatus())
+                .body(ErrorResponse.of(ErrorCode.UNSUPPORTED_MEDIA_TYPE, Map.of()));
     }
 
     @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})

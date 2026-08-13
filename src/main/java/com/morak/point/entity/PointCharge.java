@@ -37,9 +37,12 @@ import lombok.NoArgsConstructor;
                 @UniqueConstraint(name = "uk_pc_order", columnNames = "pg_order_id"),
                 @UniqueConstraint(name = "uk_pc_tid", columnNames = "pg_tid")
         },
-        indexes = @Index(
-                name = "idx_pc_member",
-                columnList = "member_id, created_at"))
+        indexes = {
+                @Index(name = "idx_pc_member", columnList = "member_id, created_at"),
+                // B5 만료 스캔은 status=READY로 좁힌 뒤 created_at 범위를 본다. idx_pc_member는
+                // 선두가 member_id라 이 조회를 받지 못한다 — 회원별 이력 조회 전용이다.
+                @Index(name = "idx_pc_expire", columnList = "status, created_at")
+        })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class PointCharge {

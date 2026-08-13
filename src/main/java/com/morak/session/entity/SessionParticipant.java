@@ -35,9 +35,12 @@ import lombok.NoArgsConstructor;
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_sp",
                 columnNames = {"session_id", "member_id"}),
-        indexes = @Index(
-                name = "idx_sp_member",
-                columnList = "member_id, joined_at"))
+        indexes = {
+                @Index(name = "idx_sp_member", columnList = "member_id, joined_at"),
+                // B1 흡수 스캔이 "완주했는데 미지급"을 찾는다. 없으면 매분 참가자 전량을 훑는데,
+                // 대상이 거의 언제나 0행인 안전망이라 그 비용이 서비스 수명만큼 계속 자란다.
+                @Index(name = "idx_sp_award", columnList = "completed, point_awarded")
+        })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class SessionParticipant {

@@ -389,6 +389,7 @@ CREATE TABLE session_participant (
     PRIMARY KEY (id),
     UNIQUE KEY uk_sp (session_id, member_id),
     KEY idx_sp_member (member_id, joined_at),   -- SS-9 내 세션 이력
+    KEY idx_sp_award (completed, point_awarded),  -- B1 흡수 스캔(완주했는데 미지급)
     CONSTRAINT fk_sp_session FOREIGN KEY (session_id) REFERENCES live_session(id),
     CONSTRAINT fk_sp_member  FOREIGN KEY (member_id) REFERENCES member(id)
 );
@@ -487,6 +488,7 @@ CREATE TABLE eviction (
     PRIMARY KEY (id),
     UNIQUE KEY uk_eviction (session_id, member_id),
     KEY idx_ev_member (member_id, created_at),   -- D14 재매칭 쿨다운 조회
+    KEY idx_ev_revoked (revoked_at),             -- B1 소급 차감 스캔의 선행 조건
     CONSTRAINT fk_ev_session FOREIGN KEY (session_id) REFERENCES live_session(id),
     CONSTRAINT fk_ev_member  FOREIGN KEY (member_id) REFERENCES member(id)
 );
@@ -676,7 +678,8 @@ CREATE TABLE point_charge (
     PRIMARY KEY (id),
     UNIQUE KEY uk_pc_order (pg_order_id),
     UNIQUE KEY uk_pc_tid (pg_tid),        -- NULL 다건 허용 → READY 상태끼리는 충돌하지 않는다
-    KEY idx_pc_member (member_id, created_at),
+    KEY idx_pc_member (member_id, created_at),   -- 회원별 충전 이력 조회
+    KEY idx_pc_expire (status, created_at),      -- B5 READY 방치 건 만료 스캔
     CONSTRAINT fk_pc_member FOREIGN KEY (member_id) REFERENCES member(id)
 );
 -- PG는 토스페이먼츠 테스트 모드(잠정, D16). 시크릿 키는 환경변수(morak.pg.secret-key).
@@ -872,18 +875,27 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 | `idx_mr_expire` | B2 대기 만료 |
 | `idx_ls_batch` | B1 세션 종료 처리 |
 | `idx_sp_member` | SS-9 내 세션 이력 |
+| `idx_sp_award` | B1 흡수 스캔(완주 확정됐으나 미지급인 참가자) |
 | `idx_ev_member` | MT-1 재매칭 쿨다운 검사(D14) |
+| `idx_ev_revoked` | B1 소급 차감 스캔(취소되지 않은 퇴출로 후보를 좁힌다) |
 | `idx_ap_queue` | AD-5 이의 큐, overdue 파생 조회 |
 | `idx_pl_member` | PT-1 포인트 내역 |
 | `idx_pd_list` | SR-1 상품 목록 |
 | `idx_so_member` | SR-4 내 주문 목록 |
-| `idx_pc_member` | 충전 이력 조회, READY 방치 건 정리 |
+| `idx_pc_member` | 회원별 충전 이력 조회 |
+| `idx_pc_expire` | B5 READY 방치 건 만료 |
 | `idx_rc_console` | AD-1 목록·필터, overdue 파생 조회 |
 | `idx_rh_case` | AD-2 처리 이력 |
 | `idx_sanction_member` | 전역 인터셉터 제재 검사(매 요청) |
 | `idx_me_type` | 지표 집계 |
 
 `absence_event`는 별도 인덱스를 두지 않는다. `uk_ae`의 선두 2컬럼(session_id, member_id)이 조회를 한 세션의 본인 이벤트로 좁혀 주고, 그 범위는 세션당 수십 행을 넘지 않는다.
+
+**배치 스캔용 인덱스 3종**(`idx_sp_award`, `idx_ev_revoked`, `idx_pc_expire`)은 다른 인덱스와 성격이 다르다. 나머지는 사용자 조회를 받치지만 이 셋은 매분 도는 배치가 후보를 좁히는 데만 쓴다. 셋 다 정상 운영에서는 대상이 0행인 안전망이라 인덱스가 없어도 결과는 같은데, 없으면 그 0행을 확인하려고 매분 테이블 전체를 훑고 그 비용이 서비스 수명만큼 계속 자란다.
+
+`idx_pc_member`는 **B5 만료 스캔을 받지 않는다.** 선두 컬럼이 `member_id`인데 B5의 조건은 `status`와 `created_at`뿐이라 이 인덱스로는 진입할 수 없다. B5를 받는 것은 `idx_pc_expire`다.
+
+**v1이 인덱스 없이 감수하는 스캔 2건** — AD-1의 `q` 필터는 `target_nickname LIKE '%…%'`라 선행 와일드카드 때문에 어떤 인덱스도 타지 못하고, AD-7 모니터의 `started_at DESC` 정렬에는 대응 인덱스가 없다. 둘 다 관리자 콘솔 전용이고 호출자가 소수라, v1 규모에서는 전체 스캔 비용이 인덱스를 늘리는 값보다 싸다고 보고 그대로 둔다. 케이스·세션 행이 수십만을 넘어가면 다시 본다.
 
 ## enum 전체
 

@@ -29,9 +29,12 @@ import lombok.NoArgsConstructor;
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_eviction",
                 columnNames = {"session_id", "member_id"}),
-        indexes = @Index(
-                name = "idx_ev_member",
-                columnList = "member_id, created_at"))
+        indexes = {
+                @Index(name = "idx_ev_member", columnList = "member_id, created_at"),
+                // B1 소급 차감 스캔의 선행 조건이 revoked_at IS NULL이다. 뒤따르는 NOT EXISTS는
+                // 인덱스로 좁힐 수 없으므로, 여기서 후보를 줄이지 못하면 매분 퇴출 전체가 후보다.
+                @Index(name = "idx_ev_revoked", columnList = "revoked_at")
+        })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Eviction {

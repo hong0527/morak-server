@@ -11,6 +11,19 @@ spring:
     properties:
       hibernate:
         format_sql: true
+        jdbc:
+          # 여러 행을 한 트랜잭션에서 쓰는 경로(매칭 6인 확정, B1 완주 지급, B4 탈퇴 파기)의
+          # JDBC 왕복을 묶는다.
+          #
+          # 다만 INSERT는 지금 묶이지 않는다. 모든 엔티티가 GenerationType.IDENTITY라
+          # persist() 직후 생성 키를 읽어야 하고, 그래서 Hibernate가 INSERT를 미루지 못한다.
+          # 실측(6인 확정): 이 설정 전후 모두 session_participant INSERT 6문장으로 동일했다.
+          # 지금 효과가 있는 것은 UPDATE·DELETE 배치 쪽이다. INSERT까지 묶으려면 키 전략을
+          # 바꿔야 하는데, 그것은 MySQL 전환(12단계)에서 함께 볼 문제다.
+          batch_size: 30
+        # 같은 테이블의 INSERT가 연속해야 배치가 끊기지 않는다. 위 이유로 지금은 실효가
+        # 없지만, 키 전략이 바뀌는 순간 이 값이 없으면 batch_size만으로는 묶이지 않는다.
+        order_inserts: true
   web:
     resources:
       add-mappings: false

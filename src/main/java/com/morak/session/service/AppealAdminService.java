@@ -5,7 +5,7 @@ import com.morak.common.dto.PageResponse;
 import com.morak.common.error.BusinessException;
 import com.morak.common.error.ErrorCode;
 import com.morak.common.sla.SlaOverdue;
-import com.morak.member.entity.Member;
+import com.morak.member.repository.MemberNickname;
 import com.morak.member.repository.MemberRepository;
 import com.morak.point.service.PointService;
 import com.morak.point.type.PointReason;
@@ -87,9 +87,9 @@ public class AppealAdminService {
                 .stream()
                 .collect(Collectors.toMap(Eviction::getId, Function.identity()));
         Map<Long, String> nicknames = memberRepository
-                .findAllById(appeals.getContent().stream().map(AppealCase::getMemberId).toList())
+                .findByIdIn(appeals.getContent().stream().map(AppealCase::getMemberId).toList())
                 .stream()
-                .collect(Collectors.toMap(Member::getId, Member::getNickname));
+                .collect(Collectors.toMap(MemberNickname::getId, MemberNickname::getNickname));
 
         return PageResponse.of(appeals, appeal -> AppealSummaryResponse.of(appeal,
                 evictions.get(appeal.getEvictionId()), nicknames.get(appeal.getMemberId()), now));
