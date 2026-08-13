@@ -77,6 +77,7 @@ public class AppealAdminService {
     private final LiveSessionRepository liveSessionRepository;
     private final WarningRepository warningRepository;
     private final AbsenceEventRepository absenceEventRepository;
+    private final WarningTraceService warningTraceService;
     private final MemberRepository memberRepository;
     private final SessionClosingService sessionClosingService;
     private final PointService pointService;
@@ -127,54 +128,32 @@ public class AppealAdminService {
         // concurrentReporterCount의 분모. "6명 중 4명"과 "2명 중 1명"은 같은 수치가 아니다
         int participantCount = sessionParticipantRepository
                 .findBySessionIdOrderByIdAsc(eviction.getSessionId()).size();
-        List<AppealDetailResponse.WarningItem> warnings = warningRepository
-                .findBySessionIdAndMemberIdOrderBySeqAsc(eviction.getSessionId(),
-                        appeal.getMemberId())
+        // 구간 되짚기는 SS-8과 공유한다 — 관리자와 당사자가 다른 구간을 보면 안 된다
+        Long sessionId = eviction.getSessionId();
+        Long memberId = appeal.getMemberId();
+        List<AppealDetailResponse.WarningItem> warnings = warningTraceService
+                .traceAll(sessionId, memberId, session)
                 .stream()
-                .map(warning -> toWarningItem(warning, session))
+                .map(trace -> toWarningItem(trace, sessionId, memberId))
                 .toList();
         return AppealDetailResponse.of(appeal, eviction, nickname, participantCount, warnings,
                 now);
     }
 
     /**
-     * 경고의 근거 구간을 판정(★D4)과 같은 규칙으로 되짚는다. 근거가 END면 그 직전 이벤트가
-     * START였던 것이고(SS-4·SS-5), START면 END 없이 세션이 끝나 종료 시각으로 정산된
-     * 것이다(B1). 되짚지 못하는 조합에서는 구간을 지어내지 않고 null로 둔다.
+     * 공유 되짚기 결과에 관리자 전용 분석(동시 보고 집계)만 얹는다. 세션·회원은 되짚기 결과가
+     * 아니라 호출부에서 받는다 — 한 번의 조회가 한 사람의 경고 전량이라 전 항목이 같은 값이고,
+     * 행마다 들고 다니면 같은 값이 3벌로 실린다.
      */
-    private AppealDetailResponse.WarningItem toWarningItem(Warning warning, LiveSession session) {
-        if (warning.getAbsenceEventId() == null) {
-            return AppealDetailResponse.WarningItem.pauseOverrun(warning);
-        }
-        AbsenceEvent basisEvent = absenceEventRepository.findById(warning.getAbsenceEventId())
-                .orElseThrow(() -> new IllegalStateException(
-                        "경고의 근거 이벤트가 없다: warning=" + warning.getId()));
-        LocalDateTime startedAt;
-        LocalDateTime endedAt;
-        if (basisEvent.getType() == AbsenceEventType.END) {
-            startedAt = absenceEventRepository
-                    .findFirstBySessionIdAndMemberIdAndIdLessThanOrderByIdDesc(
-                            warning.getSessionId(), warning.getMemberId(), basisEvent.getId())
-                    .filter(previous -> previous.getType() == AbsenceEventType.START)
-                    .map(AbsenceEvent::getOccurredAt)
-                    .orElse(null);
-            endedAt = basisEvent.getOccurredAt();
-        } else {
-            startedAt = basisEvent.getOccurredAt();
-            endedAt = session.getEndedAt();
-        }
-        Long absentSeconds = startedAt == null || endedAt == null
+    private AppealDetailResponse.WarningItem toWarningItem(WarningTraceService.WarningTrace trace,
+                                                           Long sessionId, Long memberId) {
+        Integer concurrentReporterCount = trace.startedAt() == null || trace.endedAt() == null
                 ? null
-                : Duration.between(startedAt, endedAt).getSeconds();
-        long reportSkewSeconds = Duration
-                .between(basisEvent.getOccurredAt(), basisEvent.getReportedAt()).getSeconds();
-        Integer concurrentReporterCount = startedAt == null || endedAt == null
-                ? null
-                : (int) absenceEventRepository.countOtherReporters(warning.getSessionId(),
-                        warning.getMemberId(), startedAt, endedAt);
-        return new AppealDetailResponse.WarningItem(warning.getSeq(), WarningBasis.ABSENCE,
-                warning.getCreatedAt(), startedAt, endedAt, absentSeconds, reportSkewSeconds,
-                concurrentReporterCount);
+                : (int) absenceEventRepository.countOtherReporters(sessionId, memberId,
+                        trace.startedAt(), trace.endedAt());
+        return new AppealDetailResponse.WarningItem(trace.seq(), trace.basis(), trace.issuedAt(),
+                trace.startedAt(), trace.endedAt(), trace.absentSeconds(),
+                trace.reportSkewSeconds(), concurrentReporterCount);
     }
 
     /**
