@@ -38,7 +38,7 @@ AU-1은 401 `INVALID_SOCIAL_TOKEN`, PY-2는 409 `PAYMENT_NOT_APPROVED`가 정상
 그 밖에 LiveKit `RemoveParticipant` 호출(`EvictionService`)과 신고 서술 텍스트 검열(`Report`)이 TODO로 남아 있다.
 여기에 3차 검증 B가 올린 **재기동 내성 이월 3건**(유예 창 DB 영속화 · 스케줄러 락 · `point_charge` 시각 정합)이 더해진다. 셋 다 12단계 절에 상세를 적었고, 1번이 끝나기 전까지 **v1 배포는 단일 인스턴스 전제**다.
 
-**테스트 39건 / 16클래스**(`./gradlew test` 실측 — `build/test-results/test/*.xml`의 `tests` 합계, 실패·에러 0). 단위 테스트가 아니라 H2를 띄우는 통합 테스트이며, 단계별 게이트가 curl로 보는 것과 달리 동시성·멱등·경계값처럼 손으로 재현하기 어려운 불변식을 덮는다. 이 수치가 줄면 무엇을 지웠는지 먼저 확인한다.
+**테스트 86건 / 31클래스**(`./gradlew test` 실측 — `build/test-results/test/*.xml`의 `tests` 합계, 실패·에러 0). 단위 테스트가 아니라 H2를 띄우는 통합 테스트이며, 단계별 게이트가 curl로 보는 것과 달리 동시성·멱등·경계값처럼 손으로 재현하기 어려운 불변식을 덮는다. 이 수치가 줄면 무엇을 지웠는지 먼저 확인한다.
 
 수를 셀 때 `grep -c "@Test"`를 그대로 쓰면 `TestSupportConfig`의 `@TestConfiguration`이 함께 잡혀 40이 나온다. 실측 기준은 Gradle 리포트다.
 
@@ -413,15 +413,15 @@ com.morak
 **목표**: `docs/openapi.yaml`을 41 오퍼레이션으로 다시 쓴다. 프론트가 이 파일을 계약으로 보고 병렬 작업하므로, 코드보다 먼저 확정돼야 한다.
 
 ### 만들 것
-api-spec §3 총람의 **45행**을 그대로 옮긴다. AU 7 · MT 3 · SS 11 · AP 1 · PT 1 · SR 5 · PY 3 · RP 1 · AD 9 · **DEV 4**. DEV가 4행인 것은 DEV-2가 시각 조작(POST)과 조회(GET) 두 행이기 때문이다 — 오퍼레이션 수와 총람 행 수를 같은 단위로 센다. (AD-9 이의 심사 상세는 10단계 이후 추가분이다.)
+api-spec §3 총람의 **46행**을 그대로 옮긴다. AU 7 · MT 3 · SS 11 · AP 2 · PT 1 · SR 5 · PY 3 · RP 1 · AD 9 · **DEV 4**. DEV가 4행인 것은 DEV-2가 시각 조작(POST)과 조회(GET) 두 행이기 때문이다 — 오퍼레이션 수와 총람 행 수를 같은 단위로 센다. (AD-9 이의 심사 상세와 AP-2 내 이의 목록은 10단계 이후 추가분이다.)
 **DEV-1(`POST /api/auth/dev-login`)은 1단계에서 폐기가 확정됐다** — dev 로그인은 AU-1 + `DevSocialClient`가 처리하므로 별도 경로가 없다. 남은 개발 전용은 DEV-2·3·4 셋이다.
-**DEV 계열은 프론트 계약이 아니다.** openapi.yaml에는 `개발 전용`으로 표시해 싣는다(api-spec DEV 절과 동일 결정) — 공개 41개 + DEV 4개로 파일 총계는 45다.
+**DEV 계열은 프론트 계약이 아니다.** openapi.yaml에는 `개발 전용`으로 표시해 싣는다(api-spec DEV 절과 동일 결정) — 공개 42개 + DEV 4개로 파일 총계는 46이다.
 공통 스키마: `ErrorResponse`(`{"error":{code,message,details}}`), `PageResponse<T>`(Spring `Page` 직렬화 금지), Bearer 보안 스킴.
 `docs/api-spec.md`(처리 절차)·`docs/screen-api-map.md`(화면-API 대응)도 함께 갱신한다.
 
 ### 완료 게이트
 - openapi.yaml 파싱 성공(Swagger Editor 또는 `npx @redocly/cli lint`)
-- 오퍼레이션 45개(공개 41 + 개발 전용 4), `operationId` 중복 0
+- 오퍼레이션 46개(공개 42 + 개발 전용 4), `operationId` 중복 0
 - 응답에 등장하는 모든 `error.code`가 0.5단계 `ErrorCode`에 실존
 - 프론트에 갱신 통지 + `docs/frontend-change-requests.md`에 변경분 기록
 
