@@ -46,7 +46,18 @@ public class WarningTraceService {
                                Long absentSeconds, Long reportSkewSeconds) {
     }
 
-    /** 한 참가자의 경고 전량을 근거 구간과 함께 돌려준다. 세션 스코프라 임계(3)가 상한이다. */
+    /**
+     * 한 참가자의 경고 전량을 근거 구간과 함께 돌려준다. 세션 스코프라 임계(3)가 상한이다.
+     *
+     * <p><b>경고 1건마다 조회가 두 번 나간다</b>(근거 이벤트와 그 직전 START). 행마다 도는
+     * 구조지만 고치지 않은 이유는 경고 상한이 3이라 데이터가 그 이상 커질 수 없어서다 —
+     * 실측에서 세션 결과 응답 하나가 최대 16쿼리였고 전부 단건 조회다. 목록 API에 실리는
+     * 구조가 아니라 페이지 크기에 비례하지도 않는다. 지금 배치 조회로 바꾸면 END와 START를
+     * 짝짓는 되짚기를 메모리에서 다시 구현해야 해 복잡성만 얹는다.
+     *
+     * <p>고칠 시점은 경고 상한이 풀리거나 이 되짚기가 목록 응답에 실릴 때다. 그때는
+     * {@code (sessionId, memberId)}의 이벤트를 한 번에 읽어 메모리에서 짝을 맞추면 된다.
+     */
     public List<WarningTrace> traceAll(Long sessionId, Long memberId, LiveSession session) {
         return warningRepository.findBySessionIdAndMemberIdOrderBySeqAsc(sessionId, memberId)
                 .stream()

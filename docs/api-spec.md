@@ -902,6 +902,8 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 - 이 퇴출로 잔여 `ACTIVE`+`PAUSED`가 `session.min-participants` 미만이 되면 세션 조기 종료(§5 종료 루틴)
 - 재매칭 쿨다운 30분 기산 (D14). 이의 신청 경로는 AP-1이며, 진입 번호 `evictionId`는 이 응답 외에 SS-1·SS-8의 본인 행에서도 다시 얻을 수 있다
 
+**LiveKit 서버 호출(RemoveParticipant·룸 종료)은 아직 코드에 없다 — 12단계 예정.** 이 문서의 "LiveKit 강제 퇴장"·"룸 종료" 부수효과(SS-4·SS-6·SS-7·AU-4·AD-4·§5 공통)는 12단계 실연동에서 채워진다. 그 전까지 서버 상태는 즉시 `EVICTED`·`ENDED`로 바뀌지만 **LiveKit 룸의 미디어 연결은 서버가 끊지 않는다** — 퇴출자의 클라이언트가 스스로 나가지 않으면 접속 토큰 만료(`livekit.token-ttl-seconds`, 최대 1시간)까지 룸에 남아 보일 수 있다. 시연에서 드러날 수 있는 사실이라 그대로 적는다. 다른 참가자 화면이 퇴출을 아는 경로는 SS-1 재조회(§0-7)다.
+
 FR-303의 딴짓·이상행동 감지는 보류다. v1은 자리비움(얼굴 미검출)만 판정한다.
 
 ### SS-5 화장실 모드 시작
@@ -1921,7 +1923,7 @@ UPDATE session_participant
 
 **진입점은 셋이고 루틴은 하나다.** ① B1(`ends_at` 도래, `end_reason=NORMAL`) ② 잔여 인원 미달 조기 종료(D12, `EARLY_UNDER_MIN`) ③ `room_finished` 웹훅(SS-10). ③의 사유는 시각으로 가른다 — 종료 시각이 `ends_at` 이후면 `NORMAL`, 그 전이면 `EARLY_UNDER_MIN`이다. LiveKit이 방을 닫는 시점은 우리가 정하지 않아서(마지막 참가자가 나가면 예정과 무관하게 닫힌다) 전부 `NORMAL`로 적으면 운영 지표에서 다 채운 세션과 도중에 빈 세션이 구분되지 않는다. **지급은 어느 쪽이든 `target_minutes` 기준으로 같다**(D15 보충). 셋 다 아래 1~7을 그대로 지난다.
 
-1. `live_session.status = ENDED`, `ended_at`·`end_reason` 기록, LiveKit 룸 종료, 그 세션의 재접속 유예 창 폐기.
+1. `live_session.status = ENDED`, `ended_at`·`end_reason` 기록, LiveKit 룸 종료(12단계 예정 — SS-4 부수효과의 단계 표기 참조), 그 세션의 재접속 유예 창 폐기.
    **정시 종료의 `ended_at`은 배치가 도는 시각이 아니라 `ends_at`이다** — 아래 정산이 그 시각을 기준으로 하므로, 배치가 몇 분 늦게 돌았다는 이유로 자리비움 구간이 길어져 없던 경고가 붙으면 안 된다. 조기 종료는 실제로 인원이 미달한 시각이 `ended_at`이다.
    **닫는 것이 맨 앞인 이유는 재귀 차단이다** — 2~3의 퇴출이 잔여 인원을 미달로 떨어뜨려 조기 종료 검사를 다시 부르는데, 이미 `ENDED`라 그 호출이 곧바로 되돌아 나간다
 2. 미종료 `absence_event(START)`를 세션 종료 시각을 END로 간주해 정산 → 60초 초과분은 `warning` 부여
@@ -1974,7 +1976,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 매칭 | **ALREADY_IN_ACTIVE_SESSION** | 409 | MT-1 | 활성 세션 참가 중. `details.sessionId`에 그 세션 번호 |
 | 매칭 | NO_ACTIVE_MATCH_REQUEST | 404 | MT-2, MT-3 | 요청 이력이 전무함(MT-2) / 없는 요청 id(MT-3) |
 | 매칭 | ALREADY_MATCHED | 409 | MT-3 | 이미 성사 |
-| 매칭 | LOCK_ACQUISITION_FAILED | 503 | MT-1, MT-3, B2 | 잠금 타임아웃 |
+| 매칭 | LOCK_ACQUISITION_FAILED | 503 | 잠금을 잡는 전 경로 (실측: MT-1·MT-3·AU-7·SS-4·SS-5·SS-6·SS-7. 배치 B1·B2는 건너뛰고 다음 회차 회수) | 잠금 타임아웃. 상태를 바꾸지 않아 재시도 안전 |
 | 매칭 | **REMATCH_COOLDOWN** | 409 | MT-1 | 퇴출 후 30분 미경과 (D14) |
 | 세션 | **SESSION_NOT_FOUND** | 404 | SS-1~8 | 없는 세션 |
 | 세션 | **NOT_SESSION_PARTICIPANT** | 403 | SS-1~8, RP-1 | 참가 이력이 없거나, 본인이 이미 `LEFT`로 나간 세션의 참여 API(SS-2~7) |

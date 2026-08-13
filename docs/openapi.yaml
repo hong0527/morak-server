@@ -3017,7 +3017,9 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     LockAcquisitionFailed:
-      description: '`LOCK_ACQUISITION_FAILED` 매칭 잠금 획득에 실패함 — 일시 경합이며 서버 상태를 바꾸지 않았습니다. 1~2초 뒤 1회 재시도해도 안전합니다'
+      description: '`LOCK_ACQUISITION_FAILED` 잠금 획득에 실패함 — 일시 경합이며 서버 상태를 바꾸지 않았습니다.
+        1~2초 뒤 1회 재시도해도 안전합니다. 잠금을 잡는 모든 경로에서 날 수 있습니다
+        (실측: MT-1·MT-3·AU-7·SS-4·SS-5·SS-6·SS-7)'
       content:
         application/json:
           schema:
@@ -3369,6 +3371,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
   /match-requests:
     post:
       tags:
@@ -3756,6 +3760,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
   /sessions/{sessionId}/pause:
     post:
       tags:
@@ -3808,6 +3814,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
     delete:
       tags:
       - 라이브 세션
@@ -3874,6 +3882,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
   /sessions/{sessionId}/participation:
     delete:
       tags:
@@ -3941,6 +3951,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
   /sessions/{sessionId}/result:
     get:
       tags:
