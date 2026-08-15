@@ -1,6 +1,6 @@
 package com.morak.report.type;
 
-// POST는 그룹 자격 검사 면제(게시판은 앱 전체 공개)
+// SESSION은 특정 개인을 지목하기 어려운 경우다. 이때는 재매칭 차단 대상이 정해지지 않는다.
 public enum ReportTargetType {
-    PROOF, MEMBER, POST
+    MEMBER, SESSION
 }

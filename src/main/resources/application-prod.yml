@@ -1,0 +1,26 @@
+# 운영 전용. 비밀값과 DB 접속 정보는 환경변수로만 주입한다.
+# 이 파일에 실제 값을 적지 않는다 — 공개 저장소에 커밋되기 때문이다.
+#
+# 기동에 반드시 필요한 환경변수 6종(base yml이 폴백 없이 참조한다):
+# MORAK_JWT_SECRET, MORAK_SOCIAL_HASH_PEPPER, MORAK_LIVEKIT_HOST,
+# MORAK_LIVEKIT_API_KEY, MORAK_LIVEKIT_API_SECRET, MORAK_PG_SECRET_KEY
+spring:
+  datasource:
+    url: ${MORAK_DB_URL}
+    username: ${MORAK_DB_USERNAME}
+    password: ${MORAK_DB_PASSWORD}
+  h2:
+    console:
+      enabled: false     # 운영에서 SQL 콘솔은 절대 열지 않는다
+  jpa:
+    hibernate:
+      ddl-auto: validate # 운영은 스키마를 자동 변경하지 않는다. 마이그레이션으로만
+
+morak:
+  dev:
+    enabled: false       # 개발용 소셜 로그인은 운영에서 꺼진다
+
+# 소셜 로그인·PG 실구현은 12단계다. 그때까지 이 프로필은 전부 거절하는 기본 구현
+# (RejectingSocialClient·RejectingPgClient)을 쓴다 — AU-1은 401 INVALID_SOCIAL_TOKEN,
+# PY-2는 409 PAYMENT_NOT_APPROVED가 정상 동작이고, 그 밖의 API는 그대로 동작한다.
+# 통과시키는 스텁을 두지 않는 이유는 그 하나로 인증 없는 로그인과 결제 없는 적립이 열리기 때문이다.

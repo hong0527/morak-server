@@ -18,8 +18,9 @@ import lombok.NoArgsConstructor;
 /**
  * 개별 신고 접수 건. 여러 건이 하나의 케이스에 묶인다.
  *
- * <p>{@code detail}에는 텍스트 검열을 통과한 내용만 저장한다. 위험 판정이 나면 detail을 비운 채로
- * 접수 자체는 진행한다. 신고 사유 서술이 걸렸다는 이유로 신고를 막으면 피해자가 신고할 길이 없어진다.
+ * <p>TODO(12단계): {@code detail} 텍스트 검열. 지금은 받은 서술을 그대로 저장한다. 검열을 넣더라도
+ * 위험 판정은 detail만 비우고 접수 자체는 진행해야 한다 — 신고 사유 서술이 걸렸다는 이유로 신고를
+ * 막으면 피해자가 신고할 길이 없어진다.
  *
  * <p>외부에 노출하는 식별자는 {@code caseId}다. {@code id}는 응답에 내보내지 않는다.
  */
@@ -62,7 +63,7 @@ public class Report {
         this.receivedAt = receivedAt;
     }
 
-    /** 검열에서 위험 판정이 난 서술은 {@code detail}에 null을 넘겨 접수만 남긴다. */
+    /** {@code detail}이 null이면 서술 없이 접수만 남는다(검열 도입 시 그 경로가 여기로 온다). */
     public static Report file(Long caseId, Long reporterId, ReportReasonCode reasonCode,
                               String detail, LocalDateTime receivedAt) {
         return new Report(caseId, reporterId, reasonCode, detail, receivedAt);

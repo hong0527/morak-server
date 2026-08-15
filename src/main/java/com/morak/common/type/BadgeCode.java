@@ -1,19 +1,7 @@
 package com.morak.common.type;
 
-// 완주 배지 — 저장하지 않는 파생값. completed=false면 무조건 NONE.
+// 목표 달성 뱃지(D3). 저장하지 않고 member_goal.status가 ACHIEVED인지에서 파생한다.
+// 값이 하나뿐인 것은 등급이 없기 때문이다 — 달성했거나 아직 아니거나 둘뿐이다.
 public enum BadgeCode {
-    GOLD, SILVER, BRONZE, NONE;
-
-    public static BadgeCode of(boolean completed, double proofRate) {
-        if (!completed) {
-            return NONE;
-        }
-        if (proofRate >= 0.95) {
-            return GOLD;
-        }
-        if (proofRate >= 0.85) {
-            return SILVER;
-        }
-        return BRONZE;
-    }
+    GOAL_ACHIEVED
 }

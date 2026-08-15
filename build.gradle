@@ -23,17 +23,27 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 
+	// JWT. jjwt-jackson 대신 gson 구현을 쓴다 — jackson 쪽은 Jackson 2를 끌고 오는데
+	// Spring Boot 4.1은 Jackson 3 기반이라 두 버전이 섞인다.
+	implementation 'io.jsonwebtoken:jjwt-api:0.13.0'
+	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.13.0'
+	runtimeOnly 'io.jsonwebtoken:jjwt-gson:0.13.0'
+
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
 	testCompileOnly 'org.projectlombok:lombok'
 	testAnnotationProcessor 'org.projectlombok:lombok'
 
-	// AI (7단계) — 얼굴 감지·이미지 검열·목표 관련성을 1회 호출로 처리
-	// 텍스트 검열(OpenAI Moderation)은 Spring 내장 RestClient로 직접 호출하므로 의존성 없음
-	// pHash는 java.awt 자체 구현이라 의존성 없음
-	implementation 'com.google.genai:google-genai:1.65.0'
+	// LiveKit — SS-2 접속 토큰 서명과 SS-10 웹훅 서명 검증. 미디어는 서버를 거치지 않는다.
+	// com.auth0:java-jwt를 통해 Jackson 2(databind)를 끌고 오지만 exclude하지 않는다.
+	// jjwt와 달리 여기서는 두 버전이 섞이지 않는다 — Jackson 3는 tools.jackson,
+	// Jackson 2는 com.fasterxml.jackson으로 패키지가 갈리고, Spring의 메시지 컨버터는
+	// Jackson 3만 쓴다. Jackson 2는 LiveKit이 토큰을 서명할 때만 쓴다.
+	// 실측: exclude하면 AccessToken.toJwt()가 NoClassDefFoundError로 죽는다.
+	implementation 'io.livekit:livekit-server:0.15.0'
 
 	runtimeOnly 'com.h2database:h2'
+	runtimeOnly 'com.mysql:mysql-connector-j'   // 운영 MySQL. 12단계 실측에서 누락 발견
 	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'

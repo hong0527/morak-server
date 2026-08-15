@@ -1,70 +1,102 @@
 spring:
-  datasource:
-    url: jdbc:h2:mem:morak;MODE=MySQL;LOCK_TIMEOUT=3000
-    username: sa
-  h2:
-    console:
-      enabled: true
+  # 로컬 실행 기본값. 운영 배포는 SPRING_PROFILES_ACTIVE=prod 로 덮어쓴다.
+  profiles:
+    default: dev
+
   jpa:
-    hibernate:
-      ddl-auto: update
+    # 뷰까지 영속성 컨텍스트를 끌고 가지 않는다. 켜 두면 컨트롤러·직렬화 단계에서 지연 로딩이
+    # 조용히 성공해, 서비스 밖으로 준영속 엔티티를 내보내는 코드가 테스트에서 드러나지 않는다.
+    # DTO 변환은 Service에서 한다는 규칙(CLAUDE.md §4-2)과 같은 이야기다.
+    open-in-view: false
     properties:
       hibernate:
         format_sql: true
-  servlet:
-    multipart:
-      max-file-size: 10MB
-      max-request-size: 12MB
+        jdbc:
+          # 여러 행을 한 트랜잭션에서 쓰는 경로(매칭 6인 확정, B1 완주 지급, B4 탈퇴 파기)의
+          # JDBC 왕복을 묶는다.
+          #
+          # 다만 INSERT는 지금 묶이지 않는다. 모든 엔티티가 GenerationType.IDENTITY라
+          # persist() 직후 생성 키를 읽어야 하고, 그래서 Hibernate가 INSERT를 미루지 못한다.
+          # 실측(6인 확정): 이 설정 전후 모두 session_participant INSERT 6문장으로 동일했다.
+          # 지금 효과가 있는 것은 UPDATE·DELETE 배치 쪽이다. INSERT까지 묶으려면 키 전략을
+          # 바꿔야 하는데, 그것은 MySQL 전환(12단계)에서 함께 볼 문제다.
+          batch_size: 30
+        # 같은 테이블의 INSERT가 연속해야 배치가 끊기지 않는다. 위 이유로 지금은 실효가
+        # 없지만, 키 전략이 바뀌는 순간 이 값이 없으면 batch_size만으로는 묶이지 않는다.
+        order_inserts: true
   web:
     resources:
       add-mappings: false
 
-# 미결값·정책값은 전부 여기로 격리한다 (API명세서 v1.0 §0-6)
+# 미결값·정책값은 전부 여기로 격리한다 (API명세서 v2.0 §0-5)
 # 팀 확정이 오면 코드가 아니라 이 값만 바꾼다.
+#
+# 비밀값(jwt.secret, security.*, livekit.*, pg.secret-key)은 여기 두지 않는다. 공개 저장소에
+# 커밋되고, 폴백을 두면 운영에서 환경변수를 빠뜨려도 그 값으로 조용히 뜬다. dev 값은
+# application-dev.yml, 운영은 환경변수로만 주입한다.
 morak:
   timezone: Asia/Seoul
 
   jwt:
-    # 운영은 환경변수 필수. dev 기본값은 로컬 전용이며 절대 운영에 쓰지 않는다.
-    secret: ${MORAK_JWT_SECRET:morak-local-dev-secret-key-please-change-me-32b}
+    secret: ${MORAK_JWT_SECRET}
     expire-hours: 24
 
   security:
-    media-token-secret: ${MORAK_MEDIA_TOKEN_SECRET:morak-local-media-token-secret}
-    social-hash-pepper: ${MORAK_SOCIAL_HASH_PEPPER:morak-local-social-hash-pepper}
+    social-hash-pepper: ${MORAK_SOCIAL_HASH_PEPPER}
 
   dev:
-    enabled: true          # @Profile("dev")와 AND 조건. 운영 배포 시 false
+    enabled: false          # dev 프로필에서만 true. @Profile("dev")와 AND 조건
+
+  scheduling:
+    enabled: true           # 배치(B1·B2·B4·B5)와 재접속 유예 스위퍼. 테스트만 false로 끈다
 
   match:
-    expire-hours: 24       # 매칭 대기 유효 시간
+    # 매칭 조건의 전부. 이 목록이 곧 match_lock 조건 행이라 값을 바꾸면 시더가 새 행을 만든다.
+    target-minutes-options: 60,120,180,240   # [팀 확정 대기] D8 잠정값
+    wait-expire-minutes: 10          # 대기 만료 (D8)
+    rematch-cooldown-minutes: 30     # 퇴출자 재매칭 쿨다운 (D14)
 
-  proof:
-    deadline-from: "06:00" # 인증 가능 시작
-    deadline-to: "23:59"   # 인증 마감
-    face-retry-limit: 10   # 얼굴 감지 재촬영 일 한도
-    screening-timeout-minutes: 10  # B7 회수 임계
+  session:
+    absence-threshold-seconds: 60    # [팀 확정 대기] 경고 부여 임계 (★D4)
+    absence-min-interval-seconds: 5  # [팀 확정 대기] SS-4 이벤트 최소 간격. 미만이면 429
+    evict-warning-count: 3           # 퇴출 누적 경고 수
+    reconnect-grace-seconds: 90      # 재접속 유예 (D13)
+    pause-limit-minutes: 10          # 화장실 모드 상한 (D9)
+    min-participants: 2              # 미만이면 조기 종료 (D12)
+    required-participants: 6         # 매칭 확정 인원
 
-  ai:
-    boundary: 0.05                 # 완주 판정 경계 구간 폭
-    phash-hamming-threshold: 5     # 사진 재사용 판정
-    relevance-threshold: 0.30      # 목표 관련성 최소 점수
-    relevance-shadow: true         # true면 기록만, 기준선 확보 후 false로 전환해 차단 시작
-
-  completion:
-    personal-proof-rate: 0.7       # [팀 확정 대기] 개인 완주 기준
-    group-avg-proof-rate: 0.6      # [팀 확정 대기] 그룹 완주 기준
+  point:                             # [팀 확정 대기] D15 잠정값
+    welcome: 1000
+    session-complete-per-hour: 100
+    eviction-penalty: 300
+    goal-achieved: 1000
 
   report:
     sla-hours:
       high: 24
       normal: 72
 
-  media:
-    retention-days: 30             # 챌린지 종료 후 촬영물 보관
-
-  storage:
-    local-path: ./storage          # 11단계에 S3로 교체
+  appeal:
+    # 퇴출 시각부터 이의를 접수하는 기한(AP-1). 정각까지는 접수한다 — 경계 포함 방향은
+    # 제재 종료·충전 만료·탈퇴 파기와 같이 사용자에게 유리한 쪽이다.
+    file-deadline-days: 3
 
   withdrawal:
     grace-days: 30
+
+  livekit:
+    # host는 비밀값이 아니지만 환경별로 갈리므로 같은 방식으로 주입한다.
+    host: ${MORAK_LIVEKIT_HOST}
+    api-key: ${MORAK_LIVEKIT_API_KEY}
+    api-secret: ${MORAK_LIVEKIT_API_SECRET}
+    token-ttl-seconds: 3600          # SS-2 접속 토큰 유효 시간
+
+  pg:
+    provider: toss-test              # [팀 확정 대기] D16 잠정값
+    secret-key: ${MORAK_PG_SECRET_KEY}
+    point-per-krw: 1                 # [팀 확정 대기] D-6 잠정값. 1원 = 1포인트
+    min-amount-krw: 1000             # [팀 확정 대기] 1회 충전 하한. 미만이면 400
+    max-amount-krw: 1000000          # [팀 확정 대기] 1회 충전 상한. 초과면 400
+    # 승인도 실패도 오지 않은 READY를 닫는 기한(B5). PG 승인 API가 결제창 생성 후 10분까지만
+    # 받으므로 그 배를 여유로 둔다. 이보다 짧으면 정상 결제가 닫히고, 없으면 READY가 영구 잔존한다.
+    ready-expire-minutes: 30
