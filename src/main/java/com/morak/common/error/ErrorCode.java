@@ -75,7 +75,10 @@ public enum ErrorCode {
     // 409인 이유: 요청 자체는 유효하고 권한도 있는데 자원의 시간 상태가 막는 경우라,
     // 같은 성격의 REMATCH_COOLDOWN·SESSION_ENDED와 나란히 둔다
     APPEAL_DEADLINE_PASSED(HttpStatus.CONFLICT, "이의 신청 기한이 지났습니다."),
-    APPEAL_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 이의입니다.");
+    APPEAL_NOT_FOUND(HttpStatus.NOT_FOUND, "존재하지 않는 이의입니다."),
+    // 파기가 심사 근거를 지웠고 인용은 지운 개인 기록을 되살린다. 정상 경로에서는 B4가 이미
+    // CLOSED로 거둬 ALREADY_PROCESSED가 먼저 나고, 이 코드는 파기와 처리가 겹친 순간만 답한다
+    APPEAL_MEMBER_PURGED(HttpStatus.CONFLICT, "파기된 계정의 이의는 심사할 수 없습니다.");
 
     private final HttpStatus status;
     private final String message;

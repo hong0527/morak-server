@@ -80,7 +80,7 @@ public class PauseService {
         // 열려 있는 자리비움 구간을 Pause 시작 시각으로 끊는다. 상태 전이보다 먼저다 —
         // 여기서 3회째 경고로 퇴출되면 아래 조건부 UPDATE가 0행이 되어 409로 끝난다.
         AbsenceJudgeService.PauseClosure closure =
-                absenceJudgeService.closeAbsenceOnPause(sessionId, participant, now);
+                absenceJudgeService.closeAbsenceOnPause(session, participant, now);
         int updated = sessionParticipantRepository.startPause(session.getId(), memberId, now,
                 ParticipantStatus.ACTIVE, ParticipantStatus.PAUSED);
         if (updated == 0) {

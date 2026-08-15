@@ -76,7 +76,7 @@ public class EvictionService {
                 sessionId, participant.getMemberId(), participant.getWarningCount());
         // TODO(12단계): LiveKit RemoveParticipant 호출. 3단계의 LEFT 경로도 같은 자리를 비워 뒀다
         pointService.award(eviction.getMemberId(), -pointPenalty, PointReason.EVICTION_PENALTY,
-                eviction.getId(), now);
+                eviction.getId());
         return eviction;
     }
 

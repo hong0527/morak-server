@@ -115,7 +115,7 @@ public class StoreOrderService {
                 StoreOrder.place(memberId, ordered.getId(), quantity, (int) pointAmount,
                         request.idempotencyKey(), now));
         int pointBalance = pointService.spend(memberId, (int) pointAmount,
-                PointReason.ORDER_SPEND, order.getId(), now);
+                PointReason.ORDER_SPEND, order.getId());
         return OrderCreateResponse.of(order, ordered, pointBalance);
     }
 

@@ -2,7 +2,6 @@ package com.morak.member.repository;
 
 import com.morak.member.entity.MemberGoal;
 import com.morak.member.type.GoalStatus;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -26,12 +25,11 @@ public interface MemberGoalRepository extends JpaRepository<MemberGoal, Long> {
     List<MemberGoal> findByMemberIdAndStatus(Long memberId, GoalStatus status);
 
     /**
-     * SS-8의 {@code goalAchieved}. 달성 시각을 세션 종료 시각으로 못 박아 기록하기 때문에
-     * (B1이 {@code endedAt}을 그대로 넘긴다) 이 비교가 "이 세션이 목표를 채웠는가"와 같다.
-     * 저장 컬럼을 새로 두는 대신 이미 있는 값으로 답한다.
+     * SS-8의 {@code goalAchieved}. 달성을 성립시킨 세션을 목표 행이 직접 들고 있으므로
+     * 이 조회가 곧 "이 세션이 목표를 채웠는가"다. 예전의 시각 동등 비교와 달리 쓰는 값과
+     * 읽는 값이 같은 컬럼이라, 달성 시각을 어떻게 잡든 답이 흔들리지 않는다.
      */
-    boolean existsByMemberIdAndStatusAndAchievedAt(Long memberId, GoalStatus status,
-                                                   LocalDateTime achievedAt);
+    boolean existsByMemberIdAndAchievedSessionId(Long memberId, Long achievedSessionId);
 
     /** 탈퇴 파기(B4)가 회원의 목표 이력을 함께 지운다. */
     void deleteByMemberId(Long memberId);

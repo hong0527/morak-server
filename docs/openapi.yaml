@@ -42,7 +42,7 @@ info:
     ## 어느 API에서나 날 수 있는 오류
 
 
-    아래 두 가지는 모든 경로에 해당하므로 개별 API 설명에서는 생략했습니다.
+    아래 네 가지는 모든 경로에 해당하므로 개별 API 설명에서는 생략했습니다.
 
 
     | 상태 | 코드 | 언제 | 화면 처리 |
@@ -50,6 +50,11 @@ info:
     | --- | --- | --- | --- |
 
     | 404 | `ENDPOINT_NOT_FOUND` | 없는 주소를 호출했을 때 | 개발 중 오류. 경로를 확인하세요 |
+
+    | 405 | `METHOD_NOT_ALLOWED` | 주소는 맞지만 HTTP 메서드가 다를 때 | 개발 중 오류. 메서드를 확인하세요 |
+
+    | 415 | `UNSUPPORTED_MEDIA_TYPE` | 본문이 있는 요청에 `Content-Type: application/json`을 빠뜨렸을 때
+    | 개발 중 오류. 요청 헤더를 확인하세요 |
 
     | 500 | `INTERNAL_SERVER_ERROR` | 서버 오류 | 잠시 후 다시 시도하도록 안내 |
 
@@ -69,6 +74,10 @@ info:
 
 
     모든 시각은 ISO-8601(`+09:00`), 일자는 `YYYY-MM-DD`입니다.
+
+    시각은 항상 초 단위이고 소수점 이하는 잘라서 내려갑니다(`yyyy-MM-dd''T''HH:mm:ssXXX`).
+
+    폭이 고정이라 고정 패턴으로 파싱해도 됩니다.
 
     '
 servers:
@@ -118,6 +127,7 @@ components:
           required:
           - code
           - message
+          - details
           properties:
             code:
               type: string
@@ -131,8 +141,16 @@ components:
               type: object
               nullable: true
               additionalProperties: true
-              description: 추가 정보. 없으면 `null`
-              example: null
+              description: '추가 정보. 담을 내용이 없어도 키는 항상 실리며 값이 `null`입니다.
+
+                `VALIDATION_FAILED`는 필드명을 키로 하는 평평한 `{필드명: 메시지}` 맵을 담습니다 —
+                중첩되지 않으므로 그대로 입력란에 붙일 수 있습니다.
+
+                `MEMBER_SANCTIONED`처럼 코드마다 고유한 모양을 쓰는 경우는 각 API 응답 설명에 적혀 있습니다.
+
+                '
+              example:
+                periodDays: 허용값은 7, 14, 30입니다.
     PageMeta:
       type: object
       description: 목록 응답의 공통 페이지 정보
@@ -342,11 +360,12 @@ components:
       example: READY
     AppealStatus:
       type: string
-      description: '이의 신청 상태. PENDING 접수 · ACCEPTED 인용 · REJECTED 기각'
+      description: '이의 신청 상태. PENDING 접수 · ACCEPTED 인용 · REJECTED 기각 · CLOSED 심사 불가 종결(신청자 계정 파기로 심사 근거가 사라진 경우. 관리자가 지정할 수 없고 파기 배치만 기록한다)'
       enum:
       - PENDING
       - ACCEPTED
       - REJECTED
+      - CLOSED
       example: PENDING
     AppealDecision:
       type: string
@@ -409,10 +428,11 @@ components:
       example: TEMP
     DecidedBy:
       type: string
-      description: '판정 주체. AI 자동 판정 · ADMIN 운영자'
+      description: '판정 주체. AI 자동 판정 · ADMIN 운영자 · SYSTEM 배치(파기가 종결한 CLOSED와만 짝)'
       enum:
       - AI
       - ADMIN
+      - SYSTEM
       example: ADMIN
     BadgeCode:
       type: string
@@ -598,6 +618,8 @@ components:
       - ageVerification
       - mediaConsented
       - pointBalance
+      - streak
+      - badges
       properties:
         memberId:
           type: integer
@@ -988,7 +1010,9 @@ components:
           $ref: '#/components/schemas/AbsenceEventType'
         clientSeq:
           type: integer
-          description: 세션 내 단조 증가하는 클라이언트 시퀀스. 재전송은 이 값으로 흡수됩니다
+          format: int64
+          minimum: 0
+          description: 세션 내 단조 증가하는 클라이언트 시퀀스. 재전송은 이 값으로 흡수됩니다. 0 이상이며 음수는 400 `VALIDATION_FAILED`
         occurredAt:
           type: string
           format: date-time
@@ -1321,6 +1345,7 @@ components:
       - status
       - participantStatus
       - completed
+      - pointAwarded
       - warningCount
       properties:
         sessionId:
@@ -1343,7 +1368,7 @@ components:
           type: boolean
         pointAwarded:
           type: integer
-          nullable: true
+          description: 미완주 세션은 `0`입니다. 값이 없는 경우는 없습니다
         warningCount:
           type: integer
     MySessionPageResponse:
@@ -1891,7 +1916,8 @@ components:
           pointLedgerId:
             type: integer
             format: int64
-            description: 이 주문의 ORDER_SPEND 원장 행
+            nullable: true
+            description: 이 주문의 ORDER_SPEND 원장 행. 원장 행을 찾지 못하면 `null`입니다 — 키는 항상 실립니다
     ChargeCreateRequest:
       type: object
       required:
@@ -1945,8 +1971,10 @@ components:
       properties:
         pgOrderId:
           type: string
+          maxLength: 64
         pgTid:
           type: string
+          maxLength: 64
           description: PG가 발급한 거래 식별자
         amountKrw:
           type: integer
@@ -2106,7 +2134,9 @@ components:
         reasonCode:
           allOf:
           - $ref: '#/components/schemas/ReportReasonCode'
-          description: 케이스를 연 첫 신고의 사유입니다. report_case에는 사유 컬럼이 없습니다
+          nullable: true
+          description: 케이스를 연 첫 신고의 사유입니다. report_case에는 사유 컬럼이 없어 신고 행에서 끌어오며,
+            딸린 신고 행이 없으면 `null`입니다
         severity:
           $ref: '#/components/schemas/ReportSeverity'
         status:
@@ -2194,6 +2224,8 @@ components:
         startedAt:
           type: string
           format: date-time
+          nullable: true
+          description: 세션 행이 남아 있지 않으면 `null`입니다 — 키는 항상 실립니다
         participantStatus:
           $ref: '#/components/schemas/ParticipantStatus'
         warningCount:
@@ -2325,7 +2357,9 @@ components:
         days:
           type: integer
           nullable: true
-          description: TEMP일 때 필수
+          minimum: 1
+          maximum: 3650
+          description: TEMP일 때 필수. 1일 이상 3650일 이하
     ReportProcessRequest:
       type: object
       description: PENDING 케이스만 변경할 수 있습니다. 재오픈은 불가하며 재검토는 새 케이스로 만듭니다
@@ -2336,6 +2370,7 @@ components:
           $ref: '#/components/schemas/ReportDecision'
         reviewNote:
           type: string
+          maxLength: 1000
           nullable: true
         sanction:
           allOf:
@@ -2383,7 +2418,9 @@ components:
         days:
           type: integer
           nullable: true
-          description: TEMP일 때 필수. PERMANENT면 받지 않습니다
+          minimum: 1
+          maximum: 3650
+          description: TEMP일 때 필수. 1일 이상 3650일 이하. PERMANENT면 받지 않습니다
         caseId:
           type: integer
           format: int64
@@ -2578,7 +2615,10 @@ components:
           type: string
           format: date-time
         decidedBy:
-          $ref: '#/components/schemas/DecidedBy'
+          allOf:
+          - $ref: '#/components/schemas/DecidedBy'
+          nullable: true
+          description: 판정 주체. PENDING이면 아직 판정이 없어 `null`입니다
         decidedAt:
           type: string
           format: date-time
@@ -2675,6 +2715,9 @@ components:
       - status
       - decidedBy
       - decidedAt
+      - pointRefunded
+      - sessionCompletedRestored
+      - streakAfter
       properties:
         appealId:
           type: integer
@@ -2682,22 +2725,23 @@ components:
         status:
           $ref: '#/components/schemas/AppealStatus'
         decidedBy:
-          $ref: '#/components/schemas/DecidedBy'
+          allOf:
+          - $ref: '#/components/schemas/DecidedBy'
+          nullable: true
+          description: 이 응답은 처리 직후라 항상 `ADMIN`입니다. 스키마를 AD-9와 맞추기 위해 `null`을 허용해 둡니다
         decidedAt:
           type: string
           format: date-time
         pointRefunded:
           type: integer
-          nullable: true
-          description: 인용 시 역분개로 되돌린 포인트. 기각이면 `0`입니다. 되돌릴 차감이 아직 원장에 없으면 인용이어도 `0`입니다
+          description: 인용 시 역분개로 되돌린 포인트. 기각이면 `0`입니다. 되돌릴 차감이 아직 원장에 없으면 인용이어도
+            `0`입니다. 기각 경로에서도 키는 항상 실립니다
         sessionCompletedRestored:
           type: boolean
-          nullable: true
-          description: 완주 소급 재판정 결과. 세션이 아직 진행 중이면 소급하지 않으므로 `false`입니다
+          description: 완주 소급 재판정 결과. 세션이 아직 진행 중이면 소급하지 않으므로 `false`입니다. 기각이면 `false`입니다
         streakAfter:
           type: integer
-          nullable: true
-          description: 재계산된 Streak
+          description: 재계산된 Streak. 기각이면 재계산 없이 현재 값이 그대로 실립니다
       example:
         appealId: 41
         status: ACCEPTED
@@ -2935,12 +2979,20 @@ components:
           items:
             type: string
             format: date
+        targetMinutes:
+          type: integer
+          nullable: true
+          minimum: 1
+          default: 60
+          description: 만들 세션의 목표 시간(분). 생략하면 60입니다.
+            `morak.match.target-minutes-options`에 없는 값이면 400 `VALIDATION_FAILED`
       example:
         memberId: 1042
         dates:
         - '2026-08-08'
         - '2026-08-09'
         - '2026-08-10'
+        targetMinutes: 120
   responses:
     Unauthorized:
       description: '인증 실패
@@ -3175,7 +3227,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: '`INVALID_SOCIAL_TOKEN` 소셜 인증에 실패했을 때 → 로그인 실패 안내 후 재시도'
+          description: '인증 실패
+
+            · `INVALID_SOCIAL_TOKEN` 소셜 인증에 실패했을 때 → 로그인 실패 안내 후 재시도
+
+            · `UNAUTHORIZED` 탈퇴 유예가 끝나 파기 예정 시각을 넘긴 계정 → 되살리지 않고 새 계정으로 가입하도록 안내
+
+            '
           content:
             application/json:
               schema:
@@ -3287,6 +3345,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
     delete:
       tags:
       - 로그인과 회원
@@ -3702,6 +3762,7 @@ paths:
                     evicted: false
                     evictionId: null
                     pointDelta: 0
+                    closedAbsenceSeconds: 65
                 evicted:
                   summary: 퇴출
                   value:
@@ -3710,6 +3771,7 @@ paths:
                     evicted: true
                     evictionId: 77
                     pointDelta: -300
+                    closedAbsenceSeconds: 81
         '400':
           description: >-
             `VALIDATION_FAILED` `occurredAt`이 허용 범위를 벗어남. 허용 범위는
@@ -3770,7 +3832,11 @@ paths:
       operationId: startPause
       description: "세션당 1회, 정해진 시간 동안 카메라 송출을 중단합니다. 요청 본문은 없습니다.\n\n- PAUSED 구간은\
         \ 자리비움 판정 대상에서 제외되고, 재실로 인정되므로 완주 판정에 영향을 주지 않습니다.\n- 이미 한 번 썼으면 409 `PAUSE_ALREADY_USED`입니다.\
-        \ 복귀해도 사용 이력은 남습니다.\n- 대체 일러스트 전환은 클라이언트 책임입니다.\n"
+        \ 복귀해도 사용 이력은 남습니다.\n- **진행 중이던 자리비움 구간이 있으면 Pause를 시작하기 전에 먼저 닫습니다.**\
+        \ 자리를 비운 채\n  화장실 모드를 눌러 판정을 피해 가는 경로를 막기 위해서입니다. 닫힌 구간이 임계를 넘겼으면 그 자리에서\
+        \ 경고 1회가 붙고,\n  그 경고가 3회째면 Pause가 시작되지 않은 채 퇴출되어 409 `ALREADY_EVICTED`가\
+        \ 됩니다.\n  응답의 `warningIssued`·`warningCount`·`closedAbsenceSeconds`가 이 처리의 결과입니다.\n\
+        - 대체 일러스트 전환은 클라이언트 책임입니다.\n"
       parameters:
       - $ref: '#/components/parameters/SessionId'
       responses:
@@ -3897,7 +3963,8 @@ paths:
       parameters:
       - $ref: '#/components/parameters/SessionId'
       requestBody:
-        required: true
+        required: false
+        description: 본문을 빼거나 `reason`을 비워도 바인딩에서 거절하지 않고 400 `REASON_REQUIRED`로 답합니다
         content:
           application/json:
             schema:
@@ -3908,7 +3975,7 @@ paths:
         '400':
           description: '요청 오류
 
-            · `REASON_REQUIRED` 퇴장 사유 없음
+            · `REASON_REQUIRED` 본문이 아예 없거나 `reason`이 비어 있음
 
             · `VALIDATION_FAILED` 허용되지 않는 사유값(서버 전용 사유 포함)
 
@@ -3965,7 +4032,11 @@ paths:
         \ 세션으로 완주가 기록돼 Streak가 중복 증가하지 않았다는 뜻입니다.\n- `participantStatus=LEFT`이고 `leftReason=DEVICE_ISSUE`인데\
         \ 본인이 퇴장을 누른 적이 없다면,\n  연결이 유예 시간을 넘겨 끊겨 서버가 자동 처리한 경우입니다. 이때도 경고나 포인트 차감은\
         \ 없습니다.\n- 목표 달성이 함께 일어나면 `goalAchieved=true`, `badgeCode=GOAL_ACHIEVED`가 되고\
-        \ 원장에 별도 적립이 쌓입니다.\n- 진행 중인 세션에 호출하면 409 `SESSION_NOT_ENDED`입니다.\n"
+        \ 원장에 별도 적립이 쌓입니다.\n- 진행 중인 세션에 호출하면 409 `SESSION_NOT_ENDED`입니다.\n\
+        - **종료 예정 시각(`endsAt`)이 지나도 곧바로 결과가 나오지는 않습니다.** 정산은 매분 :00에 도는 종료 배치가\
+        \ 하므로\n  세션은 최대 1분간 `LIVE`로 남고 그동안 이 API는 409 `SESSION_NOT_ENDED`를 돌려줍니다.\n\
+        \  오류가 아니라 아직 정산 전이라는 뜻이므로 실패 화면을 띄우지 말고 몇 초 간격으로 다시 부르면 됩니다.\n- `CANCELLED`\
+        \ 세션도 정산 결과가 없어 같은 409 `SESSION_NOT_ENDED`입니다.\n"
       parameters:
       - $ref: '#/components/parameters/SessionId'
       responses:
@@ -3996,7 +4067,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: '`SESSION_NOT_ENDED` 아직 진행 중인 세션'
+          description: '`SESSION_NOT_ENDED` 아직 정산되지 않은 세션.
+
+            종료 예정 시각이 지난 직후에도 최대 1분간은 이 응답이 옵니다 — 종료 배치가 매분 :00에 돌기 때문입니다.
+            실패로 처리하지 말고 몇 초 간격으로 재시도하세요. `CANCELLED` 세션도 같은 응답입니다
+
+            '
           content:
             application/json:
               schema:
@@ -4194,8 +4270,11 @@ paths:
         \ `reason`에서 파생하는 표시용 문자열이며 저장하지 않습니다. 사유별 분기는 문구가 아니라 `reason`으로 하세요.\n\
         \  WELCOME=웰컴 포인트 / SESSION_COMPLETE=세션 완주 / GOAL_ACHIEVED=스파크 포인트(목표 달성) /\
         \ EVICTION_PENALTY=퇴출 패널티 / ORDER_SPEND=상품 구매 / ORDER_CANCEL=주문 취소 환급 /\
-        \ CHARGE=포인트 충전 / APPEAL_REFUND=이의 인용 환급\n- 정렬은 `createdAt` 최신순이고, 같은 시각이면\
-        \ `ledgerId` 큰 쪽이 앞입니다.\n- 정정은 기존 행 수정이 아니라 반대 부호의 새 행(역분개)으로\
+        \ CHARGE=포인트 충전 / APPEAL_REFUND=이의 인용 환급\n- **정렬은 `ledgerId` 내림차순(기록된 순서의 역순)입니다.**\
+        \ `balanceAfter`가 기록 순서로 연쇄하므로 표시 순서도 같아야 합니다 — 시각으로 정렬하면 목록 안에서\
+        \ 잔액이 오르내립니다.\n- `createdAt`은 그 줄을 쓴 시각입니다. 정산 대상 사건의 시각은 `refType`·`refId`가\
+        \ 가리키는 근거 행이 말합니다. 이의 인용이 이틀 전 세션의 완주를 소급 지급해도 그 줄은 인용 시각입니다.\n\
+        - 정정은 기존 행 수정이 아니라 반대 부호의 새 행(역분개)으로\
         \ 들어옵니다.\n"
       parameters:
       - $ref: '#/components/parameters/Page'
@@ -4239,7 +4318,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProductPageResponse'
         '400':
-          $ref: '#/components/responses/ValidationFailed'
+          $ref: '#/components/responses/PageValidationFailed'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4441,7 +4520,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChargeConfirmResponse'
         '400':
-          description: '`PAYMENT_AMOUNT_MISMATCH` 주문번호·금액이 충전 건과 일치하지 않음'
+          description: '요청 오류
+
+            · `PAYMENT_AMOUNT_MISMATCH` 주문번호·금액이 충전 건과 일치하지 않음
+
+            · `VALIDATION_FAILED` `pgOrderId`·`pgTid`가 비었거나 64자를 넘음
+
+            '
           content:
             application/json:
               schema:
@@ -4674,6 +4759,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
   /admin/members/{memberId}/sanctions:
     post:
       tags:
@@ -4704,6 +4791,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/AdminForbidden'
+        '503':
+          $ref: '#/components/responses/LockAcquisitionFailed'
   /admin/appeals:
     get:
       tags:
@@ -4810,7 +4899,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: '`ALREADY_PROCESSED` 이미 처리된 이의 / `SESSION_NOT_ENDED` 진행 중 세션의 인용'
+          description: '`ALREADY_PROCESSED` 이미 처리된 이의(파기로 CLOSED가 된 건 포함) / `APPEAL_MEMBER_PURGED`
+            신청자 계정이 파기되어 심사 근거가 없음 / `SESSION_NOT_ENDED` 진행 중 세션의 인용'
           content:
             application/json:
               schema:
@@ -4995,4 +5085,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/DevBatchResponse'
         '404':
-          $ref: '#/components/responses/DevEndpointNotFound'
+          description: '`ENDPOINT_NOT_FOUND`
+
+            · 운영 프로필이라 이 엔드포인트가 등록되지 않음
+
+            · 등록되지 않은 배치 이름(폐지된 구 B3 포함)
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

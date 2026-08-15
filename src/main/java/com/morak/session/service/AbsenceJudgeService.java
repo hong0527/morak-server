@@ -128,7 +128,7 @@ public class AbsenceJudgeService {
             return AbsenceEventResponse.of(participant.getWarningCount(), null,
                     evictionService.getPointPenalty(), null);
         }
-        long absentSeconds = Duration.between(previous.getOccurredAt(), occurredAt).getSeconds();
+        long absentSeconds = absentSeconds(previous.getOccurredAt(), occurredAt, session);
         if (absentSeconds <= thresholdSeconds) {
             // 경고가 없어도 닫힌 구간의 초는 내린다 — 임계에 얼마나 가까웠는지를 보여 줘야
             // 사용자가 다음 자리비움을 조절할 수 있다(SS-5의 closedAbsenceSeconds와 같은 계약)
@@ -153,11 +153,12 @@ public class AbsenceJudgeService {
      * <p>호출자는 Pause 상태 전이 <b>전에</b> 부른다. 뒤에 부르면 여기서 난 퇴출이 방금 세운
      * PAUSED를 덮어써, 응답은 화장실 모드 시작인데 참가자는 퇴출된 상태가 된다.
      */
-    public PauseClosure closeAbsenceOnPause(Long sessionId, SessionParticipant participant,
+    public PauseClosure closeAbsenceOnPause(LiveSession session, SessionParticipant participant,
                                             LocalDateTime at) {
         if (participant.getStatus() != ParticipantStatus.ACTIVE) {
             return null;
         }
+        Long sessionId = session.getId();
         AbsenceEvent last = absenceEventRepository
                 .findFirstBySessionIdAndMemberIdOrderByIdDesc(sessionId, participant.getMemberId())
                 .orElse(null);
@@ -167,7 +168,7 @@ public class AbsenceJudgeService {
         AbsenceEvent closing = absenceEventRepository.saveAndFlush(AbsenceEvent.report(
                 sessionId, participant.getMemberId(), AbsenceEventType.END,
                 PAUSE_BOUNDARY_CLIENT_SEQ, at, at));
-        long absentSeconds = Duration.between(last.getOccurredAt(), at).getSeconds();
+        long absentSeconds = absentSeconds(last.getOccurredAt(), at, session);
         if (absentSeconds <= thresholdSeconds) {
             return new PauseClosure(absentSeconds, false);
         }
@@ -221,6 +222,25 @@ public class AbsenceJudgeService {
                 || occurredAt.isAfter(now.plusSeconds(CLOCK_SKEW_TOLERANCE_SECONDS))) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED);
         }
+    }
+
+    /**
+     * 판정할 자리비움 초. <b>구간의 끝을 세션 예정 종료 시각에서 끊는다.</b>
+     *
+     * <p>{@code ends_at}이 지났는데 B1이 아직 돌지 않은 최대 1분 동안 세션은 여전히 LIVE라
+     * 이 경로가 열려 있고, 그 창에서 도착한 END는 종료 이후까지 늘어난 구간으로 판정됐다.
+     * 같은 START를 B1이 집었다면 종료 시각까지만 세므로({@code settleUnclosedAbsence}),
+     * 같은 자리비움이 <b>누가 먼저 닿았느냐에 따라</b> 경고가 되기도 안 되기도 했다 —
+     * 55초 비운 사람이 종료 20초 뒤에 END를 보내면 75초로 계산돼 경고를 받았다.
+     *
+     * <p>끊어 두면 두 경로가 같은 값을 낸다. 세션이 끝난 뒤의 시간은 어차피 자리를 지킬
+     * 의무가 없는 시간이라, 그 시간이 경고 판정에 실리는 것 자체가 틀린 것이기도 하다.
+     */
+    private static long absentSeconds(LocalDateTime startedAt, LocalDateTime endedAt,
+                                      LiveSession session) {
+        LocalDateTime judgedEnd =
+                endedAt.isAfter(session.getEndsAt()) ? session.getEndsAt() : endedAt;
+        return Duration.between(startedAt, judgedEnd).getSeconds();
     }
 
     /** 정상 클라이언트는 검출 상태가 바뀔 때만 보내므로 초 단위로 몰아치는 요청은 위조 신호다. */

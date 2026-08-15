@@ -1,6 +1,8 @@
 package com.morak.session.repository;
 
 import com.morak.session.entity.AppealCase;
+import com.morak.session.type.AppealStatus;
+import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -26,4 +28,7 @@ public interface AppealCaseRepository
 
     /** AP-2 내 이의 목록. 정렬은 호출부가 {@code Pageable}에 실어 준다. */
     Page<AppealCase> findByMemberId(Long memberId, Pageable pageable);
+
+    /** B4가 파기 대상 회원의 미심사 이의를 거둘 때 쓴다. 퇴출 1건당 1회라 개수가 작다. */
+    List<AppealCase> findByMemberIdAndStatus(Long memberId, AppealStatus status);
 }

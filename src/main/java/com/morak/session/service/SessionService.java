@@ -133,10 +133,10 @@ public class SessionService {
                 .findByMemberIdAndCompletedOn(memberId, completedOn)
                 .map(streakDay -> streakDay.getSessionId().equals(sessionId))
                 .orElse(false);
-        // B1이 목표 달성 시각으로 세션 종료 시각을 그대로 쓴다. 저장 컬럼을 새로 두지 않고
-        // 그 값으로 "이 세션이 목표를 채웠는가"를 답한다.
-        boolean goalAchieved = memberGoalRepository.existsByMemberIdAndStatusAndAchievedAt(
-                memberId, GoalStatus.ACHIEVED, session.getEndedAt());
+        // 목표 달성을 성립시킨 세션은 목표 행이 직접 들고 있다. 달성 판정(쓰기)과 이 조회(읽기)가
+        // 같은 컬럼을 보므로 계산이 두 벌이 되지 않는다.
+        boolean goalAchieved =
+                memberGoalRepository.existsByMemberIdAndAchievedSessionId(memberId, sessionId);
         return SessionResultResponse.of(session, participants, nicknames, me,
                 streakService.snapshotOn(memberId, completedOn), countedToday, goalAchieved,
                 myEvictionId(me, sessionId, memberId), myWarnings(me, sessionId, session));

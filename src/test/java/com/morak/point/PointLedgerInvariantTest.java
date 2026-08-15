@@ -9,7 +9,6 @@ import com.morak.point.service.PointService;
 import com.morak.point.type.PointReason;
 import com.morak.support.Concurrently;
 import com.morak.support.IntegrationTest;
-import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,12 +36,11 @@ class PointLedgerInvariantTest extends IntegrationTest {
         // 이 테스트가 죽으면: 잔액 증감이 SQL 한 문장을 벗어나 읽고-더하고-쓰는 형태가 된 것이다.
         // 동시 지급이 서로의 결과를 덮어써 원장은 남는데 잔액만 사라진다(8단계 실측 결함).
         Long memberId = fixtures.joinMember();
-        LocalDateTime now = now();
         int concurrentAwards = 20;
 
         List<Throwable> failures = Concurrently.run(concurrentAwards, index ->
                 pointService.award(memberId, AWARD_AMOUNT, PointReason.SESSION_COMPLETE,
-                        (long) index, now));
+                        (long) index));
 
         assertThat(failures).isEmpty();
         assertThat(fixtures.count("point_ledger", "member_id = ?", memberId))
@@ -57,12 +55,11 @@ class PointLedgerInvariantTest extends IntegrationTest {
     void 같은_멱등키의_순차_재지급은_원장을_늘리지_않는다() {
         // 이 테스트가 죽으면: B1 재실행·웹훅 중복 수신이 그대로 이중 지급이 된 것이다.
         Long memberId = fixtures.joinMember();
-        LocalDateTime now = now();
 
         boolean first = pointService.award(
-                memberId, AWARD_AMOUNT, PointReason.SESSION_COMPLETE, 1L, now);
+                memberId, AWARD_AMOUNT, PointReason.SESSION_COMPLETE, 1L);
         boolean second = pointService.award(
-                memberId, AWARD_AMOUNT, PointReason.SESSION_COMPLETE, 1L, now);
+                memberId, AWARD_AMOUNT, PointReason.SESSION_COMPLETE, 1L);
 
         assertThat(first).isTrue();
         assertThat(second).isFalse();
@@ -80,10 +77,9 @@ class PointLedgerInvariantTest extends IntegrationTest {
         // 이 테스트가 죽으면: 중복 방어를 사전 조회에만 기대게 된 것이다. 동시 실행은 조회를
         // 함께 통과하므로 uk_pl_dedup이 없으면 두 줄이 남고 잔액도 두 번 오른다.
         Long memberId = fixtures.joinMember();
-        LocalDateTime now = now();
 
         List<Throwable> failures = Concurrently.run(8, index ->
-                pointService.award(memberId, AWARD_AMOUNT, PointReason.SESSION_COMPLETE, 7L, now));
+                pointService.award(memberId, AWARD_AMOUNT, PointReason.SESSION_COMPLETE, 7L));
 
         // 진 쪽은 제약 위반으로 트랜잭션째 롤백된다. 예외가 나는 것 자체는 정상이고,
         // 남으면 안 되는 것은 두 번째 원장 줄과 두 번 오른 잔액이다.
@@ -102,10 +98,9 @@ class PointLedgerInvariantTest extends IntegrationTest {
         // 이 테스트가 죽으면: 사용자가 쓰는 포인트가 award로 깎이게 된 것이다. 잔액이 마이너스로
         // 내려간 채 주문이 성사된다.
         Long memberId = fixtures.joinMember();
-        LocalDateTime now = now();
 
         assertThatThrownBy(() -> pointService.spend(
-                memberId, welcomePoint + 1, PointReason.ORDER_SPEND, 1L, now))
+                memberId, welcomePoint + 1, PointReason.ORDER_SPEND, 1L))
                 .isInstanceOf(BusinessException.class)
                 .extracting(exception -> ((BusinessException) exception).getErrorCode())
                 .isEqualTo(ErrorCode.INSUFFICIENT_POINT);
@@ -125,7 +120,7 @@ class PointLedgerInvariantTest extends IntegrationTest {
         int penalty = welcomePoint + 300;
 
         boolean recorded = pointService.award(
-                memberId, -penalty, PointReason.EVICTION_PENALTY, 1L, now());
+                memberId, -penalty, PointReason.EVICTION_PENALTY, 1L);
 
         assertThat(recorded).isTrue();
         assertThat(fixtures.member(memberId).getPointBalance())

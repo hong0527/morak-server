@@ -96,8 +96,8 @@ public class AppealCase {
     /** AD-6 처리. 인용이든 기각이든 되돌리지 않는다. */
     public void decide(AppealStatus decision, DecidedBy decidedBy, String note,
                        LocalDateTime decidedAt) {
-        if (decision == AppealStatus.PENDING) {
-            throw new IllegalArgumentException("종결 상태가 아니다: " + decision);
+        if (decision != AppealStatus.ACCEPTED && decision != AppealStatus.REJECTED) {
+            throw new IllegalArgumentException("심사 결정이 아니다: " + decision);
         }
         if (this.status != AppealStatus.PENDING) {
             throw new IllegalStateException("이미 종결된 이의다: " + this.status);
@@ -106,6 +106,22 @@ public class AppealCase {
         this.decidedBy = decidedBy;
         this.note = note;
         this.decidedAt = decidedAt;
+    }
+
+    /**
+     * 심사 불가 종결(B4). 신청자 계정이 파기돼 경고·자리비움 이벤트가 사라졌으므로 인용도
+     * 기각도 근거가 없다. {@code decide}와 나눠 둔 것은 <b>결정과 종결이 다른 일</b>이기
+     * 때문이다 — 관리자는 CLOSED를 고를 수 없어야 하고(AD-6의 허용 값은 둘뿐이다),
+     * 배치는 ACCEPTED·REJECTED를 고를 수 없어야 한다.
+     */
+    public void closeUnreviewable(String note, LocalDateTime closedAt) {
+        if (this.status != AppealStatus.PENDING) {
+            throw new IllegalStateException("이미 종결된 이의다: " + this.status);
+        }
+        this.status = AppealStatus.CLOSED;
+        this.decidedBy = DecidedBy.SYSTEM;
+        this.note = note;
+        this.decidedAt = closedAt;
     }
 
     /** 저장 컬럼이 아니라 조회 시점 계산이다. 마킹 배치가 없는 이유는 클래스 주석 참조. */

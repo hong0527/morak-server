@@ -11,6 +11,7 @@ import com.morak.point.dto.response.PointLedgerItemResponse;
 import com.morak.point.entity.PointLedger;
 import com.morak.point.repository.PointLedgerRepository;
 import com.morak.point.type.PointReason;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -43,25 +44,35 @@ public class PointService {
     private static final Logger log = LoggerFactory.getLogger(PointService.class);
 
     /**
-     * 최신순. {@code created_at}만으로 정렬하면 한 트랜잭션이 같은 시각으로 여러 줄을 남길 때
-     * (B1의 완주 지급 + 목표 달성) 페이지마다 순서가 달라져 같은 행이 두 번 보이거나 빠진다.
-     * id를 뒤에 붙여 동률을 깬다.
+     * 최신순 = 기록된 순서. <b>{@code created_at}이 아니라 id로 정렬한다</b> —
+     * {@code balance_after}는 행이 쓰인 순서(id)로 연쇄하므로, 표시 순서를 다른 컬럼으로 잡으면
+     * 목록에서 잔액이 오르내린다. 실제로 그랬다: 소급 지급이 과거 시각으로 들어간 회원의 PT-1이
+     * 최신 행에 옛 잔액을 달고 나왔다.
+     *
+     * <p>{@link #now()}가 시각을 독점한 지금은 두 순서가 같지만, 정렬을 id에 두는 것은 그
+     * 일치에 기대지 않기 위해서다. 같은 트랜잭션이 남기는 여러 줄(완주 지급 + 목표 달성)은
+     * 어차피 시각이 같아 동률을 깰 컬럼이 필요하고, 그 컬럼이 곧 연쇄의 순서다.
      */
-    private static final Sort LEDGER_SORT =
-            Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
+    private static final Sort LEDGER_SORT = Sort.by(Sort.Direction.DESC, "id");
 
     private final PointLedgerRepository pointLedgerRepository;
     private final MemberRepository memberRepository;
+    private final Clock clock;
 
     /**
      * 원장에 한 줄 남기고 잔액 캐시를 같은 트랜잭션에서 갱신한다.
+     *
+     * <p><b>기록 시각은 호출부가 정하지 못한다</b>({@link #now()}). 원장의 {@code created_at}은
+     * "이 줄을 쓴 시각"이고, 그 줄이 정산하는 사건이 언제 있었는지는 근거 행({@code ref_id})이
+     * 이미 말한다. 호출부가 판정 시각을 그대로 넘길 수 있었을 때 실제로 어긋났다 — 이틀 전
+     * 세션의 완주를 이의 인용으로 소급 지급하면서 세션 종료 시각을 실었고, 같은 트랜잭션의
+     * 환급만 실제 시각이라 세 줄의 시각이 갈렸다.
      *
      * @param delta 부호 있는 증감. 지급은 +, 차감은 -
      * @param refId 사유별 ref 규약표가 정한 근거 행 id
      * @return 실제로 기록했으면 true, 이미 같은 근거로 처리돼 있으면 false
      */
-    public boolean award(Long memberId, int delta, PointReason reason, Long refId,
-                         LocalDateTime now) {
+    public boolean award(Long memberId, int delta, PointReason reason, Long refId) {
         if (pointLedgerRepository.existsByMemberIdAndReasonAndRefTypeAndRefId(
                 memberId, reason, PointLedger.refTypeOf(reason), refId)) {
             return false;
@@ -76,7 +87,7 @@ public class PointService {
         // 벌크 UPDATE가 영속성 컨텍스트를 비우고 갔으므로 여기서 읽는 잔액은 증감 후 값이다.
         int balanceAfter = getBalance(memberId);
         pointLedgerRepository.save(
-                PointLedger.record(memberId, delta, reason, refId, balanceAfter, now));
+                PointLedger.record(memberId, delta, reason, refId, balanceAfter, now()));
         log.info("포인트 {}: member={}, reason={}, ref={}, 잔액={}",
                 delta > 0 ? "지급" : "차감", memberId, reason, refId, balanceAfter);
         return true;
@@ -95,8 +106,7 @@ public class PointService {
      * @param amount 깎을 금액(양수). 원장에는 부호를 뒤집어 음수로 남는다
      * @return 차감 후 잔액
      */
-    public int spend(Long memberId, int amount, PointReason reason, Long refId,
-                     LocalDateTime now) {
+    public int spend(Long memberId, int amount, PointReason reason, Long refId) {
         if (amount <= 0) {
             throw new IllegalArgumentException("차감액은 양수여야 한다: " + amount);
         }
@@ -108,7 +118,7 @@ public class PointService {
                 .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 포인트 차감: " + memberId))
                 .getPointBalance();
         pointLedgerRepository.save(
-                PointLedger.record(memberId, -amount, reason, refId, balanceAfter, now));
+                PointLedger.record(memberId, -amount, reason, refId, balanceAfter, now()));
         log.info("포인트 사용: member={}, reason={}, ref={}, 금액={}, 잔액={}",
                 memberId, reason, refId, amount, balanceAfter);
         return balanceAfter;
@@ -142,6 +152,11 @@ public class PointService {
         return memberRepository.findById(memberId)
                 .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 잔액 조회: " + memberId))
                 .getPointBalance();
+    }
+
+    /** 원장 시각의 유일한 출처. private이라 이 클래스 밖에서 다른 시각을 실을 방법이 없다. */
+    private LocalDateTime now() {
+        return LocalDateTime.now(clock);
     }
 
     /**

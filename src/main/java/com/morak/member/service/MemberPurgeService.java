@@ -17,11 +17,14 @@ import com.morak.member.repository.StreakDayRepository;
 import com.morak.member.type.MemberStatus;
 import com.morak.report.repository.SanctionRepository;
 import com.morak.report.type.SanctionType;
+import com.morak.session.entity.AppealCase;
 import com.morak.session.entity.SessionParticipant;
 import com.morak.session.repository.AbsenceEventRepository;
+import com.morak.session.repository.AppealCaseRepository;
 import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.session.repository.WarningRepository;
 import com.morak.session.service.SessionExitService;
+import com.morak.session.type.AppealStatus;
 import com.morak.session.type.LeftReason;
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -49,6 +52,10 @@ public class MemberPurgeService {
 
     private static final Logger log = LoggerFactory.getLogger(MemberPurgeService.class);
 
+    /** 관리자 화면이 "왜 심사되지 않았나"에 답할 유일한 재료라 사유를 남긴다. */
+    private static final String PURGED_APPEAL_NOTE =
+            "신청자 계정이 파기되어 심사 근거가 남아 있지 않습니다. 심사 없이 종결합니다.";
+
     private final MemberRepository memberRepository;
     private final MemberAgreementRepository memberAgreementRepository;
     private final MemberGoalRepository memberGoalRepository;
@@ -62,6 +69,7 @@ public class MemberPurgeService {
     private final AbsenceEventRepository absenceEventRepository;
     private final WarningRepository warningRepository;
     private final SanctionRepository sanctionRepository;
+    private final AppealCaseRepository appealCaseRepository;
     private final SessionExitService sessionExitService;
     private final MatchService matchService;
     private final SocialHasher socialHasher;
@@ -100,6 +108,10 @@ public class MemberPurgeService {
         // cancelActiveRequest는 조건 행 잠금·조건부 UPDATE를 함께 하므로 그 경합을 직렬화한다.
         matchService.cancelActiveRequest(memberId);
 
+        // 심사 근거를 지우기 전에 미심사 이의를 종결한다. 순서가 뒤면 근거가 사라진 이의가
+        // 큐에 남는다.
+        closePendingAppeals(memberId, now);
+
         memberAgreementRepository.deleteByMemberId(memberId);
         memberGoalRepository.deleteByMemberId(memberId);
         // 회원당 1행이라 PK로 지운다. 없으면 아무 일도 일어나지 않는다.
@@ -129,6 +141,31 @@ public class MemberPurgeService {
         target.anonymize(now);
         log.info("탈퇴 회원 파기: member={}", memberId);
         return 1;
+    }
+
+    /**
+     * 미심사 이의를 심사 불가로 종결한다(AD-5 큐에서 내려간다).
+     *
+     * <p><b>파기와 이의 인용은 함께 성립할 수 없다.</b> 인용은 세 가지를 하는데 그중 둘이
+     * 방금 지운 개인 기록을 다시 세운다 — 완주 소급이 {@code streak_day}를 되살리고, 그것이
+     * 회원 행의 연속 일수·마지막 완주일까지 되돌려 놓는다. 실제로 그랬다: 파기된 회원에게
+     * {@code current_streak 1}과 완주일이 다시 생겼고, 파기했다고 말한 기록이 파기되지 않은
+     * 상태가 됐다.
+     *
+     * <p>남은 하나(포인트 환급)만 살려 인용을 반쪽으로 성립시키지 않는다. 심사 근거인
+     * 경고·자리비움 이벤트를 아래에서 지우므로 <b>인용할지 기각할지를 판단할 재료 자체가
+     * 없고</b>, 근거를 보지 못한 채 내린 인용으로 원장에 환급을 남기는 것은 기록을 더
+     * 부정확하게 만든다. 게다가 DELETED 계정은 로그인 경로가 없어 되돌려 준 잔액을 쓸 수도
+     * 없다. 탈퇴 유예 30일이 이 이의를 마무리할 창이었다.
+     *
+     * <p>REJECTED가 아니라 CLOSED인 이유는 {@link AppealStatus} 주석에 있다.
+     */
+    private void closePendingAppeals(Long memberId, LocalDateTime now) {
+        for (AppealCase appeal
+                : appealCaseRepository.findByMemberIdAndStatus(memberId, AppealStatus.PENDING)) {
+            appeal.closeUnreviewable(PURGED_APPEAL_NOTE, now);
+            log.info("파기 회원의 미심사 이의 종결: member={}, appeal={}", memberId, appeal.getId());
+        }
     }
 
     /**

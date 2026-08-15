@@ -7,6 +7,7 @@ import com.morak.common.error.ErrorCode;
 import com.morak.common.sla.SlaOverdue;
 import com.morak.member.repository.MemberNickname;
 import com.morak.member.repository.MemberRepository;
+import com.morak.member.type.MemberStatus;
 import com.morak.point.service.PointService;
 import com.morak.point.type.PointReason;
 import com.morak.session.dto.request.AppealProcessRequest;
@@ -182,6 +183,7 @@ public class AppealAdminService {
         if (appeal.getStatus() != AppealStatus.PENDING) {
             throw new BusinessException(ErrorCode.ALREADY_PROCESSED);
         }
+        rejectIfMemberPurged(appeal);
         if (request.decision() == AppealStatus.ACCEPTED) {
             rejectIfSessionLive(appeal);
         }
@@ -192,6 +194,27 @@ public class AppealAdminService {
             return AppealProcessResponse.of(appeal, 0, false, currentStreak(appeal.getMemberId(), now));
         }
         return accept(adminId, appeal, now);
+    }
+
+    /**
+     * 파기된 계정의 이의는 심사하지 않는다(409 {@code APPEAL_MEMBER_PURGED}).
+     *
+     * <p>제자리는 여기가 아니라 B4다 — 파기가 그 회원의 미심사 이의를 CLOSED로 거둬 큐에서
+     * 내리므로, 정상 순서라면 위의 PENDING 검사에 먼저 걸린다. 이 검사가 잡는 것은 <b>파기와
+     * 처리가 겹친 순간</b>이다. 관리자 트랜잭션이 이의를 PENDING으로 읽은 뒤 B4가 커밋하면,
+     * 그 트랜잭션은 여전히 PENDING을 손에 들고 인용까지 간다.
+     *
+     * <p>인용만 막지 않고 기각도 막는다. 파기가 경고·자리비움 이벤트를 지운 뒤라 어느 쪽도
+     * 근거를 보고 내린 판단이 아니고, 그 이의의 결말은 심사 결과가 아니라 종결이어야 한다.
+     */
+    private void rejectIfMemberPurged(AppealCase appeal) {
+        boolean purged = memberRepository.findById(appeal.getMemberId())
+                .map(member -> member.getStatus() == MemberStatus.DELETED)
+                // 회원 행 자체가 없으면 파기보다 더 확실하게 심사할 수 없는 상태다.
+                .orElse(true);
+        if (purged) {
+            throw new BusinessException(ErrorCode.APPEAL_MEMBER_PURGED);
+        }
     }
 
     /**
@@ -226,7 +249,7 @@ public class AppealAdminService {
         // 아래 지급이 컨텍스트를 비우므로 여기까지의 변경(이의 종결·퇴출 취소)을 먼저 내보낸다.
         appealCaseRepository.flush();
 
-        int pointRefunded = refundPenalty(eviction, now);
+        int pointRefunded = refundPenalty(eviction);
         boolean completedRestored = restoreCompletion(eviction);
 
         log.info("이의 인용: appeal={}, eviction={}, admin={}, 환급={}, 완주 소급={}",
@@ -247,7 +270,7 @@ public class AppealAdminService {
      * ({@code settleEvictionPenalty})이 채우기 전까지 차감이 없는 상태가 존재한다. 그때 인용하면
      * 차감된 적 없는 300을 환급하는 셈이 되므로, 되돌릴 대상이 원장에 있는지를 보고 판단한다.
      */
-    private int refundPenalty(Eviction eviction, LocalDateTime now) {
+    private int refundPenalty(Eviction eviction) {
         boolean penaltyCharged = pointService.findLedgerId(eviction.getMemberId(),
                 PointReason.EVICTION_PENALTY, eviction.getId()) != null;
         if (!penaltyCharged) {
@@ -258,7 +281,7 @@ public class AppealAdminService {
         // ref가 eviction.id라 패널티 행과 멱등키가 겹치지 않는다. 재처리가 뚫려도 이 제약이
         // 두 번째 환급을 막는다.
         pointService.award(eviction.getMemberId(), amount, PointReason.APPEAL_REFUND,
-                eviction.getId(), now);
+                eviction.getId());
         return amount;
     }
 

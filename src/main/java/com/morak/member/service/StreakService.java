@@ -9,6 +9,7 @@ import com.morak.member.repository.StreakDayRepository;
 import com.morak.member.type.GoalStatus;
 import com.morak.point.service.PointService;
 import com.morak.point.type.PointReason;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
@@ -49,17 +50,20 @@ public class StreakService {
     private final MemberRepository memberRepository;
     private final MemberGoalRepository memberGoalRepository;
     private final PointService pointService;
+    private final Clock clock;
     private final int goalAchievedPoint;
 
     public StreakService(StreakDayRepository streakDayRepository,
                          MemberRepository memberRepository,
                          MemberGoalRepository memberGoalRepository,
                          PointService pointService,
+                         Clock clock,
                          @Value("${morak.point.goal-achieved}") int goalAchievedPoint) {
         this.streakDayRepository = streakDayRepository;
         this.memberRepository = memberRepository;
         this.memberGoalRepository = memberGoalRepository;
         this.pointService = pointService;
+        this.clock = clock;
         this.goalAchievedPoint = goalAchievedPoint;
     }
 
@@ -77,8 +81,8 @@ public class StreakService {
      * 한 번 더 한다 — 그날의 첫 세션이 끝난 뒤에 목표를 설정한 회원은 두 번째 세션의 검사에서
      * 그날을 처음 인정받는다. 검사를 건너뛰면 그 하루가 영영 세어지지 않는다.
      */
-    public CompletionRecord recordCompletion(Long memberId, LocalDate completedOn, Long sessionId,
-                                             LocalDateTime now) {
+    public CompletionRecord recordCompletion(Long memberId, LocalDate completedOn,
+                                             Long sessionId) {
         Member member = memberRepository.findById(memberId)
                 .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 완주 기록: " + memberId));
         boolean countedToday = false;
@@ -88,7 +92,7 @@ public class StreakService {
             countedToday = true;
         }
         return new CompletionRecord(countedToday, member.getCurrentStreak(),
-                achieveGoalIfReached(member, now));
+                achieveGoalIfReached(member, sessionId));
     }
 
     /**
@@ -101,7 +105,7 @@ public class StreakService {
      * 바로 이의를 인용하는 이유이므로, 여기서는 완주일 전체를 다시 세어 덮어쓴다.
      */
     public CompletionRecord recordBackfilledCompletion(Long memberId, LocalDate completedOn,
-                                                       Long sessionId, LocalDateTime now) {
+                                                       Long sessionId) {
         Member member = memberRepository.findById(memberId)
                 .orElseThrow(() -> new IllegalStateException("존재하지 않는 회원의 완주 기록: " + memberId));
         boolean countedToday = false;
@@ -114,7 +118,7 @@ public class StreakService {
             countedToday = true;
         }
         return new CompletionRecord(countedToday, member.getCurrentStreak(),
-                achieveGoalIfReached(member, now));
+                achieveGoalIfReached(member, sessionId));
     }
 
     /**
@@ -161,8 +165,12 @@ public class StreakService {
      *
      * <p>연속 캐시 조건도 남긴다. 시작일 이후 완주일이 7일이어도 중간에 하루 끊겼다면
      * 연속이 아니므로 달성이 아니다. 두 조건은 서로를 대체하지 못한다.
+     *
+     * @param sessionId 목표를 채운 세션. SS-8의 {@code goalAchieved}가 이 값으로 답한다 —
+     *                  달성 시각과 세션 종료 시각을 맞대는 방식은 두 시각이 같다는 약속에
+     *                  기대는 것이라, 소급 지급이 실제 시각으로 바뀌자 곧바로 어긋났다
      */
-    private Long achieveGoalIfReached(Member member, LocalDateTime now) {
+    private Long achieveGoalIfReached(Member member, Long sessionId) {
         MemberGoal goal = memberGoalRepository
                 .findFirstByMemberIdAndStatusOrderByIdDesc(member.getId(), GoalStatus.ACTIVE)
                 .orElse(null);
@@ -175,7 +183,7 @@ public class StreakService {
                 member.getId(), goal.getStartedOn()) < goal.getPeriodDays()) {
             return null;
         }
-        goal.achieve(now);
+        goal.achieve(LocalDateTime.now(clock), sessionId);
         // 지급은 잔액 캐시를 벌크 UPDATE로 갱신하며 영속성 컨텍스트를 비운다. 여기까지 만든
         // 변경(streak_day INSERT·Streak 캐시·목표 ACHIEVED)을 먼저 내보내지 않으면, 지급
         // 시점의 clear가 그것들을 그대로 버려 원장만 남는다. 지금은 addPoint의
@@ -183,7 +191,7 @@ public class StreakService {
         // 맡기지 않는다.
         memberRepository.flush();
         pointService.award(member.getId(), goalAchievedPoint, PointReason.GOAL_ACHIEVED,
-                goal.getId(), now);
+                goal.getId());
         log.info("목표 달성: member={}, goal={}, {}일 연속",
                 member.getId(), goal.getId(), member.getCurrentStreak());
         return goal.getId();

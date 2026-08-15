@@ -199,7 +199,7 @@ public class AuthService {
         // 웰컴 포인트(FR-103). 가입과 같은 트랜잭션이라 계정만 생기고 포인트가 빠지는 상태가
         // 없다. 재로그인은 이 경로로 오지 않지만, 와도 멱등키 (member, WELCOME, MEMBER,
         // member.id)가 두 번째 지급을 막는다 — 지급 여부를 회원 행에 플래그로 두지 않는 이유다.
-        pointService.award(member.getId(), welcomePoint, PointReason.WELCOME, member.getId(), now);
+        pointService.award(member.getId(), welcomePoint, PointReason.WELCOME, member.getId());
         return member;
     }
 

@@ -134,6 +134,7 @@ CREATE TABLE member_goal (
     started_on  DATE        NOT NULL,
     status      VARCHAR(20) NOT NULL,   -- GoalStatus: ACTIVE | ACHIEVED | CANCELLED
     achieved_at DATETIME(6) NULL,
+    achieved_session_id BIGINT NULL,    -- 목표를 채운 세션. SS-8 goalAchieved의 근거
     PRIMARY KEY (id),
     KEY idx_mg_member (member_id, status),
     CONSTRAINT fk_mg_member FOREIGN KEY (member_id) REFERENCES member(id)
@@ -145,7 +146,8 @@ CREATE TABLE member_goal (
 | period_days | 목표 기간. 7·14·30 |
 | started_on | 목표 시작일. 달성 판정의 기산점이다 — 이 날짜 이후의 `streak_day` 행 수가 `period_days` 이상이어야 달성이며, 연속 캐시만 보면 같은 연속으로 여러 번 달성이 성립한다 |
 | status | ACTIVE 진행 중 · ACHIEVED 달성 · CANCELLED 취소. 재설정은 새 행 |
-| achieved_at | B1이 목표 달성 검사에서 기록(★D3) |
+| achieved_at | B1이 목표 달성 검사에서 기록(★D3). 실제 기록 시각이며 세션 종료 시각과 같지 않을 수 있다 — 이의 인용의 소급 달성이 그렇다 |
+| achieved_session_id | 달성을 성립시킨 세션. **SS-8의 `goalAchieved`가 읽는 유일한 근거다.** 예전에는 이 컬럼 없이 `achieved_at = session.ended_at` 동등 비교로 답했는데, 쓰는 값과 읽는 식이 갈라져 있어 달성 시각을 다르게 넣는 경로(소급 인용)가 생기자 조용히 false가 됐다. FK를 걸지 않는다 — 세션 없는 달성은 성립하지 않지만, 목표 도메인이 세션 테이블에 매달리면 파기 순서가 두 도메인에 얽힌다 |
 
 **불변식**
 - 회원당 `status='ACTIVE'` 행은 최대 1개다. **DB 제약이 아니라 조건부 로직으로 지킨다** — AU-7이 `SELECT ... FOR UPDATE`로 회원 행(`match_lock`의 `member:{id}`)을 잡은 뒤 활성 목표를 확인하고, 있으면 409 `GOAL_ALREADY_ACTIVE`를 낸다.
@@ -512,7 +514,7 @@ CREATE TABLE appeal_case (
     id          BIGINT        NOT NULL AUTO_INCREMENT,
     eviction_id BIGINT        NOT NULL,
     member_id   BIGINT        NOT NULL,   -- 신청자 = 퇴출 당사자
-    status      VARCHAR(20)   NOT NULL,   -- AppealStatus: PENDING | ACCEPTED | REJECTED
+    status      VARCHAR(20)   NOT NULL,   -- AppealStatus: PENDING | ACCEPTED | REJECTED | CLOSED
     reason_text VARCHAR(200)  NOT NULL,   -- 신청자가 적는 이의 사유
     created_at  DATETIME(6)   NOT NULL,   -- 접수 시각
     sla_due_at  DATETIME(6)   NOT NULL,   -- created_at + report.sla-hours(24/72)
@@ -914,7 +916,7 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 | ParticipantStatus | ACTIVE, PAUSED, LEFT, EVICTED | session_participant.status |
 | LeftReason | PERSONAL, DEVICE_ISSUE, UNPLEASANT, ETC, WITHDRAWAL, SANCTION | session_participant.left_reason |
 | AbsenceEventType | START, END | absence_event.type |
-| AppealStatus | PENDING, ACCEPTED, REJECTED | appeal_case.status |
+| AppealStatus | PENDING, ACCEPTED, REJECTED, CLOSED | appeal_case.status |
 | PointReason | WELCOME, SESSION_COMPLETE, GOAL_ACHIEVED, EVICTION_PENALTY, ORDER_SPEND, ORDER_CANCEL, CHARGE, APPEAL_REFUND | point_ledger.reason |
 | ProductType | GIFTICON, BOOK | product.type |
 | ProductStatus | ON_SALE, SOLD_OUT, HIDDEN | product.status |
@@ -925,7 +927,7 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 | ReportSeverity | HIGH, NORMAL | report_case.severity |
 | ReportStatus | PENDING, RESOLVED, REJECTED, SANCTIONED | report_case.status, report_history.status |
 | SanctionType | TEMP, PERMANENT | sanction.type |
-| DecidedBy | AI, ADMIN | appeal_case.decided_by |
+| DecidedBy | AI, ADMIN, SYSTEM | appeal_case.decided_by. SYSTEM은 B4가 종결한 CLOSED와만 짝이다 |
 | StickerType | CLAP, MUSCLE, FIRE | SS-11 응답 전용. **저장 테이블 없음** |
 
 `LeftReason`에 EVICTED가 없는 것은 의도다. 퇴출은 사유가 아니라 상태이므로 `ParticipantStatus.EVICTED`로만 표현한다. 두 곳에 두면 "자율 퇴장인데 사유가 퇴출"인 행이 만들어진다.
@@ -950,8 +952,19 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 | match_lock | 회원 잠금 행(`member:{id}`) 삭제. 잠글 대상이 없어진 행이라 남기면 고아가 된다 |
 | session_participant | `goal_text`=NULL로 비운다. 행 자체는 다른 참가자의 세션 이력 정합성 때문에 남긴다 |
 | absence_event, warning | 행 삭제 |
+| appeal_case | **PENDING 건을 `CLOSED`(`decided_by='SYSTEM'`)로 종결한다.** 행은 남긴다 |
 
 `current_streak`·`last_completed_on`을 함께 비우는 것은 익명화 규칙의 연장이다. 이 둘의 진실인 `streak_day`를 지우면서 캐시만 남기면 "이 사람이 이 날 완주했다"는 기록이 회원 행에 그대로 남아, 파기했다고 말한 것이 파기되지 않는다.
+
+**파기는 미심사 이의를 함께 종결한다 — 파기와 이의 인용은 함께 성립할 수 없다.**
+
+인용(AD-6)은 셋을 함께 하는데 그중 둘이 방금 지운 개인 기록을 다시 세운다. 완주 소급이 `streak_day`를 INSERT하고, 그것이 회원 행의 `current_streak`·`last_completed_on`까지 되돌린다. 실측에서 파기된 회원(`status='DELETED'`)에게 완주일과 연속 일수가 되살아나, 파기했다고 말한 기록이 파기되지 않은 상태로 남았다.
+
+남은 하나(포인트 환급)만 살려 인용을 반쪽으로 성립시키지도 않는다. 심사 근거인 `warning`·`absence_event`를 같은 트랜잭션에서 지우므로 **인용할지 기각할지 판단할 재료 자체가 없고**, 근거를 보지 못한 채 남긴 환급은 원장을 더 부정확하게 만든다. `DELETED` 계정은 로그인 경로가 없어 되돌려 준 잔액을 쓸 수도 없다. 탈퇴 유예 30일이 그 이의를 마무리할 창이었다.
+
+`REJECTED`가 아니라 `CLOSED`인 이유는 전자가 "이의에 이유가 없다"는 판단이기 때문이다. 근거를 보지 못한 채 그렇게 적으면 남는 기록이 사실과 다르다. 종결 사유는 `note`에 남겨 관리자 화면이 "왜 심사되지 않았나"에 답할 수 있게 한다. 종결이 삭제보다 먼저 일어나야 한다 — 순서가 뒤면 근거가 사라진 이의가 큐에 PENDING으로 남아 SLA 초과로 계속 뜬다.
+
+`session_participant.warning_count`는 파기 뒤에도 그대로 둔다. `warning` 행 수와 갈리지만 이것은 의도한 것이다 — 참가 행은 다른 참가자의 세션 이력 때문에 남기기로 한 세션 기록이고, `warning_count`와 `status='EVICTED'`는 그 세션에서 일어난 일의 요약이다. 지운 것은 그 요약이 아니라 개인의 상세 흔적(구간·시각)이다. 0으로 덮으면 "경고 없이 퇴출된 참가자"라는 더 이상한 기록이 남는다.
 
 **파기 예외 — 커머스 기록**
 
@@ -962,7 +975,7 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 - **원장은 거래분만 골라 남기지 않고 통째로 남긴다.** 거래분(`CHARGE`·`ORDER_SPEND`·`ORDER_CANCEL`)만 남기면 `balance_after`가 실제 잔액과 어긋나는 줄이 생기고, 주문의 근거가 된 적립(`SESSION_COMPLETE` 등)이 사라져 보존한 주문 기록만으로는 무엇으로 결제했는지 읽을 수 없다. 개인 식별자는 이미 회원 행에서 지웠으므로 남은 원장은 금액과 시각뿐이다.
 - 같은 이유로 `member.point_balance`는 0으로 덮지 않는다. 잔액은 개인 기록이 아니라 남은 원장의 합이고, 덮으면 "잔액 = 원장 합" 불변식이 탈퇴 회원에서만 깨진다.
 
-`eviction`·`appeal_case`·`report_case`·`report`·`report_history`·`sanction`은 분쟁 대응 근거라 유지한다. 신고 화면은 `report_case.target_nickname` 스냅샷으로 읽는다.
+`eviction`·`appeal_case`·`report_case`·`report`·`report_history`·`sanction`은 분쟁 대응 근거라 유지한다(`appeal_case`는 위처럼 상태만 종결로 바꾼다). 신고 화면은 `report_case.target_nickname` 스냅샷으로 읽는다.
 
 `match_event`도 유지한다. 집계 전용 append-only 로그라 UPDATE·DELETE 경로 자체가 없고(위 불변식), 남는 값이 회원 번호와 시각·유형뿐이라 익명화된 회원 행 너머로 개인을 가리키지 않는다. 여기서 지우면 매칭 완료율의 과거 지표가 탈퇴 건수만큼 조용히 달라진다.
 

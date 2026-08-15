@@ -3,6 +3,7 @@ package com.morak.support;
 import com.morak.auth.dto.request.AgreementItem;
 import com.morak.auth.dto.request.LoginRequest;
 import com.morak.auth.service.AuthService;
+import com.morak.common.security.JwtProvider;
 import com.morak.member.entity.Member;
 import com.morak.member.repository.MemberRepository;
 import com.morak.member.type.AgreementType;
@@ -15,6 +16,7 @@ import com.morak.session.repository.SessionParticipantRepository;
 import com.morak.store.entity.Product;
 import com.morak.store.repository.ProductRepository;
 import com.morak.store.type.ProductType;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +43,7 @@ public class TestFixtures {
             new AgreementItem(AgreementType.PRIVACY, true));
 
     private final AuthService authService;
+    private final JwtProvider jwtProvider;
     private final MemberRepository memberRepository;
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
@@ -50,6 +53,7 @@ public class TestFixtures {
     private final JdbcTemplate jdbcTemplate;
 
     public TestFixtures(AuthService authService,
+                        JwtProvider jwtProvider,
                         MemberRepository memberRepository,
                         LiveSessionRepository liveSessionRepository,
                         SessionParticipantRepository sessionParticipantRepository,
@@ -58,6 +62,7 @@ public class TestFixtures {
                         PlatformTransactionManager transactionManager,
                         JdbcTemplate jdbcTemplate) {
         this.authService = authService;
+        this.jwtProvider = jwtProvider;
         this.memberRepository = memberRepository;
         this.liveSessionRepository = liveSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
@@ -91,6 +96,44 @@ public class TestFixtures {
         return memberIds;
     }
 
+    /**
+     * 연령까지 확정된 회원. 개발용 소셜은 생년월일을 주지 않아 {@link #joinMember()}는 언제나
+     * {@code REQUIRED}로 끝나는데, ⑤ 게이트 뒤의 API를 확인하려는 테스트는 거의 전부 그
+     * 상태를 먼저 벗어나야 한다. AU-3을 부르지 않고 컬럼을 직접 쓰는 이유는 여기서 시험하려는
+     * 것이 연령 확인 절차가 아니라 그 다음 API이기 때문이다.
+     */
+    public Long joinVerifiedMember(String authorizationCode) {
+        Long memberId = joinMember(authorizationCode);
+        verifyAge(memberId);
+        return memberId;
+    }
+
+    public Long joinVerifiedMember() {
+        return joinVerifiedMember("test-" + UUID.randomUUID());
+    }
+
+    public void verifyAge(Long memberId) {
+        jdbcTemplate.update(
+                "UPDATE member SET age_verification = 'VERIFIED', birth_date = ? WHERE id = ?",
+                LocalDate.of(1995, 1, 1), memberId);
+    }
+
+    /**
+     * 관리자 회원. 시더가 만들어 주는 관리자가 없고 승격 API도 없어서 역할을 직접 쓴다.
+     * 서비스를 직접 부르는 테스트는 역할을 보지 않지만(③은 인터셉터의 검사다), HTTP로
+     * {@code /api/admin/**}에 닿는 테스트에는 실제로 ADMIN인 회원이 필요하다.
+     */
+    public Long joinAdmin(String authorizationCode) {
+        Long memberId = joinVerifiedMember(authorizationCode);
+        jdbcTemplate.update("UPDATE member SET role = 'ADMIN' WHERE id = ?", memberId);
+        return memberId;
+    }
+
+    /** 인터셉터가 받아들이는 토큰. 로그인을 다시 태우지 않고 회원 번호로 바로 만든다. */
+    public String tokenOf(Long memberId) {
+        return jwtProvider.createToken(memberId);
+    }
+
     /** 매칭이 만드는 것과 같은 모양의 진행 중 세션. 종료 예정은 {@code startedAt + targetMinutes}다. */
     public Long openSession(int targetMinutes, LocalDateTime startedAt, List<Long> memberIds) {
         return transactionTemplate.execute(status -> {
@@ -109,8 +152,28 @@ public class TestFixtures {
     }
 
     public Long createProduct(int pricePoint, int stock) {
-        return productRepository.save(Product.onSale(ProductType.GIFTICON, "테스트 상품",
-                null, null, pricePoint, stock)).getId();
+        return createProduct(ProductType.GIFTICON, "테스트 상품", pricePoint, stock);
+    }
+
+    public Long createProduct(ProductType type, String name, int pricePoint, int stock) {
+        return productRepository.save(
+                Product.onSale(type, name, null, null, pricePoint, stock)).getId();
+    }
+
+    /** SR-1·SR-2가 목록과 상세에서 함께 감춰야 하는 상품. */
+    public Long createHiddenProduct(int pricePoint, int stock) {
+        Product product = Product.onSale(ProductType.BOOK, "감춘 상품", null, null,
+                pricePoint, stock);
+        product.hide();
+        return productRepository.save(product).getId();
+    }
+
+    /** 품절은 감추지 않고 상태로 알린다 — 목록에는 남고 주문만 막힌다. */
+    public Long createSoldOutProduct(int pricePoint) {
+        Product product = Product.onSale(ProductType.GIFTICON, "품절 상품", null, null,
+                pricePoint, 0);
+        product.markSoldOut();
+        return productRepository.save(product).getId();
     }
 
     // ── 확인 ──
@@ -153,6 +216,19 @@ public class TestFixtures {
 
     public int countAll(String table) {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+    }
+
+    /**
+     * 상태 컬럼 하나를 테이블에서 그대로 읽는다. 엔티티로 읽으면 영속성 컨텍스트에 남은
+     * 인스턴스가 답할 수 있어서, "정말 커밋됐는가"를 보는 자리는 테이블이 답해야 한다.
+     */
+    public String queryString(String sql, Object... args) {
+        return jdbcTemplate.queryForObject(sql, String.class, args);
+    }
+
+    /** 번호 목록. 세션 참가자처럼 준비 단계가 돌려주지 않은 식별자를 되짚을 때 쓴다. */
+    public List<Long> queryLongs(String sql, Object... args) {
+        return jdbcTemplate.queryForList(sql, Long.class, args);
     }
 
     /**

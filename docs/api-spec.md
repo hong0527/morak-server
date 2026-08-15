@@ -22,7 +22,16 @@
 {"error": {"code": "SESSION_NOT_FOUND", "message": "존재하지 않는 세션입니다.", "details": null}}
 ```
 
+- `VALIDATION_FAILED`의 `details`는 **`{필드명: 사람이 읽는 메시지}` 평면 맵**이다. 화면이 오류를 해당 입력란에 붙일 수 있어야 해서 키를 필드명으로 고정했다
+
+```json
+{"error":{"code":"VALIDATION_FAILED","message":"요청 값이 올바르지 않습니다.","details":{"periodDays":"허용값은 7, 14, 30입니다."}}}
+```
+
+키가 정해지는 경로는 넷이다 — `@Valid` 필드 검증(필드명 → 검증 메시지), 경로·쿼리 파라미터 타입 불일치(`{파라미터명: "값의 형식이 올바르지 않습니다."}`), 본문 자체를 읽지 못한 경우(`{"body": "요청 본문의 형식이 올바르지 않습니다."}`), 서비스 단계의 값 검사. 예외는 SS-7 하나다 — 서버 전용 `LeftReason`을 보내면 `details`가 `null`이다.
+
 - 시각 표기 ISO-8601(`+09:00`), 일자 `YYYY-MM-DD`. 모든 시각은 `Clock` 빈 경유(`Clock.system(ZoneId.of(morak.timezone))`, 개발·테스트는 가변)
+- **응답 시각의 형식은 `yyyy-MM-dd'T'HH:mm:ssXXX` 고정이다.** 항상 초까지 적고 소수점 초는 언제나 잘라내며, `00:00:00`도 줄이지 않는다(`2026-08-14T00:00:00+09:00`). 자릿수가 값마다 달라지면 고정 포맷 파싱과 문자열 비교가 깨지므로 폭을 고정한 것이고, 프론트는 이 패턴 하나로 전 응답을 파싱해도 된다. 보장 지점은 `common/config/JacksonConfig`이며 `common/TimestampFormatTest`가 잠근다
 - 목록 응답은 커스텀 `PageResponse<T>` = `{content[], page, size, totalElements, totalPages}` (Spring `Page` 직렬화 금지)
 - 페이지 파라미터: `page`(0-base, 기본 0), `size`(기본 20, 최대 50). 초과 시 400 `VALIDATION_FAILED`
 - 에러 코드 하나에는 HTTP status 하나만 대응한다. 같은 코드가 상황에 따라 다른 status를 내지 않는다.
@@ -126,6 +135,9 @@ SessionEndReason    NORMAL, EARLY_UNDER_MIN
 ParticipantStatus   ACTIVE, PAUSED, LEFT, EVICTED
 LeftReason          PERSONAL, DEVICE_ISSUE, UNPLEASANT, ETC, WITHDRAWAL, SANCTION
 AbsenceEventType    START, END
+WarningBasis        ABSENCE, PAUSE_OVERRUN
+  ↳ 저장 컬럼이 없다. `warning.absence_event_id`가 NULL인지로 파생하며(NULL이면 PAUSE_OVERRUN, D9)
+    SS-8·AD-9 응답의 `warnings[].basis`에만 나타난다
 StickerType         CLAP, MUSCLE, FIRE
   ↳ 한글 라벨: 파이팅 / 힘내요 / 열공
 PointReason         WELCOME, SESSION_COMPLETE, GOAL_ACHIEVED, EVICTION_PENALTY,
@@ -134,13 +146,17 @@ ProductType         GIFTICON, BOOK
 ProductStatus       ON_SALE, SOLD_OUT, HIDDEN
 OrderStatus         ORDERED, CANCELLED
 ChargeStatus        READY, APPROVED, FAILED
-AppealStatus        PENDING, ACCEPTED, REJECTED
+AppealStatus        PENDING, ACCEPTED, REJECTED, CLOSED
+  ↳ CLOSED는 판단이 아니라 심사가 성립하지 않아 종결된 것이다. 쓰는 곳은 B4 탈퇴 파기 배치 하나뿐이고
+    (`AppealCase.closeUnreviewable()`), 관리자가 고를 수 없다 — AD-6 요청 body는 ACCEPTED·REJECTED만 받는다
 ReportTargetType    MEMBER, SESSION
 ReportReasonCode    SEXUAL_CONTENT, VIOLENT_THREAT, AD_SPAM, INAPPROPRIATE_SCREEN, ETC
 ReportSeverity      HIGH, NORMAL
 ReportStatus        PENDING, RESOLVED, REJECTED, SANCTIONED
 SanctionType        TEMP, PERMANENT
-DecidedBy           AI, ADMIN
+DecidedBy           AI, ADMIN, SYSTEM
+  ↳ SYSTEM은 위 CLOSED 전이와만 짝이다(배치가 종결시킨 것이라 사람의 판단이 아니다).
+    AI는 자동 인용 경로를 위해 남겨 둔 값이며 현재 코드가 기록하는 곳은 없다
 BadgeCode           GOAL_ACHIEVED
 ```
 
@@ -186,6 +202,8 @@ morak:
     sla-hours:
       high: 24
       normal: 72
+  appeal:
+    file-deadline-days: 3                 # 퇴출 시각부터 이의 접수 기한 (AP-1, NFR-402)
   withdrawal:
     grace-days: 30
   livekit:
@@ -301,7 +319,7 @@ morak:
 | **store_order** | ORDERED | SR-3 생성 | (v1에서 취소 경로 없음) | 재고 차감, `point_ledger(ORDER_SPEND, -amount)` |
 | | CANCELLED | (v1에서 전이 경로 없음) | — | 환불(FR-506)이 보류이므로 v1에서 이 상태로 보내는 경로가 없다. `ORDER_CANCEL` 원장 사유도 동일 |
 | **report_case** | PENDING | RP-1 접수·병합. `sla_due_at` 계산 | AD-3 → RESOLVED·REJECTED·SANCTIONED | 종결 시 `open_target_id=NULL`. 재오픈 불가(재검토는 새 케이스). REJECTED 시 신고자에게 `restriction_review`. `overdue`는 저장하지 않고 `status=PENDING AND sla_due_at < now`로 파생한다 |
-| **appeal_case** | PENDING | AP-1 신청(퇴출 1건당 1회). `reason_text`·`created_at`·`sla_due_at` 기록 | AD-6 → ACCEPTED·REJECTED | ACCEPTED 시 `eviction.revoked_at` + `point_ledger(APPEAL_REFUND, +300)` + 해당일 완주 소급 재판정. `overdue`는 저장하지 않고 `status=PENDING AND sla_due_at < now`로 파생한다 |
+| **appeal_case** | PENDING | AP-1 신청(퇴출 1건당 1회). `reason_text`·`created_at`·`sla_due_at` 기록 | AD-6 → ACCEPTED·REJECTED / **B4 파기 → CLOSED** | ACCEPTED 시 `eviction.revoked_at` + `point_ledger(APPEAL_REFUND, +300)` + 해당일 완주 소급 재판정. CLOSED는 심사 결과가 아니라 심사 불가 종결이다 — 신청자 계정이 파기되어 `warning`·`absence_event`가 사라졌고, 인용의 완주 소급이 방금 파기한 개인 기록을 되살리기 때문이다(`decided_by=SYSTEM`, 사유는 `note`). `overdue`는 저장하지 않고 `status=PENDING AND sla_due_at < now`로 파생한다 |
 | **sanction** | (기간형) | AD-3 SANCTIONED / AD-4 단독 적용 | `ends_at` 경과(TEMP) | 유효식은 §0-2 ④ |
 
 ---
@@ -405,7 +423,7 @@ morak:
 
 **개발용 로그인도 이 엔드포인트를 쓴다** — `provider=DEV`로 호출하면 `DevSocialClient`가 실제 소셜 검증을 대신하고, `authorizationCode`를 `provider_user_id`로 삼아 upsert한다(같은 값으로 다시 부르면 기존 회원 로그인). `@Profile("dev")` AND `morak.dev.enabled=true` 이중 스위치가 걸려 있어 운영 프로필에서는 `DevSocialClient` 빈이 등록되지 않고 401 `INVALID_SOCIAL_TOKEN`으로 떨어진다. 별도 dev 로그인 엔드포인트를 두지 않는 이유는, 가입 경로가 둘이면 약관·웰컴 포인트·`match_lock` 시드 같은 부수효과가 한쪽에서만 빠지기 때문이다. 관리자 계정은 어느 경로로도 만들 수 없고 DB 수동 UPDATE로만 만든다(`role` 파라미터 없음).
 
-발생 에러: 401 `INVALID_SOCIAL_TOKEN` / 403 `REJOIN_BLOCKED` / 403 `UNDER_AGE_SIGNUP_BLOCKED` / 400 `AGREEMENT_REQUIRED` / 400 `VALIDATION_FAILED`
+발생 에러: 401 `INVALID_SOCIAL_TOKEN` / 401 `UNAUTHORIZED`(기존 계정이 `WITHDRAW_PENDING`인데 `delete_scheduled_at`이 이미 지난 경우 — B4 실행 전이어도 파기된 계정으로 보아 3단계 복구를 하지 않는다. 느슨하게 두면 로그인으로 계정이 부활한다) / 403 `REJOIN_BLOCKED` / 403 `UNDER_AGE_SIGNUP_BLOCKED` / 400 `AGREEMENT_REQUIRED` / 400 `VALIDATION_FAILED`
 
 게이트: ① 예외(JWT skip) · ② 예외 · ④ 예외 · ⑤ 미적용
 
@@ -529,7 +547,7 @@ morak:
 {"deleteScheduledAt": "2026-09-11T00:00:00+09:00"}
 ```
 
-발생 에러: 409 `NOT_WITHDRAWING`은 여기서 발생하지 않는다. 이미 `WITHDRAW_PENDING`이면 ② 게이트가 403 `WITHDRAWAL_PENDING`으로 먼저 잡는다.
+발생 에러: 503 `LOCK_ACQUISITION_FAILED`(회원 행과 매칭 취소의 조건 행을 잠근다). 409 `NOT_WITHDRAWING`은 여기서 발생하지 않는다. 이미 `WITHDRAW_PENDING`이면 ② 게이트가 403 `WITHDRAWAL_PENDING`으로 먼저 잡는다.
 
 게이트: ② ✓ · ④ 예외(제재 중에도 탈퇴는 막지 않는다)
 
@@ -597,7 +615,7 @@ morak:
 
 `progressDays`는 설정 직후에도 0이 아닐 수 있다 — 오늘 완주를 마친 뒤 목표를 걸면 시작일(오늘)의 완주가 이미 있고, 달성 판정(`>= started_on`, §0-6)도 그 하루를 세므로 응답도 1을 내린다. 판정과 화면이 같은 날 달성해야 한다.
 
-발생 에러: 409 `GOAL_ALREADY_ACTIVE`(진행 중 목표가 있으면 새 목표를 만들지 않는다) / 400 `VALIDATION_FAILED`
+발생 에러: 409 `GOAL_ALREADY_ACTIVE`(진행 중 목표가 있으면 새 목표를 만들지 않는다) / 400 `VALIDATION_FAILED` / 503 `LOCK_ACQUISITION_FAILED`(아래 회원 행 잠금 대기 초과. 상태를 바꾸지 않으므로 재시도 안전)
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓
 
@@ -806,8 +824,8 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 절차
 
 1. 세션 존재 → 없으면 404 `SESSION_NOT_FOUND`
-2. 세션 `LIVE` → 아니면 409 `SESSION_ENDED`
-3. 참가자 본인 → 아니면 403 `NOT_SESSION_PARTICIPANT`
+2. 참가자 본인 → 아니면 403 `NOT_SESSION_PARTICIPANT`
+3. 세션 `LIVE` → 아니면 409 `SESSION_ENDED`. 참가 자격을 먼저 보는 것은 §0-3 공통 순서다 — 뒤집으면 참가자가 아닌 사람이 세션 번호를 훑어 남의 세션이 끝났는지를 알 수 있다
 4. 참가자 상태가 `EVICTED`면 409 `ALREADY_EVICTED`, `LEFT`면 403 `NOT_SESSION_PARTICIPANT`. `LEFT` 본인도 이 코드를 받는다 — "참가자가 아닙니다"를 그대로 띄우면 방금까지 있던 사용자가 혼란하므로, 문구를 가르려면 SS-1 본인 행의 `status`를 본다(SS-1은 이력 보유자에게 열려 있다)
 5. 캠 영상 분석 동의(AU-6) 없으면 403 `CONSENT_REQUIRED`
 6. LiveKit AccessToken 발급 — `identity = String.valueOf(memberId)`, grant는 해당 룸의 **비디오 publish + subscribe**만. 오디오 publish와 룸 생성·관리 권한은 주지 않는다 (D23)
@@ -857,12 +875,13 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 신뢰 모델
 
 - 클라이언트는 타인에 대한 판정을 보낼 수 없다. `memberId`는 요청 본문이 아니라 JWT에서 가져온다
-- `clientSeq`는 세션 내 단조 증가하는 클라이언트 시퀀스다. `UNIQUE(session_id, member_id, client_seq)`가 재전송을 흡수한다
+- `clientSeq`는 세션 내 단조 증가하는 클라이언트 시퀀스이며 **0 이상**이다(음수는 400 `VALIDATION_FAILED`). `UNIQUE(session_id, member_id, client_seq)`가 재전송을 흡수한다. 음수를 막는 것은 서버가 만드는 END 행이 그 대역을 쓰기 때문이다(SS-5)
 - 지속시간(60초 초과) 계산의 기준은 **`occurredAt` 간격**이다(서버 수신 시각이 아님 — 자기 자신만 보고하는 구조라 부풀려도 자해일 뿐이다). 서버는 수신 시각(`reported_at`)을 감사용으로 함께 저장한다
 - **이 구조가 못 막는 것**: 클라이언트가 이벤트를 **아예 보내지 않으면** 몇 시간을 비워도 경고 0으로 완주가 된다. 서버는 영상을 보지 않으므로(D17) v1에서 이를 막을 수단이 없다 — 연령 검증의 자기 신고 한계와 같은 종류의, 알고 받아들인 한계다. 위조 방어 장치(clientSeq·레이트리밋·서버 판정)는 전부 "보낸 것"에 대해서만 작동한다
 - `occurredAt` 허용 범위는 [세션 시작 −5초, 현재 +5초]. 벗어나면 400 `VALIDATION_FAILED`(±5초 여유는 단말이 초 단위로 자른 시각을 보내는 것을 흡수하기 위함 — 4단계 실측)
-- 같은 참가자의 직전 이벤트로부터 `session.absence-min-interval-seconds`(5초) 안에 다시 들어오면 429 `ABSENCE_RATE_LIMITED`. 정상 클라이언트는 얼굴 검출 상태가 바뀔 때만 보내므로 초당 여러 건이 올 이유가 없다 — 위조·폭주 트래픽을 정상과 분리하는 방어선이다
-- **429 수신 시 재전송 규약(프론트 필수)**: 버리지 말고 **같은 `clientSeq`로 5초 뒤 재전송**한다. 멱등키가 중복을 막으므로 몇 번을 다시 보내도 안전하다. 특히 END가 429로 유실되면 짝 없는 START가 되어 세션 종료 시각까지 자리비움으로 정산된다 — 잠깐 비운 사람이 최대 과대 계상되는 경로라 이 재전송이 계약이다
+- 같은 참가자의 직전 이벤트로부터 `session.absence-min-interval-seconds`(현재 5초) 안에 다시 들어오면 429 `ABSENCE_RATE_LIMITED`. 정상 클라이언트는 얼굴 검출 상태가 바뀔 때만 보내므로 초당 여러 건이 올 이유가 없다 — 위조·폭주 트래픽을 정상과 분리하는 방어선이다
+- **간격은 직전 이벤트의 서버 수신 시각(`reported_at`) 기준이고, 그 직전 이벤트가 단말이 보낸 것이 아닐 수 있다.** 화장실 모드 시작(SS-5)이 열린 자리비움 구간을 닫으며 서버가 END 행을 하나 넣으므로, Pause를 켠 직후 간격 안에 들어온 SS-4 보고는 429가 된다. 클라이언트가 자기 전송 이력만 세면 설명되지 않는 429라 여기 적는다
+- **429 수신 시 재전송 규약(프론트 필수)**: 버리지 말고 **같은 `clientSeq`로 `session.absence-min-interval-seconds` 뒤에 재전송**한다. 멱등키가 중복을 막으므로 몇 번을 다시 보내도 안전하다. 특히 END가 429로 유실되면 짝 없는 START가 되어 세션 종료 시각까지 자리비움으로 정산된다 — 잠깐 비운 사람이 최대 과대 계상되는 경로라 이 재전송이 계약이다
 
 서버 판정
 
@@ -885,7 +904,7 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 
 `closedAbsenceSeconds`는 이 보고로 닫힌 자리비움 구간의 지속 초다. 닫힌 구간이 없으면(START 보고, 짝 없는 END) `null`이다. 경고가 붙는 순간 몇 초로 판정됐는지 당사자가 즉시 알아야 하고, 임계 이하로 닫혀 경고가 없을 때도 값을 내린다 — 임계에 얼마나 가까웠는지가 다음 자리비움을 조절할 근거다. 이름·형태는 SS-5의 같은 필드와 같다.
 
-발생 에러: 400 `VALIDATION_FAILED`(`occurredAt`이 [세션 시작 −5초, 현재 +5초]를 벗어남) / 409 `DUPLICATE_ABSENCE_EVENT`(같은 `clientSeq` 재수신 — 서버 상태는 바뀌지 않으므로 클라이언트는 정상 종료로 취급한다) / 429 `ABSENCE_RATE_LIMITED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND`
+발생 에러: 400 `VALIDATION_FAILED`(`occurredAt`이 [세션 시작 −5초, 현재 +5초]를 벗어남) / 409 `DUPLICATE_ABSENCE_EVENT`(같은 `clientSeq` 재수신 — 서버 상태는 바뀌지 않으므로 클라이언트는 정상 종료로 취급한다) / 429 `ABSENCE_RATE_LIMITED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
 
 검사 순서: 세션 존재(404) → **참가 자격(403)** → 세션 상태(409) → 참가자 상태(409 `ALREADY_EVICTED`) → 시각 검증(400) → 재전송(409) → 레이트리밋(429). 참가 자격이 세션 상태보다 먼저다(§0-3) — 뒤집으면 참가자가 아닌 사람이 세션 번호를 훑어 남의 세션이 끝났는지를 알 수 있다.
 
@@ -945,7 +964,7 @@ UPDATE session_participant
 
 `closedAbsenceSeconds`는 마감된 구간의 지속 초다. 마감할 구간이 없었으면 `null`이고, 임계 안쪽이라 경고가 붙지 않은 경우에도 값은 실린다. 판정이 몇 초로 계산됐는지가 이의(AP-1)를 쓸 때 본인이 댈 수 있는 유일한 근거라서다(영상은 저장하지 않는다 — ★D17).
 
-발생 에러: 409 `PAUSE_ALREADY_USED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND`
+발생 에러: 409 `PAUSE_ALREADY_USED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 세션 참가자 ACTIVE · 소유권 본인
 
@@ -979,7 +998,15 @@ UPDATE session_participant
 {"status": "ACTIVE", "elapsedSeconds": 730, "warningIssued": true, "warningCount": 2, "evicted": false}
 ```
 
-발생 에러: 409 `PAUSE_NOT_ACTIVE` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND`
+응답 200 (초과 복귀가 3회째 경고 — 퇴출)
+
+```json
+{"status": "EVICTED", "elapsedSeconds": 730, "warningIssued": true, "warningCount": 3, "evicted": true}
+```
+
+**복귀 응답의 `status`가 항상 `ACTIVE`인 것은 아니다.** 그 경고가 3회째면 같은 트랜잭션에서 퇴출까지 이어져 `EVICTED`·`evicted=true`로 돌아온다(D9). 화면은 `status`를 그대로 믿지 말고 `evicted`로 분기해 퇴출 안내와 이의 신청(AP-1) 경로를 그린다.
+
+발생 에러: 409 `PAUSE_NOT_ACTIVE` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 세션 참가자 PAUSED · 소유권 본인
 
@@ -999,7 +1026,7 @@ UPDATE session_participant
 
 응답 204.
 
-발생 에러: 400 `REASON_REQUIRED` / 409 `ALREADY_LEFT` / 409 `ALREADY_EVICTED`(퇴출된 참가자 — SS-2·SS-3과 동일 취급) / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND`
+발생 에러: 400 `REASON_REQUIRED` / 400 `VALIDATION_FAILED`(서버 전용 사유 — 이 경우에만 `details`가 `null`이다, §0-1) / 409 `ALREADY_LEFT` / 409 `ALREADY_EVICTED`(퇴출된 참가자 — SS-2·SS-3과 동일 취급) / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 세션 참가자 ACTIVE·PAUSED · 소유권 본인
 
@@ -1051,6 +1078,8 @@ UPDATE session_participant
 
 목표 달성이 함께 일어난 경우 `"goalAchieved": true, "badgeCode": "GOAL_ACHIEVED"`가 되고, `point_ledger`에 `GOAL_ACHIEVED +1000`이 별도로 쌓인다. 이 지급이 기획서의 "스파크 포인트"이며, 일반 포인트와 동일 통화이고 사유 라벨로만 구분한다 (★D5 — 잠정, 팀 확인 대기, open-decisions Q4).
 
+`goalAchieved`는 `member_goal.achieved_session_id = {sessionId}`로 답한다 — 달성을 성립시킨 세션을 목표 행이 직접 들고 있다. 예전에는 이 컬럼 없이 `achieved_at = session.endedAt` 동등 비교로 답했는데, 쓰는 값과 읽는 식이 갈라져 있어 달성 시각을 다르게 넣는 경로가 하나 생기자 조용히 `false`가 됐다. **이의 인용(AD-6)으로 뒤늦게 채워진 목표도 그 세션의 결과에서 `true`다** — 달성 시각은 인용 시각이지만 채운 세션은 그때의 세션이다.
+
 `countedToday=false`는 같은 날 이미 다른 세션으로 완주가 기록되어 Streak가 중복 증가하지 않았다는 뜻이다 (★D2).
 
 `pointAwarded`는 `targetMinutes` 기준으로 계산한다. `endReason=EARLY_UNDER_MIN`으로 30분 만에 끝난 60분 세션이어도 완주자는 +100을 받는다 — 세션이 일찍 끝난 것은 남은 사람의 책임이 아니기 때문이다 (D15 보충).
@@ -1066,6 +1095,8 @@ UPDATE session_participant
 발생 에러: 409 `SESSION_NOT_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND`
 
 검사 순서: 세션 존재(404) → 참가 자격(403) → 세션 상태(409). 참가자가 아닌 사람은 그 세션이 끝났는지 알 수 없다(§0-3).
+
+**`CANCELLED` 세션도 409 `SESSION_NOT_ENDED`("아직 진행 중인 세션입니다")다.** 판정이 `status != ENDED`로 갈리기 때문이고, 결과가 없다는 답으로는 같다. 문구가 상태와 어긋나 보이지만 코드 하나에 status 하나 규약(§0-1)을 지키느라 별도 코드를 만들지 않았다 — 실제 상태가 필요하면 SS-1을 본다.
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 세션 참가 이력 보유 · 세션 ENDED
 
@@ -1292,7 +1323,9 @@ UPDATE session_participant
 | CHARGE | 포인트 충전 |
 | APPEAL_REFUND | 이의 인용 환급 |
 
-내역은 `created_at` 최신순이고, 같은 시각이 여러 줄이면(B1이 한 트랜잭션에서 완주 지급과 목표 달성을 함께 기록하는 경우) `ledgerId` 큰 쪽이 앞이다. 동률을 깨지 않으면 페이지마다 순서가 달라져 같은 행이 두 번 보이거나 빠진다.
+**내역은 `ledgerId` 내림차순, 곧 기록된 순서의 역순이다.** `created_at`으로 정렬하지 않는다 — `balanceAfter`는 행이 쓰인 순서로 연쇄하므로 표시 순서를 다른 컬럼으로 잡으면 목록 안에서 잔액이 오르내린다. 실제로 그랬다: 소급 지급이 세션 종료 시각으로 들어가던 때, 이의를 이틀 뒤에 인용받은 회원의 PT-1이 최신 행에 옛 잔액을 달고 나왔다. 지금은 원장 시각도 기록 시각이라 두 순서가 같지만(아래), 정렬은 그 일치에 기대지 않는다. 개발 프로필의 시계 조작(DEV-2)만으로도 `created_at`이 `ledgerId`를 거슬러 오르내리는 반면, 채번은 되돌릴 수 없어 기록 순서를 유일하게 보존하는 키가 `ledgerId`다.
+
+**`createdAt`은 그 줄을 쓴 시각이다.** 정산하는 사건이 언제 있었는지는 `refType`·`refId`가 가리키는 근거 행이 말한다. 그래서 이의 인용(AD-6)이 이틀 전 세션의 완주를 소급 지급해도 그 줄의 `createdAt`은 인용 시각이고, 같은 처리가 남기는 `APPEAL_REFUND`·`SESSION_COMPLETE`·`GOAL_ACHIEVED` 세 줄의 시각이 모두 같다. 완주가 어느 날로 집계되는지(`streak_day.completed_on` = 세션 시작일)는 이와 무관하게 세션이 정한다.
 
 발생 에러: 400 `VALIDATION_FAILED`
 
@@ -1363,6 +1396,8 @@ UPDATE session_participant
 {"productId": 31, "quantity": 1, "idempotencyKey": "a7f2c1e4-8b30-4c5d-9f11-2e6d0b7a3c58"}
 ```
 
+`quantity`는 1 이상이고, `idempotencyKey`는 최대 64자다(`store_order.idempotency_key` 컬럼 길이 — 넘긴 값이 잘린 채 저장되면 멱등 판정이 어긋난다). 위반 400 `VALIDATION_FAILED`.
+
 절차 (전체가 하나의 `@Transactional`)
 
 1. `idempotency_key` 중복 → 409 `DUPLICATE_ORDER`. 네트워크 재시도로 이중 주문이 생기는 것을 막는다. **응답 `details`에 기존 주문 번호를 담는다** — `{"error":{"code":"DUPLICATE_ORDER","message":"이미 접수된 주문입니다.","details":{"orderId":612}}}`. 클라이언트가 재시도 실패와 이미 성공한 주문을 구분해 주문 상세로 넘어갈 수 있어야 한다
@@ -1410,6 +1445,8 @@ UPDATE session_participant
   "page": 0, "size": 20, "totalElements": 3, "totalPages": 1
 }
 ```
+
+발생 에러: 400 `VALIDATION_FAILED`(`page`·`size` 범위 위반)
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 소유권 본인
 
@@ -1468,6 +1505,8 @@ UPDATE session_participant
 {"pgOrderId": "molock-chg-20260812-000208", "pgTid": "tviva20260812130455ABCD", "amountKrw": 10000}
 ```
 
+`pgOrderId`·`pgTid`는 최대 64자다(`point_charge`의 컬럼 길이). 잘린 값끼리 대조하면 2번 검사가 무의미해지므로 그 전에 400 `VALIDATION_FAILED`로 거른다.
+
 절차
 
 1. 충전 건 조회 — 없거나 타인 것이면 404 `CHARGE_NOT_FOUND`
@@ -1497,7 +1536,7 @@ UPDATE session_participant
 }
 ```
 
-발생 에러: 404 `CHARGE_NOT_FOUND` / 400 `PAYMENT_AMOUNT_MISMATCH` / 409 `PAYMENT_NOT_APPROVED`
+발생 에러: 404 `CHARGE_NOT_FOUND` / 400 `PAYMENT_AMOUNT_MISMATCH` / 409 `PAYMENT_NOT_APPROVED` / 400 `VALIDATION_FAILED`
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 소유권 본인
 
@@ -1624,7 +1663,7 @@ UPDATE session_participant
 
 `q`는 `targetNickname` 부분 일치다.
 
-발생 에러: 403 `FORBIDDEN_ROLE`
+발생 에러: 403 `FORBIDDEN_ROLE` / 400 `VALIDATION_FAILED`(`page`·`size` 범위 위반, `status`·`severity`에 enum에 없는 값)
 
 게이트: ③ ADMIN · ② ✓ · ④ 미적용 · ⑤ 미적용
 
@@ -1681,6 +1720,7 @@ UPDATE session_participant
 - `status=REJECTED`(기각) 확정 시 신고자에게 `restriction_review` 플래그를 세운다. 반복 허위 신고자를 제재 검토 대상으로 남기기 위한 장치다. **이것이 `restriction_review`를 세우는 유일한 경로다** — SLA 초과를 근거로 자동 마킹하지 않는다. 처리가 늦은 것은 운영 측 사정이지 신고자의 잘못이 아니며, 지연의 가시성은 AD-1의 `overdue` 필터가 담당한다
 - `status=SANCTIONED`면 `sanction` 필수. 제재 적용은 AD-4와 동일한 단일 서비스 메서드를 호출해 한 트랜잭션에서 처리한다. `targetType=SESSION` 케이스는 제재 대상 개인이 없으므로 `SANCTIONED`로 확정할 수 없다 — 400 `VALIDATION_FAILED`
 - `status`에 `PENDING`을 보내는 것은 상태를 되돌리는 요청이라 400 `VALIDATION_FAILED`다. `SANCTIONED`가 아닌데 `sanction`을 함께 보내는 것도 같다
+- `reviewNote`는 최대 1000자다. 초과 400 `VALIDATION_FAILED`
 - 종결 시 `open_target_id=NULL`
 
 응답 200
@@ -1689,7 +1729,7 @@ UPDATE session_participant
 {"caseId": 1204, "status": "SANCTIONED", "processedAt": "2026-08-12T14:30:00+09:00", "sanctionId": 55}
 ```
 
-발생 에러: 404 `REPORT_NOT_FOUND` / 409 `ALREADY_PROCESSED` / 400 `VALIDATION_FAILED` / 403 `FORBIDDEN_ROLE`
+발생 에러: 404 `REPORT_NOT_FOUND` / 409 `ALREADY_PROCESSED` / 400 `VALIDATION_FAILED` / 403 `FORBIDDEN_ROLE` / 503 `LOCK_ACQUISITION_FAILED`(제재 적용이 매칭 취소를 거치며 조건 행을 잠근다)
 
 게이트: ③ ADMIN · ② ✓
 
@@ -1717,7 +1757,7 @@ UPDATE session_participant
 2. 진행 중 `session_participant` → `LEFT`, `left_reason=SANCTION` + LiveKit `RemoveParticipant`
 3. 활성 `WAITING` 매칭 요청 → `CANCELLED` + `active_member_id=NULL`
 
-발생 에러: 400 `VALIDATION_FAILED`(`type`·`days` 조합 위반, 없는 `memberId`, 없는 `caseId`) / 403 `FORBIDDEN_ROLE`
+발생 에러: 400 `VALIDATION_FAILED`(`type`·`days` 조합 위반, 없는 `memberId`, 없는 `caseId`) / 403 `FORBIDDEN_ROLE` / 503 `LOCK_ACQUISITION_FAILED`(3단계 매칭 취소가 조건 행을 잠근다 — AD-3과 같은 메서드다)
 
 **없는 회원·없는 케이스도 404가 아니라 400이다.** 이 API의 자원은 새로 만드는 제재이지 경로에 적힌 회원이 아니고, 관리자 콘솔이 회원 번호를 훑어 존재 여부를 알아내는 경로를 만들지 않는다.
 
@@ -1760,6 +1800,10 @@ UPDATE session_participant
 {"decision": "ACCEPTED", "note": "자리비움 이벤트 로그상 카메라 각도 문제로 확인. 퇴출 취소."}
 ```
 
+`decision`은 `ACCEPTED`·`REJECTED`만 받는다(§0-4 — `CLOSED`는 B4 전용이라 요청으로 고를 수 없다). `note`는 최대 1000자이고 초과 400 `VALIDATION_FAILED`다.
+
+**본문 형태 검사가 이의 조회보다 먼저다.** 없는 `appealId`에 잘못된 `decision`을 보내면 404가 아니라 400이 나간다 — 형태가 틀린 요청은 대상이 무엇이든 처리할 수 없고, 조회를 먼저 하면 관리자 콘솔이 아무 본문이나 실어 이의 번호의 존재 여부를 훑을 수 있다.
+
 위 `note` 예시 같은 판단이 성립하려면 심사 재료의 조회가 선행이다 — 당사자 진술과 경고별 근거 구간은 AD-9가 내린다.
 
 응답 200
@@ -1776,7 +1820,7 @@ UPDATE session_participant
 }
 ```
 
-발생 에러: 404 `APPEAL_NOT_FOUND` / 409 `ALREADY_PROCESSED` / 409 `SESSION_NOT_ENDED`(진행 중 세션의 인용) / 400 `VALIDATION_FAILED` / 403 `FORBIDDEN_ROLE`
+발생 에러: 404 `APPEAL_NOT_FOUND` / 409 `ALREADY_PROCESSED`(이미 종결 — 파기로 `CLOSED`가 된 건도 여기에 걸린다) / 409 `APPEAL_MEMBER_PURGED`(신청자 계정이 파기됨) / 409 `SESSION_NOT_ENDED`(진행 중 세션의 인용) / 400 `VALIDATION_FAILED` / 403 `FORBIDDEN_ROLE`
 
 게이트: ③ ADMIN · ② ✓
 
@@ -1792,6 +1836,8 @@ UPDATE session_participant
 - 재매칭 쿨다운은 이 시점부터 해제된다
 
 `REJECTED`면 상태와 `note`만 기록하고 원복은 일어나지 않는다.
+
+**파기된 계정의 이의는 인용도 기각도 하지 않는다.** B4 탈퇴 파기가 그 회원의 PENDING 이의를 `CLOSED`(`decided_by=SYSTEM`)로 함께 종결하므로 정상 순서에서는 큐에 나타나지 않고, 그래도 도달한 요청은 409로 끊는다. 이유는 둘이다. ① 인용의 완주 소급이 `streak_day`를 INSERT해 방금 파기한 개인 기록을 되살린다 — 실측에서 `status='DELETED'`인 회원에게 완주일과 연속 일수가 되살아났다. ② 파기가 `warning`·`absence_event`를 지운 뒤라 인용·기각 어느 쪽도 근거를 보고 내린 판단이 아니다. 포인트 환급만 남겨 반쪽으로 성립시키지도 않는다 — 근거 없이 남긴 환급은 원장을 더 부정확하게 만들고, `DELETED` 계정은 로그인 경로가 없어 되돌려 준 잔액을 쓸 수도 없다. 자세한 근거는 db-schema '파기·보존 정책'에 있다.
 
 ### AD-7 진행 중 세션 모니터
 
@@ -1874,6 +1920,8 @@ UPDATE session_participant
 - `concurrentReporterCount`: 같은 구간에 미검출을 보고한 **다른** 참가자 수. 여럿이 몰렸으면 개인의 이석이 아니라 조명·회선 같은 공통 원인을 의심할 수 있다. **집계 수치만 내린다** — 명단을 실으면 이의 심사가 같은 세션 참가자들의 행동 기록을 열람하는 경로가 된다. 분모는 `sessionParticipantCount`다
 - 영상은 저장하지 않으므로(D17) "실제로 자리에 있었는가"를 확정하는 필드는 없다. 이 응답이 주는 것은 개연성 판단의 재료다 — 구간이 임계에 얼마나 근접했는지(65초와 30분은 다르다), 시각이 얼마나 벌어졌는지, 같은 시간대에 몇 명이 겹쳤는지
 
+`warnings`가 빈 배열인데 `eviction.warningCount`가 0이 아니면 **신청자 계정이 파기된 건이다**(B4가 `warning`·`absence_event`를 지운다). 이런 이의는 파기와 함께 `status=CLOSED`로 종결되므로 심사 대상이 아니고, 종결 사유는 `note`에 있다. 퇴출 시점 경고 수는 `eviction`의 스냅샷이라 그대로 남는다.
+
 발생 에러: 404 `APPEAL_NOT_FOUND` / 403 `FORBIDDEN_ROLE`
 
 게이트: ③ ADMIN · ② ✓
@@ -1885,7 +1933,7 @@ UPDATE session_participant
 활성 조건: `@Profile("dev")` AND `morak.dev.enabled=true` (이중 스위치). 운영 프로필에서는 빈이 등록되지 않아 404 `ENDPOINT_NOT_FOUND`.
 
 - **DEV-2** `POST /api/dev/clock` · `{"offsetMinutes": 1440}` → 가변 Clock 오프셋 설정. Streak 일 경계 테스트에 쓴다. `fixedAt`·`offsetMinutes`·`reset` 중 정확히 하나만 받으며 둘 이상이면 400. **`fixedAt`은 오프셋 없는 LocalDateTime**(`"2026-09-15T00:00:00"`)이다 — `+09:00`을 붙이면 역직렬화가 깨져 400이다(서버 타임존이 이미 `morak.timezone`이라 오프셋을 받을 이유가 없다). `GET /api/dev/clock`은 현재 모드(`SYSTEM`·`FIXED`·`OFFSET`)·오프셋·서버 시각을 돌려준다
-- **DEV-3** `POST /api/dev/sessions/seed` · `{"memberId": 1042, "dates": ["2026-08-08", "2026-08-09", "2026-08-10"]}` → 해당 일자에 완주한 `live_session`(ENDED) + `session_participant`(completed=true) + `streak_day`를 만든다. 구 `POST /api/dev/proofs/seed`의 대체다
+- **DEV-3** `POST /api/dev/sessions/seed` · `{"memberId": 1042, "dates": ["2026-08-08", "2026-08-09", "2026-08-10"], "targetMinutes": 120}` → 해당 일자에 완주한 `live_session`(ENDED) + `session_participant`(completed=true) + `streak_day`를 만든다. `targetMinutes`는 생략 가능하고 기본 60이며, `morak.match.target-minutes-options` 중 하나가 아니면 400이다 — 완주 지급액이 이 값에서 나오므로 대기열에 없는 길이를 시드하면 포인트가 실제로 나올 수 없는 값이 된다. 구 `POST /api/dev/proofs/seed`의 대체다
 - **DEV-4** `POST /api/dev/batches/{B1|B2|B4|B5}` → 해당 배치 즉시 실행. B3(SLA 마킹)은 폐지되어 트리거 대상이 아니다. 응답은 `{"batch": "B2", "processed": 2}`(처리 건수 — 게이트 실측용, 개발 전용이라 공개 계약 아님). 없는 배치 이름은 404
 
 **DEV-2 시계 조작 주의 2건** (3차 검증 B 실측)
@@ -1976,7 +2024,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 매칭 | **ALREADY_IN_ACTIVE_SESSION** | 409 | MT-1 | 활성 세션 참가 중. `details.sessionId`에 그 세션 번호 |
 | 매칭 | NO_ACTIVE_MATCH_REQUEST | 404 | MT-2, MT-3 | 요청 이력이 전무함(MT-2) / 없는 요청 id(MT-3) |
 | 매칭 | ALREADY_MATCHED | 409 | MT-3 | 이미 성사 |
-| 매칭 | LOCK_ACQUISITION_FAILED | 503 | 잠금을 잡는 전 경로 (실측: MT-1·MT-3·AU-7·SS-4·SS-5·SS-6·SS-7. 배치 B1·B2는 건너뛰고 다음 회차 회수) | 잠금 타임아웃. 상태를 바꾸지 않아 재시도 안전 |
+| 매칭 | LOCK_ACQUISITION_FAILED | 503 | 잠금을 잡는 전 경로 (실측: MT-1·MT-3·AU-4·AU-7·SS-4·SS-5·SS-6·SS-7·AD-3·AD-4. 배치 B1·B2는 건너뛰고 다음 회차 회수) | 잠금 타임아웃. 상태를 바꾸지 않아 재시도 안전 |
 | 매칭 | **REMATCH_COOLDOWN** | 409 | MT-1 | 퇴출 후 30분 미경과 (D14) |
 | 세션 | **SESSION_NOT_FOUND** | 404 | SS-1~8 | 없는 세션 |
 | 세션 | **NOT_SESSION_PARTICIPANT** | 403 | SS-1~8, RP-1 | 참가 이력이 없거나, 본인이 이미 `LEFT`로 나간 세션의 참여 API(SS-2~7) |
@@ -1987,7 +2035,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 세션 | CONSENT_REQUIRED | 403 | SS-2 | 캠 영상 온디바이스 분석 미동의 |
 | 세션 | **DUPLICATE_ABSENCE_EVENT** | 409 | SS-4 | 같은 `clientSeq` 재수신 |
 | 세션 | **ABSENCE_RATE_LIMITED** | 429 | SS-4 | 이벤트 보고 레이트리밋 초과 |
-| 세션 | **ALREADY_EVICTED** | 409 | SS-2, SS-4, SS-5 | 이미 퇴출된 참가자 |
+| 세션 | **ALREADY_EVICTED** | 409 | SS-2, SS-3, SS-4, SS-5, SS-7 | 이미 퇴출된 참가자 |
 | 세션 | **PAUSE_ALREADY_USED** | 409 | SS-5 | 세션당 1회 초과 |
 | 세션 | **PAUSE_NOT_ACTIVE** | 409 | SS-6 | Pause 상태가 아님 |
 | 세션 | **INVALID_WEBHOOK_SIGNATURE** | 401 | SS-10, PY-3 | 웹훅 서명 불일치 |
@@ -2006,6 +2054,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 | 신고·운영 | **APPEAL_ALREADY_FILED** | 409 | AP-1 | 퇴출 1건당 1회 초과 |
 | 신고·운영 | **APPEAL_DEADLINE_PASSED** | 409 | AP-1 | 퇴출 시각부터 3일 초과 |
 | 신고·운영 | **APPEAL_NOT_FOUND** | 404 | AD-6, AD-9 | 없는 이의 |
+| 신고·운영 | **APPEAL_MEMBER_PURGED** | 409 | AD-6 | 신청자 계정이 파기되어 심사 근거가 없다. 정상 경로에서는 B4가 이미 `CLOSED`로 거둬 `ALREADY_PROCESSED`가 먼저 나고, 이 코드는 파기와 처리가 겹친 순간에만 나온다 |
 
 굵은 코드는 v2.0 신설 또는 개명이다.
 
@@ -2046,7 +2095,7 @@ NFR-302의 SLA 준수율 집계(95% 이상)는 보류다. 큐와 `sla_due_at`은
 
 **신설**
 
-METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_REQUIRED, GOAL_ALREADY_ACTIVE, REMATCH_COOLDOWN, DUPLICATE_ABSENCE_EVENT, ABSENCE_RATE_LIMITED, ALREADY_EVICTED, PAUSE_ALREADY_USED, PAUSE_NOT_ACTIVE, INVALID_WEBHOOK_SIGNATURE, INSUFFICIENT_POINT, PRODUCT_NOT_FOUND, OUT_OF_STOCK, DUPLICATE_ORDER, ORDER_NOT_FOUND, CHARGE_NOT_FOUND, PAYMENT_AMOUNT_MISMATCH, PAYMENT_NOT_APPROVED, APPEAL_ALREADY_FILED, APPEAL_DEADLINE_PASSED, APPEAL_NOT_FOUND
+METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, UNDER_AGE_SIGNUP_BLOCKED, AGREEMENT_REQUIRED, GOAL_ALREADY_ACTIVE, REMATCH_COOLDOWN, DUPLICATE_ABSENCE_EVENT, ABSENCE_RATE_LIMITED, ALREADY_EVICTED, PAUSE_ALREADY_USED, PAUSE_NOT_ACTIVE, INVALID_WEBHOOK_SIGNATURE, INSUFFICIENT_POINT, PRODUCT_NOT_FOUND, OUT_OF_STOCK, DUPLICATE_ORDER, ORDER_NOT_FOUND, CHARGE_NOT_FOUND, PAYMENT_AMOUNT_MISMATCH, PAYMENT_NOT_APPROVED, APPEAL_ALREADY_FILED, APPEAL_DEADLINE_PASSED, APPEAL_NOT_FOUND, APPEAL_MEMBER_PURGED
 
 신설분은 바로 위 목록이 전부이고, 전체 코드는 §6-1 표의 행 수가 정본이다. `METHOD_NOT_ALLOWED`·`UNSUPPORTED_MEDIA_TYPE`은 3부-A 이후에 추가했다 — 잡지 않으면 전역 `Exception` 핸들러가 500으로 덮어, 프론트가 잘못 부른 요청을 서버 장애로 읽고 재시도한다.
 

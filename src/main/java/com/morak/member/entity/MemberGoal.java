@@ -58,6 +58,16 @@ public class MemberGoal {
     @Column(name = "achieved_at")
     private LocalDateTime achievedAt;
 
+    /**
+     * 목표를 채운 세션. SS-8의 {@code goalAchieved}가 읽는 유일한 근거다.
+     *
+     * <p>예전에는 이 컬럼 없이 {@code achievedAt == session.ended_at} 동등 비교로 답했다.
+     * 달성 시각에 세션 종료 시각을 그대로 실었기 때문인데, 쓰는 값과 읽는 식이 갈라져 있어
+     * 달성 시각을 다르게 넣는 경로가 하나 생기자 조용히 false가 됐다(소급 인용).
+     */
+    @Column(name = "achieved_session_id")
+    private Long achievedSessionId;
+
     private MemberGoal(Long memberId, int periodDays, LocalDate startedOn) {
         this.memberId = memberId;
         this.periodDays = periodDays;
@@ -72,12 +82,13 @@ public class MemberGoal {
     /**
      * 목표 달성(B1). 달성한 목표는 다시 ACTIVE가 되지 않는다 — 재도전은 새 행이다.
      */
-    public void achieve(LocalDateTime achievedAt) {
+    public void achieve(LocalDateTime achievedAt, Long achievedSessionId) {
         if (this.status != GoalStatus.ACTIVE) {
             throw new IllegalStateException("진행 중인 목표가 아니다: " + this.status);
         }
         this.status = GoalStatus.ACHIEVED;
         this.achievedAt = achievedAt;
+        this.achievedSessionId = achievedSessionId;
     }
 
     public void cancel() {

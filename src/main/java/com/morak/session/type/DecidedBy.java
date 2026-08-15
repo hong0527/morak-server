@@ -10,5 +10,7 @@ package com.morak.session.type;
  */
 public enum DecidedBy {
     AI,
-    ADMIN
+    ADMIN,
+    /** 사람의 판단이 아니라 배치가 종결시킨 것(B4의 파기 회원 이의). {@code CLOSED}와만 짝이다. */
+    SYSTEM
 }

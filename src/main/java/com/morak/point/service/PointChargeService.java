@@ -282,7 +282,7 @@ public class PointChargeService {
         // 멱등키는 그 스냅샷과 무관하게 답하므로 여기가 실제 판정 자리다.
         Long chargeId = charge.getId();
         boolean awarded = pointService.award(charge.getMemberId(), charge.getPointAmount(),
-                PointReason.CHARGE, chargeId, now);
+                PointReason.CHARGE, chargeId);
         if (!awarded) {
             // 이미 같은 근거로 적립된 건이다. approve()를 부르면 실제로 적립을 만든 거래
             // 식별자를 이번 요청의 pgTid가 덮어써 대사할 재료가 사라진다.

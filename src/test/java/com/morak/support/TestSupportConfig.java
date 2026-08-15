@@ -1,6 +1,7 @@
 package com.morak.support;
 
 import com.morak.auth.service.AuthService;
+import com.morak.common.security.JwtProvider;
 import com.morak.member.repository.MemberRepository;
 import com.morak.session.repository.EvictionRepository;
 import com.morak.session.repository.LiveSessionRepository;
@@ -30,12 +31,19 @@ public class TestSupportConfig {
     }
 
     @Bean
+    public PaymentWebhookSigner paymentWebhookSigner(
+            @Value("${morak.pg.secret-key}") String secretKey) {
+        return new PaymentWebhookSigner(secretKey);
+    }
+
+    @Bean
     public DatabaseCleaner databaseCleaner(JdbcTemplate jdbcTemplate) {
         return new DatabaseCleaner(jdbcTemplate);
     }
 
     @Bean
     public TestFixtures testFixtures(AuthService authService,
+                                     JwtProvider jwtProvider,
                                      MemberRepository memberRepository,
                                      LiveSessionRepository liveSessionRepository,
                                      SessionParticipantRepository sessionParticipantRepository,
@@ -43,7 +51,7 @@ public class TestSupportConfig {
                                      ProductRepository productRepository,
                                      PlatformTransactionManager transactionManager,
                                      JdbcTemplate jdbcTemplate) {
-        return new TestFixtures(authService, memberRepository, liveSessionRepository,
+        return new TestFixtures(authService, jwtProvider, memberRepository, liveSessionRepository,
                 sessionParticipantRepository, evictionRepository, productRepository,
                 transactionManager, jdbcTemplate);
     }

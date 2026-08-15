@@ -198,7 +198,7 @@ public class SessionClosingService {
 
         List<Long> completerIds = presentParticipantIds(sessionId);
         for (Long participantId : completerIds) {
-            settleCompletion(participantId, sessionId, targetMinutes, endedAt, completedOn, false);
+            settleCompletion(participantId, sessionId, targetMinutes, completedOn, false);
         }
         log.info("세션 종료 처리: session={}, reason={}, 완주 {}명",
                 sessionId, reason, completerIds.size());
@@ -224,7 +224,7 @@ public class SessionClosingService {
             throw new IllegalStateException("참가자의 세션이 없다: participant=" + participantId);
         }
         settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
-                session.getEndedAt(), completionDate(session), false);
+                completionDate(session), false);
         return 1;
     }
 
@@ -260,7 +260,7 @@ public class SessionClosingService {
             return false;
         }
         settleCompletion(participantId, session.getId(), session.getTargetMinutes(),
-                session.getEndedAt(), completionDate(session), true);
+                completionDate(session), true);
         return true;
     }
 
@@ -279,7 +279,7 @@ public class SessionClosingService {
             return 0;
         }
         boolean settled = pointService.award(eviction.getMemberId(), -eviction.getPointPenalty(),
-                PointReason.EVICTION_PENALTY, eviction.getId(), eviction.getCreatedAt());
+                PointReason.EVICTION_PENALTY, eviction.getId());
         return settled ? 1 : 0;
     }
 
@@ -302,20 +302,24 @@ public class SessionClosingService {
      * 조기 종료로 30분 만에 끝난 60분 세션도 남아 있던 사람에게는 +100이다 — 세션이 일찍
      * 끝난 것은 남은 사람의 책임이 아니다.
      *
+     * <p><b>완주가 어느 날로 집계되는가({@code completedOn})와 원장에 몇 시에 적히는가는 다른
+     * 질문이다.</b> 앞엣것만 세션에서 온다. 뒤엣것은 {@link PointService}가 자기 시계로 정한다 —
+     * 여기서 세션 종료 시각을 넘기던 때, 이의 인용으로 이틀 전 완주를 소급 지급하면 원장 줄만
+     * 이틀 전 시각으로 들어가 같은 트랜잭션의 환급과 시각이 갈렸다.
+     *
      * @param backfilled 이미 지나간 날의 완주를 뒤늦게 세우는가(AD-6 인용). Streak 캐시를
      *                   증분이 아니라 재계산으로 갱신해야 하는 유일한 차이다
      */
     private void settleCompletion(Long participantId, Long sessionId, int targetMinutes,
-                                  LocalDateTime endedAt, LocalDate completedOn,
-                                  boolean backfilled) {
+                                  LocalDate completedOn, boolean backfilled) {
         Long memberId = loadParticipant(participantId).getMemberId();
         int amount = completePointPerHour * targetMinutes / MINUTES_PER_HOUR;
-        pointService.award(memberId, amount, PointReason.SESSION_COMPLETE, participantId, endedAt);
+        pointService.award(memberId, amount, PointReason.SESSION_COMPLETE, participantId);
         loadParticipant(participantId).complete(amount);
         if (backfilled) {
-            streakService.recordBackfilledCompletion(memberId, completedOn, sessionId, endedAt);
+            streakService.recordBackfilledCompletion(memberId, completedOn, sessionId);
         } else {
-            streakService.recordCompletion(memberId, completedOn, sessionId, endedAt);
+            streakService.recordCompletion(memberId, completedOn, sessionId);
         }
     }
 
