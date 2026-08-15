@@ -68,8 +68,8 @@ public class AbsenceJudgeService {
     private final WarningRepository warningRepository;
     private final EvictionService evictionService;
     private final SessionClosingService closingService;
+    private final AbsenceWarningPolicy warningPolicy;
     private final Clock clock;
-    private final int thresholdSeconds;
     private final int minIntervalSeconds;
 
     public AbsenceJudgeService(LiveSessionRepository liveSessionRepository,
@@ -78,9 +78,8 @@ public class AbsenceJudgeService {
                                WarningRepository warningRepository,
                                EvictionService evictionService,
                                SessionClosingService closingService,
+                               AbsenceWarningPolicy warningPolicy,
                                Clock clock,
-                               @Value("${morak.session.absence-threshold-seconds}")
-                               int thresholdSeconds,
                                @Value("${morak.session.absence-min-interval-seconds}")
                                int minIntervalSeconds) {
         this.liveSessionRepository = liveSessionRepository;
@@ -89,8 +88,8 @@ public class AbsenceJudgeService {
         this.warningRepository = warningRepository;
         this.evictionService = evictionService;
         this.closingService = closingService;
+        this.warningPolicy = warningPolicy;
         this.clock = clock;
-        this.thresholdSeconds = thresholdSeconds;
         this.minIntervalSeconds = minIntervalSeconds;
     }
 
@@ -135,13 +134,14 @@ public class AbsenceJudgeService {
                     evictionService.getPointPenalty(), null);
         }
         long absentSeconds = absentSeconds(previous.getOccurredAt(), occurredAt, session);
-        if (absentSeconds <= thresholdSeconds) {
+        int warnings = warningPolicy.warningCountFor(absentSeconds);
+        if (warnings == 0) {
             // 경고가 없어도 닫힌 구간의 초는 내린다 — 임계에 얼마나 가까웠는지를 보여 줘야
             // 사용자가 다음 자리비움을 조절할 수 있다(SS-5의 closedAbsenceSeconds와 같은 계약)
             return AbsenceEventResponse.of(participant.getWarningCount(), null,
                     evictionService.getPointPenalty(), absentSeconds);
         }
-        return warn(sessionId, participant, event, absentSeconds, now);
+        return warn(sessionId, participant, event, absentSeconds, warnings, now);
     }
 
     /**
@@ -175,12 +175,13 @@ public class AbsenceJudgeService {
                 sessionId, participant.getMemberId(), AbsenceEventType.END,
                 PAUSE_BOUNDARY_CLIENT_SEQ, at, at));
         long absentSeconds = absentSeconds(last.getOccurredAt(), at, session);
-        if (absentSeconds <= thresholdSeconds) {
+        int warnings = warningPolicy.warningCountFor(absentSeconds);
+        if (warnings == 0) {
             return new PauseClosure(absentSeconds, false);
         }
         log.info("Pause 시작으로 자리비움 구간 마감: session={}, member={}, 지속 {}초",
                 sessionId, participant.getMemberId(), absentSeconds);
-        warn(sessionId, participant, closing, absentSeconds, at);
+        warn(sessionId, participant, closing, absentSeconds, warnings, at);
         return new PauseClosure(absentSeconds, true);
     }
 
@@ -333,13 +334,20 @@ public class AbsenceJudgeService {
      * 남은 인원이 최소 미만이면 그 자리에서 세션이 끝나야 한다(D12).
      */
     private AbsenceEventResponse warn(Long sessionId, SessionParticipant participant,
-                                      AbsenceEvent event, long absentSeconds, LocalDateTime now) {
-        int seq = participant.addWarning();
-        warningRepository.save(Warning.fromAbsence(
-                sessionId, participant.getMemberId(), seq, event.getId(), now));
-        log.info("자리비움 경고: session={}, member={}, seq={}, 지속 {}초",
-                sessionId, participant.getMemberId(), seq, absentSeconds);
-        Eviction eviction = evictionService.evictIfWarningLimitReached(sessionId, participant, now);
+                                      AbsenceEvent event, long absentSeconds, int warnings,
+                                      LocalDateTime now) {
+        Eviction eviction = null;
+        // 한 번에 여러 회가 붙을 수 있다(구간이 길수록 많다). 한 회씩 올리고 매번 물어보는
+        // 것은 퇴출 판정이 EvictionService 하나뿐이기 때문이다 — 여기서 미리 세어 건너뛰면
+        // 임계값을 아는 자리가 둘이 된다. 퇴출되면 그 자리에서 멈춰 상한을 넘겨 쌓지 않는다.
+        for (int i = 0; i < warnings && eviction == null; i += 1) {
+            int seq = participant.addWarning();
+            warningRepository.save(Warning.fromAbsence(
+                    sessionId, participant.getMemberId(), seq, event.getId(), now));
+            log.info("자리비움 경고: session={}, member={}, seq={}, 지속 {}초",
+                    sessionId, participant.getMemberId(), seq, absentSeconds);
+            eviction = evictionService.evictIfWarningLimitReached(sessionId, participant, now);
+        }
         if (eviction != null) {
             closingService.closeIfUnderMinimum(sessionId, now);
         }

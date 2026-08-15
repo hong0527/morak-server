@@ -96,7 +96,7 @@ public class SessionClosingService {
     private final ReconnectGraceRegistry graceRegistry;
     private final PointService pointService;
     private final StreakService streakService;
-    private final int absenceThresholdSeconds;
+    private final AbsenceWarningPolicy warningPolicy;
     private final int pauseLimitSeconds;
     private final int minParticipants;
     private final int completePointPerHour;
@@ -107,11 +107,10 @@ public class SessionClosingService {
                                  WarningRepository warningRepository,
                                  EvictionRepository evictionRepository,
                                  EvictionService evictionService,
+                                 AbsenceWarningPolicy warningPolicy,
                                  ReconnectGraceRegistry graceRegistry,
                                  PointService pointService,
                                  StreakService streakService,
-                                 @Value("${morak.session.absence-threshold-seconds}")
-                                 int absenceThresholdSeconds,
                                  @Value("${morak.session.pause-limit-minutes}")
                                  int pauseLimitMinutes,
                                  @Value("${morak.session.min-participants}")
@@ -124,10 +123,10 @@ public class SessionClosingService {
         this.warningRepository = warningRepository;
         this.evictionRepository = evictionRepository;
         this.evictionService = evictionService;
+        this.warningPolicy = warningPolicy;
         this.graceRegistry = graceRegistry;
         this.pointService = pointService;
         this.streakService = streakService;
-        this.absenceThresholdSeconds = absenceThresholdSeconds;
         this.pauseLimitSeconds = pauseLimitMinutes * SECONDS_PER_MINUTE;
         this.minParticipants = minParticipants;
         this.completePointPerHour = completePointPerHour;
@@ -400,10 +399,15 @@ public class SessionClosingService {
         }
         log.info("미복귀 Pause 정산: session={}, member={}, 경과 {}초",
                 sessionId, participant.getMemberId(), elapsedSeconds);
-        warn(sessionId, participant, null, endedAt);
+        warn(sessionId, participant, null, 1, endedAt);
     }
 
-    /** 짝 없는 자리비움 START. 세션 종료 시각을 END로 간주해 SS-4와 같은 임계로 판정한다. */
+    /**
+     * 짝 없는 자리비움 START. 세션 종료 시각을 END로 간주해 <b>SS-4와 같은 규칙으로</b>
+     * 판정한다. 길이에 따라 여러 회가 될 수 있고, 그 계산은
+     * {@link AbsenceWarningPolicy} 한 곳에만 있다 — 여기서 따로 세면 같은 자리비움이
+     * 도착 경로에 따라 다르게 판정된다.
+     */
     private void settleUnclosedAbsence(Long sessionId, SessionParticipant participant,
                                        LocalDateTime endedAt) {
         AbsenceEvent last = absenceEventRepository
@@ -413,12 +417,13 @@ public class SessionClosingService {
             return;
         }
         long absentSeconds = Duration.between(last.getOccurredAt(), endedAt).getSeconds();
-        if (absentSeconds <= absenceThresholdSeconds) {
+        int warnings = warningPolicy.warningCountFor(absentSeconds);
+        if (warnings == 0) {
             return;
         }
-        log.info("미종료 자리비움 정산: session={}, member={}, 지속 {}초",
-                sessionId, participant.getMemberId(), absentSeconds);
-        warn(sessionId, participant, last.getId(), endedAt);
+        log.info("미종료 자리비움 정산: session={}, member={}, 지속 {}초, 경고 {}회",
+                sessionId, participant.getMemberId(), absentSeconds, warnings);
+        warn(sessionId, participant, last.getId(), warnings, endedAt);
     }
 
     /**
@@ -429,12 +434,17 @@ public class SessionClosingService {
      * ENDED로 표시한 세션의 정산 중에만 불리므로 다시 닫을 세션이 없다.
      */
     private void warn(Long sessionId, SessionParticipant participant, Long absenceEventId,
-                      LocalDateTime at) {
-        int seq = participant.addWarning();
+                      int warnings, LocalDateTime at) {
         Long memberId = participant.getMemberId();
-        warningRepository.save(absenceEventId == null
-                ? Warning.fromPauseOverrun(sessionId, memberId, seq, at)
-                : Warning.fromUnclosedAbsence(sessionId, memberId, seq, absenceEventId, at));
-        evictionService.evictIfWarningLimitReached(sessionId, participant, at);
+        // 자리비움은 길이에 따라 여러 회다. 퇴출되면 그 자리에서 멈춰 상한을 넘겨 쌓지 않는다.
+        for (int i = 0; i < warnings; i += 1) {
+            int seq = participant.addWarning();
+            warningRepository.save(absenceEventId == null
+                    ? Warning.fromPauseOverrun(sessionId, memberId, seq, at)
+                    : Warning.fromUnclosedAbsence(sessionId, memberId, seq, absenceEventId, at));
+            if (evictionService.evictIfWarningLimitReached(sessionId, participant, at) != null) {
+                return;
+            }
+        }
     }
 }

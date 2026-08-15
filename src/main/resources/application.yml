@@ -59,6 +59,9 @@ morak:
   session:
     absence-threshold-seconds: 60    # [팀 확정 대기] 경고 부여 임계 (★D4)
     absence-min-interval-seconds: 5  # [팀 확정 대기] SS-4 이벤트 최소 간격. 미만이면 429
+    # [팀 확정 대기] 첫 경고 뒤 추가 경고가 붙는 눈금. 임계와 같게 두면 3분 남짓 한 번에
+    # 곧바로 퇴출이라, 한 구간만으로 퇴출되는 지점을 화장실 상한(10분) 뒤로 밀어 둔다
+    absence-warning-escalation-seconds: 300
     evict-warning-count: 3           # 퇴출 누적 경고 수
     reconnect-grace-seconds: 90      # 재접속 유예 (D13)
     pause-limit-minutes: 10          # 화장실 모드 상한 (D9)

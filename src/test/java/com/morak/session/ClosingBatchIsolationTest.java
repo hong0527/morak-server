@@ -100,7 +100,10 @@ class ClosingBatchIsolationTest extends IntegrationTest {
      * 채워 {@code uk_warning}에 부딪히게 한다. 종료 트랜잭션은 통째로 롤백된다.
      */
     private void blockSettlementWith(Long sessionId, Long memberId) {
-        LocalDateTime startedAt = BASE_TIME.plusMinutes(1);
+        // 자리비움을 **경고 1회짜리 길이로** 만든다. 정산이 경고를 쓰게만 하면 되는데, 길게
+        // 잡으면 길이에 비례해 경고가 쌓여(AbsenceWarningPolicy) 그 참가자가 퇴출되고
+        // 완주 인원이 줄어든다 — 이 테스트가 보려는 것은 배치 격리이지 자리비움 판정이 아니다.
+        LocalDateTime startedAt = BASE_TIME.plusMinutes(TARGET_MINUTES - 2L);
         clock.fixAt(startedAt);
         absenceJudgeService.report(memberId, sessionId, new AbsenceEventRequest(
                 AbsenceEventType.START, 0L, startedAt.atZone(clock.getZone()).toOffsetDateTime()));
