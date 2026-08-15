@@ -904,7 +904,7 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 
 `closedAbsenceSeconds`는 이 보고로 닫힌 자리비움 구간의 지속 초다. 닫힌 구간이 없으면(START 보고, 짝 없는 END) `null`이다. 경고가 붙는 순간 몇 초로 판정됐는지 당사자가 즉시 알아야 하고, 임계 이하로 닫혀 경고가 없을 때도 값을 내린다 — 임계에 얼마나 가까웠는지가 다음 자리비움을 조절할 근거다. 이름·형태는 SS-5의 같은 필드와 같다.
 
-발생 에러: 400 `VALIDATION_FAILED`(`occurredAt`이 [세션 시작 −5초, 현재 +5초]를 벗어남) / 409 `DUPLICATE_ABSENCE_EVENT`(같은 `clientSeq` 재수신 — 서버 상태는 바뀌지 않으므로 클라이언트는 정상 종료로 취급한다) / 429 `ABSENCE_RATE_LIMITED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
+발생 에러: 400 `VALIDATION_FAILED`(`occurredAt`이 [세션 시작 −5초, 현재 +5초]를 벗어남, `clientSeq`가 음수) / 409 `DUPLICATE_ABSENCE_EVENT`(같은 `clientSeq` 재수신 — 서버 상태는 바뀌지 않으므로 클라이언트는 정상 종료로 취급한다) / 429 `ABSENCE_RATE_LIMITED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
 
 검사 순서: 세션 존재(404) → **참가 자격(403)** → 세션 상태(409) → 참가자 상태(409 `ALREADY_EVICTED`) → 시각 검증(400) → 재전송(409) → 레이트리밋(429). 참가 자격이 세션 상태보다 먼저다(§0-3) — 뒤집으면 참가자가 아닌 사람이 세션 번호를 훑어 남의 세션이 끝났는지를 알 수 있다.
 

@@ -928,9 +928,12 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 | ReportStatus | PENDING, RESOLVED, REJECTED, SANCTIONED | report_case.status, report_history.status |
 | SanctionType | TEMP, PERMANENT | sanction.type |
 | DecidedBy | AI, ADMIN, SYSTEM | appeal_case.decided_by. SYSTEM은 B4가 종결한 CLOSED와만 짝이다 |
+| WarningBasis | ABSENCE, PAUSE_OVERRUN | SS-8·AD-9 응답 전용. **저장 컬럼 없음** — `warning.absence_event_id`가 NULL인지로 파생한다 |
 | StickerType | CLAP, MUSCLE, FIRE | SS-11 응답 전용. **저장 테이블 없음** |
 
 `LeftReason`에 EVICTED가 없는 것은 의도다. 퇴출은 사유가 아니라 상태이므로 `ParticipantStatus.EVICTED`로만 표현한다. 두 곳에 두면 "자율 퇴장인데 사유가 퇴출"인 행이 만들어진다.
+
+`WarningBasis`도 컬럼으로 두지 않는다. 경고가 자리비움에서 왔는지 화장실 모드 초과에서 왔는지는 `warning.absence_event_id`가 채워졌는지로 이미 결정되어 있고, 별도 컬럼을 두면 두 값이 어긋난 행을 만들 수 있다. 응답을 만들 때 파생한다.
 
 `StickerType`은 SS-11 목록 응답에만 쓴다. 스티커 전송은 LiveKit 데이터 채널로 클라이언트 간에 오가고 서버는 저장하지 않는다(D17). 구 스키마의 `sticker_reaction`이 사라진 이유다.
 

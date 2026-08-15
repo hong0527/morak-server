@@ -1,5 +1,6 @@
 package com.morak.support;
 
+import tools.jackson.databind.ObjectMapper;
 import com.morak.auth.service.AuthService;
 import com.morak.common.security.JwtProvider;
 import com.morak.member.repository.MemberRepository;
@@ -11,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
@@ -28,6 +30,11 @@ public class TestSupportConfig {
             @Value("${morak.livekit.api-key}") String apiKey,
             @Value("${morak.livekit.api-secret}") String apiSecret) {
         return new LiveKitWebhookSigner(apiKey, apiSecret);
+    }
+
+    @Bean
+    public ApiClient apiClient(MockMvc mockMvc, ObjectMapper objectMapper) {
+        return new ApiClient(mockMvc, objectMapper);
     }
 
     @Bean

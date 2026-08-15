@@ -1,8 +1,26 @@
 # MoLock 서버 배포 안내
 
-운영 프로필(`prod`)로 실제 서버에 올리는 절차다. 이 문서의 명령과 확인 절차는 MySQL 8.4.11 + JDK 21/24 조합에서 실제로 실행해 확인한 것이다.
+운영 프로필(`prod`)로 실제 서버에 올리는 절차다. 이 문서의 명령과 수치는 배포 대상과 같은 제약(2 vCore / 메모리 4GB / 리눅스)을 로컬에 걸어 실제로 실행해 얻은 것이다. 추정값에는 그렇다고 표시했다.
 
 정본 참조: 스키마는 `docs/db-schema.md`, API 계약은 `docs/api-spec.md`.
+
+---
+
+## 0. 배포 대상
+
+부트캠프가 제공하는 가비아 클라우드 서버 1대다.
+
+| 항목 | 값 |
+|---|---|
+| CPU | 2 vCore (High CPU) |
+| 메모리 | 4GB |
+| 공인 IP | 1개 |
+| 트래픽 | 무료 1TB |
+| 사용 기간 | **8/18(화) ~ 8/28(금), 10일** |
+
+**8/28에 서버가 일괄 삭제된다.** 그 안에 있는 데이터는 함께 사라지므로 §9 백업이 선택 사항이 아니다.
+
+한 대에 API 서버·MySQL·프론트가 모두 올라간다. 사양을 올리면 과금되므로 아래 설정은 전부 4GB 안에서 끝나도록 잡았다.
 
 ---
 
@@ -10,27 +28,55 @@
 
 | 항목 | 요구 | 비고 |
 |---|---|---|
-| 빌드 JDK | 21 | `build.gradle`의 툴체인이 21로 고정돼 있다. 다른 버전으로는 빌드가 21을 찾거나 받아온다 |
-| 실행 JRE | 21 이상 | 클래스 파일이 major 65(Java 21)다. 24.0.1에서도 기동을 확인했다 |
-| DB | MySQL 8, InnoDB, utf8mb4 | 8.4.11에서 확인. 문자셋 `utf8mb4`, 정렬 `utf8mb4_0900_ai_ci` |
-| 메모리 | 1GB 이상 권장 | 유휴 상태 RSS 실측 약 384MB(힙 사용 58MB + 메타스페이스 92MB) |
-
-서버 OS 타임존은 맞추지 않아도 된다. 애플리케이션 시각은 `morak.timezone`(Asia/Seoul)으로 고정된 `Clock` 빈에서만 나오고, DB에 쓰는 `LocalDateTime`은 JDBC가 타임존 변환 없이 그대로 넣는다. JVM을 UTC로, DB를 UTC로 두고 왕복시켜도 값이 밀지 않는 것을 확인했다.
+| 빌드 JDK | 21 | `build.gradle` 툴체인이 21로 고정돼 있다 |
+| 실행 JRE | 21 이상 | 클래스 파일이 major 65(Java 21)다 |
+| DB | MySQL 8, InnoDB, utf8mb4 | 8.4.11에서 확인 |
+| 웹 서버 | nginx | 프론트 정적 파일 + API 리버스 프록시(§7). **없으면 브라우저에서 API를 부를 수 없다** |
+| 도메인 | 필요 | HTTPS 없이는 카메라가 열리지 않는다(§7) |
 
 ---
 
-## 2. 환경변수
+## 2. 메모리 배분 (4GB)
+
+실측값이다. 앱과 MySQL을 각각 컨테이너에 넣고 CPU를 2코어로 묶은 상태에서 쟀다.
+
+| 구성 요소 | 설정 | 유휴 | 부하 시 | 비고 |
+|---|---|---|---|---|
+| API 서버 | `-Xmx512m` | 382MB | **513MB** | 힙이 가득 차면 최대 약 750MB까지(추정) |
+| MySQL | 튜닝 후(§4-1) | 174MB | 181MB | 버퍼 풀이 다 차면 최대 약 450MB까지(추정) |
+| MySQL | **기본 설정** | 454MB | — | 튜닝 전. 참고용 |
+| nginx + 프론트 정적 | — | 약 30MB(추정) | | 정적 파일만 서빙할 때 |
+| OS(리눅스 최소 설치) | — | 300~400MB(추정) | | |
+
+**합계는 최악의 경우로 잡아도 약 1.7GB**라 4GB에 2GB 이상 남는다. 여유는 파일 캐시로 쓰인다.
+
+### 반드시 지정해야 하는 두 가지
+
+**`-Xmx`를 반드시 준다.** JVM 기본 최대 힙은 물리 메모리의 1/4이라 4GB 서버에서 1024MB가 잡힌다(실측 확인). 앱이 실제로 쓴 최대치는 그 절반 이하였으므로 512m로 충분하고, 그만큼을 MySQL과 프론트에 남긴다.
+
+```
+4GB 서버에서 -Xmx 없을 때 : MaxHeapSize = 1024 MB
+-Xmx512m 지정 시          : MaxHeapSize = 512 MB
+```
+
+2코어에서도 G1GC가 그대로 선택된다(`UseG1GC = true`). SerialGC로 떨어지는 소형 판정에는 걸리지 않는다.
+
+**`TZ=Asia/Seoul`을 준다.** §8에 이유가 있다.
+
+---
+
+## 3. 환경변수
 
 **9개 전부 필수다.** 하나라도 없으면 기동하지 않는다(폴백을 두지 않은 설계다 — 폴백이 있으면 운영에서 변수를 빠뜨려도 개발용 비밀값으로 조용히 뜬다).
 
 | 변수 | 의미 |
 |---|---|
-| `MORAK_DB_URL` | JDBC 접속 URL. `jdbc:mysql://호스트:3306/morak` |
+| `MORAK_DB_URL` | JDBC 접속 URL. `jdbc:mysql://127.0.0.1:3306/morak` |
 | `MORAK_DB_USERNAME` | DB 계정 |
 | `MORAK_DB_PASSWORD` | DB 비밀번호 |
 | `MORAK_JWT_SECRET` | JWT 서명 키. HS256이므로 **32바이트 이상**이어야 한다 |
 | `MORAK_SOCIAL_HASH_PEPPER` | 탈퇴자 소셜 해시(`blocked_social_hash`)에 섞는 값. **바뀌면 기존 차단 등재가 전부 무효가 된다** |
-| `MORAK_LIVEKIT_HOST` | LiveKit 서버 주소(`wss://…`). 비밀값은 아니지만 환경마다 갈려 같은 방식으로 주입한다 |
+| `MORAK_LIVEKIT_HOST` | LiveKit 서버 주소(`wss://…`) |
 | `MORAK_LIVEKIT_API_KEY` | LiveKit 접속 토큰 서명용 키 |
 | `MORAK_LIVEKIT_API_SECRET` | 같은 용도의 시크릿 |
 | `MORAK_PG_SECRET_KEY` | 결제(토스) 시크릿 키 |
@@ -41,32 +87,46 @@
 
 ---
 
-## 3. 빌드
-
-```bash
-./gradlew clean bootJar
-```
-
-결과물은 `build/libs/morak-server-0.0.1-SNAPSHOT.jar`(약 70MB, 실행 가능 fat jar)다. 같은 디렉터리에 생기는 `-plain.jar`는 실행용이 아니다.
-
-테스트까지 돌리려면 `./gradlew build`를 쓴다.
-
----
-
 ## 4. 최초 배포: DB 준비
 
-### 4-1. 데이터베이스와 계정
+### 4-1. MySQL 설정
+
+기본 설정 그대로 두면 454MB를 쓴다. 아래를 `/etc/mysql/conf.d/morak.cnf`에 넣으면 **174MB로 내려간다**(실측). 버퍼 풀을 오히려 128M에서 256M으로 늘리고도 그렇다 — 줄어든 대부분은 `performance_schema`다.
+
+```ini
+[mysqld]
+character-set-server = utf8mb4
+collation-server     = utf8mb4_0900_ai_ci
+
+# 성능 계측 테이블. 켜 두면 그것만으로 수백 MB를 잡는데, 이 규모에서 볼 일이 없다.
+performance_schema = OFF
+
+innodb_buffer_pool_size      = 256M
+innodb_buffer_pool_instances = 1
+innodb_log_buffer_size       = 16M
+
+# 접속당 버퍼가 붙는다. 앱 한 대의 커넥션 풀이 10이라 151은 쓸 일이 없다.
+max_connections  = 50
+table_open_cache = 200
+
+tmp_table_size      = 16M
+max_heap_table_size = 16M
+```
+
+### 4-2. 데이터베이스와 계정
 
 ```sql
 CREATE DATABASE morak CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE USER 'morak'@'%' IDENTIFIED BY '<비밀번호>';
-GRANT ALL ON morak.* TO 'morak'@'%';
+CREATE USER 'morak'@'localhost' IDENTIFIED BY '<비밀번호>';
+GRANT ALL ON morak.* TO 'morak'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-정렬을 `utf8mb4_0900_ai_ci`로 두는 것은 MySQL 8 기본값이라 그렇다. 이 정렬은 **대소문자를 구분하지 않는다**(§8 참조).
+같은 서버에 올리므로 `localhost`로 제한한다. **MySQL 포트(3306)를 외부에 열지 않는다.**
 
-### 4-2. 스키마 생성
+정렬 `utf8mb4_0900_ai_ci`는 MySQL 8 기본값이고 **대소문자를 구분하지 않는다**(§8 참조).
+
+### 4-3. 스키마 생성
 
 DDL 정본은 `docs/db-schema.md`다. 문서 안의 sql 코드 블록을 위에서 아래 순서대로 실행하면 된다(FK 대상이 항상 먼저 오고, 순환하는 FK 2건은 문서 말미 `ALTER`로 분리돼 있다). 총 24개 테이블이다.
 
@@ -80,7 +140,7 @@ blocks = re.findall(r'```sql\n(.*?)```', src, re.S)
 print('\n'.join(b for b in blocks if re.search(r'CREATE TABLE|ALTER TABLE', b)))
 EOF
 
-mysql -h <호스트> -u morak -p morak < schema.sql
+mysql -u morak -p morak < schema.sql
 ````
 
 적용 후 테이블이 24개인지 확인한다.
@@ -89,35 +149,46 @@ mysql -h <호스트> -u morak -p morak < schema.sql
 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'morak';
 ```
 
-### 4-3. match_lock 조건 행
+### 4-4. match_lock 조건 행
 
-수동 작업이 필요 없다. `MatchLockSeeder`가 기동할 때마다 `morak.match.target-minutes-options`(60·120·180·240)에 해당하는 잠금 행을 채우고, 이미 있으면 넘어간다. 회원별 잠금 행(`member:{id}`)은 가입 트랜잭션이 함께 넣는다.
+수동 작업이 필요 없다. `MatchLockSeeder`가 기동할 때마다 시간 옵션(60·120·180·240)에 해당하는 잠금 행을 채우고, 이미 있으면 넘어간다. 회원별 잠금 행(`member:{id}`)은 가입 트랜잭션이 함께 넣는다.
 
 ---
 
-## 5. 실행
+## 5. 빌드
 
 ```bash
-export SPRING_PROFILES_ACTIVE=prod
-export SERVER_PORT=8080
-export MORAK_DB_URL="jdbc:mysql://127.0.0.1:3306/morak"
-export MORAK_DB_USERNAME=morak
-export MORAK_DB_PASSWORD='...'
-export MORAK_JWT_SECRET='...'                  # 32바이트 이상
-export MORAK_SOCIAL_HASH_PEPPER='...'
-export MORAK_LIVEKIT_HOST='wss://...'
-export MORAK_LIVEKIT_API_KEY='...'
-export MORAK_LIVEKIT_API_SECRET='...'
-export MORAK_PG_SECRET_KEY='...'
-
-java -Xms256m -Xmx512m -jar morak-server-0.0.1-SNAPSHOT.jar
+./gradlew clean bootJar
 ```
 
-`-Xmx`를 명시하는 이유는 JVM 기본 최대 힙이 물리 메모리의 1/4이라 서버 사양에 따라 값이 널뛰기 때문이다. 소형 서버(1~2GB)에서는 512m가 무난하다.
+결과물은 `build/libs/morak-server-0.0.1-SNAPSHOT.jar`(약 70MB, 실행 가능 fat jar)다. 같은 디렉터리에 생기는 `-plain.jar`는 실행용이 아니다.
 
-### systemd 예시
+빌드는 서버에서 하지 않아도 된다. 2코어에서 굳이 돌릴 이유가 없으므로 로컬에서 만들어 jar만 올리는 편이 낫다.
 
-비밀값을 유닛 파일에 직접 적지 않고 별도 파일(`/etc/morak/env`, 권한 600)로 분리한다.
+---
+
+## 6. 실행
+
+`/etc/morak/env` (권한 600):
+
+```
+SPRING_PROFILES_ACTIVE=prod
+SERVER_PORT=8080
+TZ=Asia/Seoul
+MORAK_DB_URL=jdbc:mysql://127.0.0.1:3306/morak?sessionVariables=innodb_lock_wait_timeout=5
+MORAK_DB_USERNAME=morak
+MORAK_DB_PASSWORD=...
+MORAK_JWT_SECRET=...
+MORAK_SOCIAL_HASH_PEPPER=...
+MORAK_LIVEKIT_HOST=wss://...
+MORAK_LIVEKIT_API_KEY=...
+MORAK_LIVEKIT_API_SECRET=...
+MORAK_PG_SECRET_KEY=...
+```
+
+`EnvironmentFile`은 `KEY=value` 형식이고 따옴표를 값의 일부로 읽으므로 감싸지 않는다. URL의 `sessionVariables` 부분은 §8 잠금 대기 항목에서 설명한다.
+
+`/etc/systemd/system/morak.service`:
 
 ```ini
 [Unit]
@@ -136,46 +207,230 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-`EnvironmentFile`은 `KEY=value` 형식이고 따옴표를 값의 일부로 읽으므로 감싸지 않는다.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now morak
+sudo journalctl -u morak -f
+```
 
 ---
 
-## 6. 뜬 뒤 확인 절차
+## 7. 공개 경로: HTTPS·CORS·웹훅
 
-### 6-1. 로그
+공인 IP가 1개뿐이라 이 셋이 한 덩어리로 묶인다. **결론부터: nginx 하나를 앞에 두고 도메인과 인증서를 붙인다.**
+
+### 왜 HTTPS가 선택이 아닌가
+
+MoLock은 웹캠 서비스다. 브라우저는 **보안 컨텍스트(HTTPS 또는 localhost)에서만 카메라를 허용한다.** `http://<공인IP>`로 접속하면 `navigator.mediaDevices`가 아예 없어 세션 화면이 동작하지 않는다. 즉 IP로만 서비스하는 선택지는 없다.
+
+무료 인증서(Let's Encrypt)는 도메인 기준으로 발급받는 것이 일반적이므로 **도메인이 필요하다.** 8/18 전에 도메인을 하나 준비해 이 서버의 공인 IP로 A 레코드를 걸어 둔다.
+
+### 왜 nginx 리버스 프록시인가 (CORS)
+
+**이 서버에는 CORS 설정이 없다.** 다른 오리진에서 온 요청에 `Access-Control-Allow-Origin` 헤더를 붙이지 않는다(실측 확인 — 프리플라이트는 200이지만 헤더가 없어 브라우저가 응답을 버린다).
+
+따라서 프론트를 `https://도메인`으로, API를 `https://도메인:8080`으로 따로 노출하면 **포트가 달라 오리진이 갈리고 모든 API 호출이 브라우저에서 막힌다.** 서버 코드를 고치지 않고 해결하는 방법이 리버스 프록시다 — 프론트와 API를 같은 오리진에 두면 CORS 자체가 발생하지 않는다.
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name <도메인>;
+
+    ssl_certificate     /etc/letsencrypt/live/<도메인>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/<도메인>/privkey.pem;
+
+    # 프론트 정적 빌드
+    location / {
+        root /opt/morak-web;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # API는 같은 오리진의 /api 아래로. 이것이 CORS를 없애는 자리다.
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 80;
+    server_name <도메인>;
+    return 301 https://$host$request_uri;
+}
+```
+
+API 서버(8080)는 방화벽에서 외부에 열지 않는다. 밖으로 여는 것은 80·443뿐이다.
+
+### LiveKit·PG 웹훅
+
+두 웹훅은 **외부에서 우리 서버로 들어오는 요청**이라 공개 경로가 성립해야 한다. 위 구성이면 그대로 된다.
+
+| 웹훅 | 등록할 주소 | 인증 |
+|---|---|---|
+| LiveKit (SS-10) | `https://<도메인>/api/webhooks/livekit` | `Authorization` 헤더 서명 |
+| 결제 (PY-3) | `https://<도메인>/api/webhooks/payment` | 전용 서명 헤더 |
+
+둘 다 JWT 게이트를 통과하지 않고 **서명 검증이 유일한 인증이다.** 경로가 공개돼 있어도 서명이 없으면 거절한다. LiveKit Cloud 콘솔과 토스 콘솔에 각각 위 주소를 등록해야 하며, 등록하지 않으면 세션 종료·결제 승인이 웹훅 경로로는 들어오지 않는다.
+
+---
+
+## 8. 운영에서 눈여겨볼 값
+
+### 로그 시각이 KST가 아니면 DB와 9시간 어긋난다
+
+애플리케이션의 업무 시각은 `morak.timezone`(Asia/Seoul)에 고정된 `Clock` 빈에서만 나오므로 서버 타임존과 무관하게 항상 KST다. **그런데 로그 타임스탬프는 JVM 기본 타임존을 따른다.** 서버가 UTC면 같은 사건이 이렇게 갈린다(실측).
+
+```
+로그    : 2026-08-15T09:45:01.418Z   ← UTC
+DB 기록 : 2026-08-15 18:34:06.339985 ← KST
+```
+
+장애를 보는 사람이 두 시각을 맞춰 읽어야 하는 상태다. `TZ=Asia/Seoul`을 주면 로그도 KST로 찍혀 DB 값과 같은 축이 된다. 업무 로직은 어느 쪽이든 바뀌지 않는다 — 순전히 읽기 편하자고 맞추는 것이다.
+
+### 잠금 대기 50초
+
+MySQL의 `innodb_lock_wait_timeout` 기본값은 **50초**다. 개발용 H2는 3초라 16배 차이가 난다(실측). 매칭·세션 종료가 `SELECT … FOR UPDATE`로 행을 잡으므로, 경합이 나면 요청 하나가 최대 50초 동안 톰캣 스레드와 DB 커넥션을 함께 붙들고 있다가 503 `LOCK_ACQUISITION_FAILED`로 떨어진다.
+
+커넥션 풀이 10개(HikariCP 기본값)라 이런 요청이 10개만 겹쳐도 풀이 비고, 뒤따르는 요청은 커넥션을 못 받아 30초 뒤 실패한다. 2코어 서버에서는 그 사이 스레드도 함께 묶인다.
+
+코드를 고치지 않고 JDBC URL로 낮춘다(§6의 URL에 이미 넣어 두었다). 실제로 세션 변수에 반영되는 것을 확인했다.
+
+```
+jdbc:mysql://127.0.0.1:3306/morak?sessionVariables=innodb_lock_wait_timeout=5
+```
+
+### CPU 2코어
+
+매분 도는 배치와 조회 부하를 2코어로 묶어 실측했다.
+
+- **B1 세션 종료 배치**: 50개 세션 300명을 종료·완주 판정·포인트 지급·Streak 기록까지 **1.4초**에 끝냈다. 실제 운영에서 한 분에 50개 세션이 동시에 끝날 일은 없으므로 여유가 크다.
+- **조회 부하**: 동시 30으로 `/api/members/me`를 때렸을 때 앱 164% + MySQL 35%로 **2코어가 포화**했다. 다만 1,000요청이 전부 200으로 돌아왔고 실패가 없었다.
+
+즉 배치가 밀릴 걱정은 없고, 한계는 동시 조회 쪽이다. 매칭 대기 화면이 폴링으로 동작하므로(D18) **폴링 주기가 짧으면 이 한계에 먼저 닿는다.** 대기자가 많아지면 폴링 간격을 늘리는 쪽이 서버를 키우는 것보다 싸다.
+
+### 로그 양
+
+운영 로그는 조용하다. 매분 도는 배치 3종은 처리 건수가 0이면 아무것도 남기지 않고, 1초마다 도는 재접속 유예 스위퍼는 메모리만 보므로 DB를 건드리지도 로그를 남기지도 않는다. 기동 완료 후 2분간(배치 2회 통과) 추가 로그가 한 줄도 없었다.
+
+따라서 로그가 쌓인다면 그것은 실제 처리 건수이거나 오류다. 배치 실패는 처음 두 번은 `WARN`(경합으로 보고 다음 회차에 맡긴다), 같은 대상이 3회 연속 실패하면 `ERROR`로 올라온다 — **`ERROR`로 올라온 배치 로그는 다음 회차가 알아서 해결해 주지 않는다는 뜻이므로 사람이 봐야 한다.**
+
+journald가 로그를 받으므로 디스크가 걱정되면 `/etc/systemd/journald.conf`의 `SystemMaxUse`를 잡아 둔다.
+
+### 정렬 규칙이 대소문자를 구분하지 않는다
+
+`utf8mb4_0900_ai_ci`에서 `'AbCdEf' = 'abcdef'`가 참이다. UNIQUE 제약도 같은 기준이라 대소문자만 다른 두 값이 중복으로 걸린다(실측: `Duplicate entry` 발생). H2는 구분하므로 개발에서 통과한 값이 운영에서 중복 판정될 수 있다.
+
+영향을 받는 자리는 `store_order.idempotency_key`, `point_charge.pg_tid`, `member.provider_user_id`다. 실제로 부딪히려면 대소문자만 다른 값이 발급돼야 해서 확률은 낮고, 부딪히더라도 중복 주문·중복 적립을 막는 쪽으로 실패한다.
+
+### 길이 제한은 코드포인트 기준
+
+MySQL의 `VARCHAR(30)`은 바이트가 아니라 30자다. 한글 30자(90바이트)도 이모지 30자(120바이트)도 들어간다. 자바 `String.length()`는 UTF-16 단위라 이모지 30자를 60으로 세므로, Bean Validation이 DB보다 엄격하다. 검증을 통과한 값은 DB에도 들어간다.
+
+---
+
+## 9. 백업 — 8/28 삭제 대비
+
+**서버가 8/28에 삭제된다. 그때 백업이 서버 안에만 있으면 함께 사라진다.**
+
+### 매일 자동 덤프
+
+`/opt/morak/backup.sh`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+BACKUP_DIR=/opt/morak/backups
+STAMP=$(date +%Y%m%d-%H%M)
+mkdir -p "$BACKUP_DIR"
+
+# --single-transaction: InnoDB를 잠그지 않고 일관된 시점을 뜬다. 서비스 중에 돌려도 된다.
+mysqldump -u morak -p"$MORAK_DB_PASSWORD" \
+  --single-transaction --routines --triggers \
+  --default-character-set=utf8mb4 morak \
+  | gzip > "$BACKUP_DIR/morak-$STAMP.sql.gz"
+
+# 7일치만 남긴다
+find "$BACKUP_DIR" -name 'morak-*.sql.gz' -mtime +7 -delete
+```
+
+crontab (매일 새벽 3시. B4 탈퇴 파기가 4시라 그 전에 뜬다):
+
+```
+0 3 * * * MORAK_DB_PASSWORD='...' /opt/morak/backup.sh >> /var/log/morak-backup.log 2>&1
+```
+
+덤프는 작다. 회원 300명·세션 50개·원장 300행 기준으로 **143KB, gzip 후 16KB**였다(실측). 10일치를 다 모아도 수 MB다.
+
+### 서버 밖으로 내보내기 (이것이 핵심이다)
+
+서버 안의 백업은 8/28에 서버와 함께 사라진다. **최소 하루 한 번은 로컬로 내려받는다.**
+
+```bash
+# 로컬에서 실행
+scp <계정>@<서버IP>:/opt/morak/backups/morak-*.sql.gz ./backups/
+```
+
+**8/28 서버 반납 전 반드시 할 일**
+
+1. 마지막 덤프를 수동으로 뜨고 로컬로 내려받는다.
+2. 복원이 되는지 로컬에서 확인한다(아래).
+3. 덤프 파일을 팀 저장소가 아닌 곳에 둔다 — **덤프에는 회원 정보가 들어 있으므로 공개 저장소에 커밋하지 않는다.**
+
+### 복원 절차
+
+덤프에는 `CREATE TABLE`이 들어 있으므로 빈 DB에 그대로 넣으면 된다. 실제로 확인한 절차다.
+
+```sql
+CREATE DATABASE morak_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+```
+
+```bash
+gunzip -c morak-20260828-0300.sql.gz | mysql -u morak -p morak_restore
+```
+
+확인 — 테이블 24개, 원장 행 수와 포인트 합, 한글이 깨지지 않았는지를 본다.
+
+```sql
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'morak_restore';
+SELECT COUNT(*) AS ledger, (SELECT SUM(point_balance) FROM morak_restore.member) AS points
+  FROM morak_restore.point_ledger;
+SELECT nickname FROM morak_restore.member LIMIT 1;
+```
+
+---
+
+## 10. 뜬 뒤 확인 절차
+
+### 10-1. 로그
 
 정상 기동이면 마지막 두 줄이 아래와 같다.
 
 ```
-Started MorakServerApplication in 2.9 seconds (process running for 3.1)
+Started MorakServerApplication in 3.3 seconds (process running for 3.6)
 매칭 조건 잠금 행 시드 완료 — 조건 4종, 신규 4행
 ```
 
-재기동에서는 `신규 0행`이 정상이다(이미 시드돼 있다는 뜻).
+재기동에서는 `신규 0행`이 정상이다. 기동 로그에 SQL은 찍히지 않고 비밀값도 남지 않는다(주입한 9개 값이 로그에 한 번도 나타나지 않는 것을 확인했다).
 
-기동 로그에 SQL은 찍히지 않고 비밀값도 남지 않는다. 실제로 주입한 9개 값이 로그에 한 번도 나타나지 않는 것을 확인했다.
-
-### 6-2. 호출
+### 10-2. 호출
 
 ```bash
 # 소셜 키가 아직 없으면 401 INVALID_SOCIAL_TOKEN 이 정상이다
-curl -s -X POST localhost:8080/api/auth/login \
+curl -s -X POST https://<도메인>/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"provider":"KAKAO","authorizationCode":"x","agreements":[]}'
 # → {"error":{"code":"INVALID_SOCIAL_TOKEN", ...}}  HTTP 401
 
-# 인증 게이트가 살아 있는지
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/store/products
-# → 401
-
-# 개발 전용 API가 운영에서 닫혀 있는지
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/dev/clock
-# → 404
+curl -s -o /dev/null -w '%{http_code}\n' https://<도메인>/api/store/products   # → 401
+curl -s -o /dev/null -w '%{http_code}\n' https://<도메인>/api/dev/clock        # → 404
 ```
 
-세 개가 각각 401·401·404면 프로필·게이트·이중 스위치가 모두 의도대로 걸린 것이다.
+401·401·404면 프로필·인증 게이트·개발 API 이중 스위치가 모두 의도대로 걸린 것이다. 넷째로 **브라우저에서** 프론트를 열어 카메라 권한 요청이 뜨는지 본다 — 뜨지 않으면 HTTPS가 제대로 걸리지 않은 것이다(§7).
 
-### 6-3. DB
+### 10-3. DB
 
 ```sql
 SELECT COUNT(*) FROM match_lock;   -- 4
@@ -185,7 +440,7 @@ SELECT COUNT(*) FROM match_lock;   -- 4
 
 ---
 
-## 7. 관리자 계정 만들기
+## 11. 관리자 계정 만들기
 
 관리자 역할은 **어떤 API로도 부여되지 않는다**(AU-1에 `role` 파라미터가 없다). 운영에서는 DB 직접 수정뿐이다.
 
@@ -197,25 +452,25 @@ SELECT COUNT(*) FROM match_lock;   -- 4
 
    ```sql
    SELECT id, nickname, provider, provider_user_id, created_at
-     FROM member ORDER BY id DESC LIMIT 10;   -- 대상 확인
+     FROM member ORDER BY id DESC LIMIT 10;
 
    UPDATE member SET role = 'ADMIN' WHERE id = <대상 id>;
    ```
 
 4. 재로그인은 필요 없다. JWT에는 회원 번호만 들어 있고 역할은 요청마다 DB에서 읽는다.
 
-**소셜 키가 없는 동안에는 관리자 계정을 만들 수 없다.** 회원 행을 만들 경로 자체가 없기 때문이다. 그 기간에는 신고 처리·이의 심사 같은 관리자 API(AD-1~9)를 쓸 수 없다.
+**소셜 키가 없는 동안에는 관리자 계정을 만들 수 없다.** 회원 행을 만들 경로 자체가 없기 때문이다.
 
 ---
 
-## 8. 알려진 제약
+## 12. 알려진 제약
 
 ### 단일 인스턴스 전제
 
-지금 구조는 서버를 여러 대로 늘리면 깨진다. 늘리기 전에 아래 둘을 먼저 해결해야 한다.
+서버가 한 대뿐이라 지금 구조로 맞지만, 늘리면 아래 둘이 깨진다.
 
-- **배치가 인스턴스마다 돈다.** `@Scheduled`에 분산 잠금이 없어, 2대면 세션 종료·매칭 만료·충전 만료 배치가 같은 시각에 양쪽에서 실행된다. 포인트 중복 지급은 `uk_pl_dedup` 같은 UNIQUE 제약이 막지만, 그 방어선에 기대는 상태이고 로그에는 경합 경고가 계속 쌓인다. 급하면 한 대만 `morak.scheduling.enabled=true`로 두고 나머지는 `false`로 끄는 방법이 있다.
-- **재접속 유예 창이 프로세스 메모리에 있다.** 90초 유예를 추적하는 레지스트리가 인메모리라 대수를 늘리면 A 서버에서 끊긴 사람을 B 서버가 모른다. 같은 이유로 **재기동하면 진행 중이던 유예가 전부 사라진다** — 무중단 배포가 아니라면 세션이 없는 시간대에 올리는 편이 낫다.
+- **배치가 인스턴스마다 돈다.** `@Scheduled`에 분산 잠금이 없다. 중복 지급은 `uk_pl_dedup` 같은 UNIQUE가 막지만 그 방어선에 기대는 상태다. 급하면 한 대만 `morak.scheduling.enabled=true`로 두고 나머지를 끈다.
+- **재접속 유예 창이 프로세스 메모리에 있다.** 대수를 늘리면 A 서버에서 끊긴 사람을 B 서버가 모른다. 같은 이유로 **재기동하면 진행 중이던 90초 유예가 전부 사라진다** — 세션이 없는 시간대에 올리는 편이 낫다.
 
 ### 외부 키가 없는 동안의 정상 동작
 
@@ -228,71 +483,81 @@ SELECT COUNT(*) FROM match_lock;   -- 4
 
 ### 스키마 변경
 
-`ddl-auto: validate`라 운영 DB 스키마를 자동으로 바꾸지 않는다. 엔티티에 컬럼이 늘면 **`docs/db-schema.md`와 운영 DB에 같은 변경을 직접 넣어야 하고, 그 전에는 기동하지 않는다.** 실패 메시지는 원인을 정확히 짚어 준다.
+`ddl-auto: validate`라 운영 DB 스키마를 자동으로 바꾸지 않는다. 엔티티에 컬럼이 늘면 **`docs/db-schema.md`와 운영 DB에 같은 변경을 직접 넣어야 하고, 그 전에는 기동하지 않는다.**
 
 ```
 SchemaManagementException: Schema validation: missing column [current_streak] in table [member]
 ```
 
-이 게이트는 실제로 동작하는 것을 확인했다(컬럼을 하나 지우고 기동해 위 메시지로 실패하는 것을 확인). 배포 전에 엔티티 변경분이 DDL에 반영됐는지 확인하는 것이 순서다.
+이 게이트가 실제로 동작하는 것을 확인했다(컬럼을 하나 지우고 기동해 위 메시지로 실패). 배포 전에 엔티티 변경분이 DDL에 반영됐는지 확인하는 것이 순서다.
 
 ### 헬스체크 엔드포인트가 없다
 
-Actuator를 넣지 않아 `/actuator/health`가 없고(404), 인증 없이 200을 돌려주는 경로도 없다. 프로세스 감시는 systemd로 되지만, **로드밸런서나 모니터링을 붙이려면 헬스체크 경로가 필요하다.** 그때까지의 임시 확인은 `/api/store/products`가 401을 돌려주는지 보는 것이다(응답이 온다는 것 자체가 서블릿과 인증 게이트가 살아 있다는 뜻이다). 다만 401을 정상으로 읽어 주는 LB 설정이 필요하다.
+Actuator를 넣지 않아 `/actuator/health`가 없고(404), 인증 없이 200을 돌려주는 경로도 없다. 서버가 한 대라 로드밸런서가 붙지 않으므로 당장은 `systemd`의 `Restart=on-failure`로 충분하다. 밖에서 죽었는지 보려면 `/api/store/products`가 401을 돌려주는지 확인한다 — 응답이 온다는 것 자체가 서블릿과 인증 게이트가 살아 있다는 뜻이다.
 
 ---
 
-## 9. 운영에서 눈여겨볼 값
+## 13. 로컬에서 같은 제약 재현하기
 
-### 잠금 대기 50초
+8/18 전에는 실기기가 없으므로 도커로 같은 제약을 건다. 이 문서의 수치가 전부 이 방법으로 나왔다.
 
-MySQL의 `innodb_lock_wait_timeout` 기본값은 **50초**다. 개발용 H2는 `LOCK_TIMEOUT=3000`(3초)이라 여기서 16배 차이가 난다. 매칭·세션 종료 경로가 `SELECT … FOR UPDATE`로 행을 잡으므로, 경합이 나면 요청 하나가 최대 50초 동안 톰캣 스레드와 DB 커넥션을 함께 붙들고 있다가 503 `LOCK_ACQUISITION_FAILED`로 떨어진다.
+```bash
+docker network create morak-net
 
-커넥션 풀이 10개(HikariCP 기본값)이므로 이런 요청이 10개만 겹쳐도 풀이 비고, 뒤따르는 요청은 커넥션을 못 받아 30초 뒤 실패한다. H2에서는 3초 만에 풀려 눈에 띄지 않던 구간이다.
+# MySQL — 2코어 공유, §4-1 설정 적용
+docker run -d --name morak-mysql --network morak-net \
+  --cpuset-cpus=0,1 --memory=1500m --memory-swap=1500m \
+  -e MYSQL_ROOT_PASSWORD=rootpw -e MYSQL_DATABASE=morak \
+  -e MYSQL_USER=morak -e MYSQL_PASSWORD=morakpw \
+  -p 3306:3306 mysql:8.4 \
+  --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci \
+  --performance_schema=OFF --innodb_buffer_pool_size=256M \
+  --innodb_buffer_pool_instances=1 --max_connections=50
 
-값을 낮추려면 코드를 고치지 않고 JDBC URL에 붙이면 된다. 아래가 실제로 세션 변수에 반영되는 것을 확인했다.
-
+# 앱 — 같은 2코어를 나눠 쓴다. 리눅스에서 도는 것도 함께 확인된다.
+docker run -d --name morak-app --network morak-net \
+  --cpuset-cpus=0,1 --memory=1200m --memory-swap=1200m \
+  -v "$PWD/build/libs/morak-server-0.0.1-SNAPSHOT.jar:/app/app.jar:ro" \
+  -e SPRING_PROFILES_ACTIVE=prod -e SERVER_PORT=8110 -e TZ=Asia/Seoul \
+  -e MORAK_DB_URL="jdbc:mysql://morak-mysql:3306/morak" \
+  -e MORAK_DB_USERNAME=morak -e MORAK_DB_PASSWORD=morakpw \
+  -e MORAK_JWT_SECRET="로컬검증용-32바이트-이상-키-0123456789" \
+  -e MORAK_SOCIAL_HASH_PEPPER=x -e MORAK_LIVEKIT_HOST=wss://x \
+  -e MORAK_LIVEKIT_API_KEY=x -e MORAK_LIVEKIT_API_SECRET=x \
+  -e MORAK_PG_SECRET_KEY=x \
+  -p 8110:8110 eclipse-temurin:21-jre \
+  java -Xms256m -Xmx512m -jar /app/app.jar
 ```
-jdbc:mysql://호스트:3306/morak?sessionVariables=innodb_lock_wait_timeout=5
+
+`--cpuset-cpus=0,1`이 두 컨테이너를 같은 2코어에 묶는 부분이 핵심이다. 메모리·CPU 사용량은 이렇게 본다.
+
+```bash
+docker stats --no-stream --format "{{.Name}} mem={{.MemUsage}} cpu={{.CPUPerc}}" morak-app morak-mysql
 ```
 
-### 로그
-
-운영 로그는 조용하다. 매분 도는 배치 3종(세션 종료·매칭 만료·충전 만료)은 처리 건수가 0이면 아무것도 남기지 않고, 1초마다 도는 재접속 유예 스위퍼는 메모리만 보므로 DB를 건드리지도 로그를 남기지도 않는다. 기동 완료 후 2분간 관찰했을 때 추가 로그가 한 줄도 없었다.
-
-따라서 로그가 쌓인다면 그것은 실제 처리 건수이거나 오류다. 배치 실패는 처음 두 번은 `WARN`(경합으로 보고 다음 회차에 맡긴다), 같은 대상이 3회 연속 실패하면 `ERROR`로 올라온다 — **`ERROR`로 올라온 배치 로그는 다음 회차가 알아서 해결해 주지 않는다는 뜻이므로 사람이 봐야 한다.**
-
-로그 레벨은 따로 지정하지 않아 Spring Boot 기본값(`INFO`)이고 파일 출력 설정도 없다. systemd로 띄우면 journald가 받는다. 파일로 남기려면 `logging.file.name`을 준다.
-
-### 커넥션 풀
-
-HikariCP 기본값 그대로 10개이며, 기동 직후 10개를 모두 열어 둔다. MySQL 기본 `max_connections`는 151이라 단일 인스턴스에서는 여유가 있다. 인스턴스를 늘리면 대수 × 10으로 늘어난다.
-
-### 정렬 규칙이 대소문자를 구분하지 않는다
-
-`utf8mb4_0900_ai_ci`에서 `'AbCdEf' = 'abcdef'`가 참이다. UNIQUE 제약도 같은 기준이라 대소문자만 다른 두 값이 중복으로 걸린다(실측: `Duplicate entry` 발생). H2는 구분하므로 개발에서 통과한 값이 운영에서 중복 판정될 수 있다.
-
-영향을 받는 자리는 `store_order.idempotency_key`(클라이언트 생성 UUID), `point_charge.pg_tid`(PG 거래번호), `member.provider_user_id`다. 실제로 부딪히려면 대소문자만 다른 값이 발급돼야 해서 확률은 낮고, 부딪히더라도 중복 주문·중복 적립을 막는 쪽으로 실패한다. 다만 정상 건이 거절될 수 있다는 것은 알고 있어야 한다. 구분이 필요해지면 해당 컬럼만 `utf8mb4_0900_as_cs`로 바꾼다.
-
-### 길이 제한은 코드포인트 기준
-
-MySQL의 `VARCHAR(30)`은 바이트가 아니라 30자다. 한글 30자(90바이트)도 이모지 30자(120바이트)도 들어간다. 자바 `String.length()`는 UTF-16 단위라 이모지 30자를 60으로 세므로, Bean Validation이 DB보다 엄격하다. 검증을 통과한 값은 DB에도 들어간다.
+한계는 알고 쓴다 — 도커 컨테이너는 호스트 커널을 공유하고 `free`가 호스트 메모리를 보여 준다. **JVM은 cgroup 제한을 읽으므로 힙 계산은 실제와 같지만, OS가 쓰는 몫은 이 방법으로 재지지 않는다.** §2의 OS 몫을 추정값으로 적어 둔 이유다.
 
 ---
 
-## 10. 확인한 것과 확인하지 못한 것
+## 14. 확인한 것과 확인하지 못한 것
 
-실제로 MySQL 8.4.11을 띄우고 운영 프로필로 기동해 확인한 것:
+2코어·메모리 제한을 건 리눅스 컨테이너에서 MySQL 8.4.11과 함께 띄워 확인한 것:
 
 - 문서 DDL로 만든 스키마가 `validate`를 통과한다(24개 테이블).
 - 환경변수 9개를 하나씩 빼면 각각 기동에 실패한다.
 - 비밀값이 로그에 남지 않는다.
-- 소셜 로그인 거절, 개발 API 404, 인증 게이트 401.
-- 시각이 타임존 차이로 밀리지 않고 `DATETIME(6)`의 마이크로초가 보존된다.
-- 유휴 상태에서 로그가 늘지 않는다.
+- 소셜 로그인 거절(401), 개발 API 404, 인증 게이트 401.
+- 앱 513MB + MySQL 181MB로 4GB 안에 넉넉히 들어간다.
+- B1이 50세션 300명을 1.4초에 처리한다.
+- 동시 30 조회에서 2코어가 포화하지만 1,000요청이 전부 200이다.
+- 시각이 타임존 차이로 밀리지 않고 `DATETIME(6)` 마이크로초가 보존된다.
+- mysqldump 덤프와 복원이 한글까지 그대로 왕복한다.
+- CORS 헤더가 붙지 않는다(그래서 §7의 리버스 프록시가 필요하다).
 
 확인하지 못한 것:
 
-- 실제 배포 서버의 사양과 OS(부트캠프 제공분이 정해지지 않았다). 위 메모리 수치는 개발 장비 실측이다.
+- **가비아 클라우드 실기기.** OS 이미지·디스크 성능·방화벽 기본값을 모른다. 8/18에 서버를 받으면 §10을 그대로 한 번 돌려 본다.
+- OS가 실제로 쓰는 메모리(§13의 한계).
 - 외부 연동 3종(카카오·LiveKit·토스)의 실제 동작. 키가 없어 거절 경로만 확인했다.
-- 부하 상태의 잠금 경합. 50초 대기는 DB 수준에서 재현했고, 애플리케이션 경로로는 재현하지 않았다.
+- HTTPS·도메인·nginx 구성. 도메인이 없어 문서상 구성만 적었다.
+- 6인이 실제로 캠을 켠 상태의 부하. LiveKit 미디어는 서버를 거치지 않으므로 API 서버 부하와는 별개다.

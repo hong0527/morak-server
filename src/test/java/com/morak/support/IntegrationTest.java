@@ -39,6 +39,10 @@ public abstract class IntegrationTest {
     @Autowired
     protected TestFixtures fixtures;
 
+    /** 여정 테스트가 클라이언트처럼 API를 부르는 통로. 기능 단위 테스트는 쓰지 않는다. */
+    @Autowired
+    protected ApiClient api;
+
     @Autowired
     private DatabaseCleaner databaseCleaner;
 
