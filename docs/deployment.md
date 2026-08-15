@@ -172,7 +172,18 @@ rm schema.sql
 문제가 되는 것은 **예전 DDL로 이미 만들어 둔 DB**다. §13 도커 검증용으로 며칠 전에 만든 DB가 여기 해당한다. 운영 프로필은 `ddl-auto: validate`라 엔티티와 테이블이 한 칸이라도 어긋나면 기동 자체가 실패한다.
 
 ```
-Schema-validation: missing column [achieved_session_id] in table [member_goal]
+SchemaManagementException: Schema validation: missing column [achieved_session_id] in table [member_goal]
+```
+
+**앱이 뜨지 않고 종료 코드 1로 죽는다.** §6의 유닛 파일은 `Restart=on-failure`·`RestartSec=5`라
+**5초마다 같은 실패를 되풀이한다.** 기동 실패 한 번이 12.5KB를 남기므로 시간당 8.6MB, 하루 207MB다.
+방치하면 §8에서 정한 journald 상한 500MB를 **2.4일 만에 채우고**, 그때부터 오래된 로그가 밀려나
+원인이 적힌 첫 실패가 사라진다. 배포 중에 눈앞에서 보고 있으면 바로 알아채지만, 저녁에 올려 두고
+다음 날 아침에 보면 이미 밀려 있을 수 있다. 기동에 실패하면 먼저 서비스를 멈추고 원인을 본다.
+
+```bash
+sudo systemctl stop morak
+sudo journalctl -u morak -n 50 | grep "Schema validation"
 ```
 
 이때는 DB를 다시 만들거나, 아래 변경분을 순서대로 적용한다.
@@ -180,6 +191,10 @@ Schema-validation: missing column [achieved_session_id] in table [member_goal]
 | 날짜 | 변경 | 적용 문장 |
 |---|---|---|
 | 2026-08-15 | `member_goal`에 목표를 채운 세션 컬럼 추가. SS-8 `goalAchieved`의 근거가 시각 비교에서 이 컬럼으로 바뀌었다 | `ALTER TABLE member_goal ADD COLUMN achieved_session_id BIGINT NULL;` |
+
+위 변경분은 실제로 걸어 확인했다. 컬럼을 뺀 DDL로 DB를 만들어 기동 실패를 재현한 뒤 `ALTER`를
+적용했더니 정상 기동했고, 그렇게 따라온 `member_goal`이 §4-3으로 새로 만든 DB와 컬럼·타입까지
+같았다. **`ALTER`로 따라잡은 DB와 새로 만든 DB가 같은 결과가 되는 것이 이 표가 지켜야 할 조건이다.**
 
 기존 행은 `NULL`로 남는다. 그 행들은 SS-8에서 `goalAchieved: false`가 되는데, 8/18 이전 데이터는 전부 검증용이라 채우지 않는다. 실사용 데이터가 생긴 뒤에 같은 변경을 하면 그때는 백필을 함께 계획해야 한다.
 
