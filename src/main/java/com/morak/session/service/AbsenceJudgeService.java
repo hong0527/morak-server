@@ -225,7 +225,7 @@ public class AbsenceJudgeService {
     }
 
     /**
-     * 판정할 자리비움 초. <b>구간의 끝을 세션 예정 종료 시각에서 끊는다.</b>
+     * 판정할 자리비움 초. <b>구간을 세션 예정 종료 시각에서 끊는다 — 끝도 시작도.</b>
      *
      * <p>{@code ends_at}이 지났는데 B1이 아직 돌지 않은 최대 1분 동안 세션은 여전히 LIVE라
      * 이 경로가 열려 있고, 그 창에서 도착한 END는 종료 이후까지 늘어난 구간으로 판정됐다.
@@ -235,12 +235,22 @@ public class AbsenceJudgeService {
      *
      * <p>끊어 두면 두 경로가 같은 값을 낸다. 세션이 끝난 뒤의 시간은 어차피 자리를 지킬
      * 의무가 없는 시간이라, 그 시간이 경고 판정에 실리는 것 자체가 틀린 것이기도 하다.
+     *
+     * <p>여기서 재는 것은 결국 <b>자리를 지킬 의무가 있던 시간과 구간이 겹친 만큼</b>이라,
+     * 시작도 같은 자리에서 끊는다. 끝만 끊으면 그 창에서 <b>시작한</b> 자리비움이 뺄셈을
+     * 거꾸로 돌려 음수를 낸다 — 종료 5초 뒤에 START, 20초 뒤에 END를 보내면 -5초가 나왔고
+     * 그 값이 SS-4·SS-5 응답의 {@code closedAbsenceSeconds}로 그대로 나갔다. 임계 이하라
+     * 경고는 붙지 않았지만, 이 필드는 영상이 없는 이 서비스에서 당사자가 이의(AP-1)를 쓸 때
+     * 댈 유일한 근거라 음수로는 어느 쪽으로도 읽히지 않는다. 양끝을 끊으면 겹침이 없는
+     * 구간은 자연히 0이 되고, 하한을 따로 두는 것과 달리 "겹친 만큼"이라는 정의가
+     * 식에 그대로 남는다.
      */
     private static long absentSeconds(LocalDateTime startedAt, LocalDateTime endedAt,
                                       LiveSession session) {
-        LocalDateTime judgedEnd =
-                endedAt.isAfter(session.getEndsAt()) ? session.getEndsAt() : endedAt;
-        return Duration.between(startedAt, judgedEnd).getSeconds();
+        LocalDateTime endsAt = session.getEndsAt();
+        LocalDateTime judgedStart = startedAt.isAfter(endsAt) ? endsAt : startedAt;
+        LocalDateTime judgedEnd = endedAt.isAfter(endsAt) ? endsAt : endedAt;
+        return Duration.between(judgedStart, judgedEnd).getSeconds();
     }
 
     /** 정상 클라이언트는 검출 상태가 바뀔 때만 보내므로 초 단위로 몰아치는 요청은 위조 신호다. */

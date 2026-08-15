@@ -222,7 +222,9 @@ morak:
 
 구 v1.0에서 폐기한 설정: `proof.*`, `ai.*`, `completion.*`, `media.retention-days`, `storage.local-path`, `security.media-token-secret`(촬영물 열람 HMAC이 사라져 쓰임이 없다), multipart 10MB 제한.
 
-운영 기동에 반드시 필요한 환경변수는 6개다 — `MORAK_JWT_SECRET`, `MORAK_SOCIAL_HASH_PEPPER`, `MORAK_LIVEKIT_HOST`·`MORAK_LIVEKIT_API_KEY`·`MORAK_LIVEKIT_API_SECRET`, `MORAK_PG_SECRET_KEY`. 기본값을 두지 않으며 미설정 시 기동에 실패한다.
+위 `morak.*` 설정 중 환경변수로만 주입하는 것은 6개다 — `MORAK_JWT_SECRET`, `MORAK_SOCIAL_HASH_PEPPER`, `MORAK_LIVEKIT_HOST`·`MORAK_LIVEKIT_API_KEY`·`MORAK_LIVEKIT_API_SECRET`, `MORAK_PG_SECRET_KEY`. 기본값을 두지 않으며 미설정 시 기동에 실패한다.
+
+**운영 기동에 필요한 전체는 9개다.** 위 6개에 DB 접속 3개(`MORAK_DB_URL`, `MORAK_DB_USERNAME`, `MORAK_DB_PASSWORD`)가 더 붙는다. 이 절은 `morak.*` 설정값의 범위만 다루므로 DB 쪽이 빠져 있다 — 배포 준비는 이 목록이 아니라 `deployment.md` §3의 9개 표를 보고 한다. 6개만 넣으면 DB 접속 문자열이 치환되지 않은 채 나가 기동에 실패한다.
 
 ### 0-6. 계산식 (한 곳에만 정의)
 
@@ -1271,7 +1273,9 @@ UPDATE session_participant
 }
 ```
 
-`PENDING`이면 `decidedAt`·`pointRefunded`·`sessionCompletedRestored`는 전부 `null`이다. `REJECTED`면 `decidedAt`만 채워진다. 정렬은 `createdAt` 내림차순(동률은 `appealId` 내림차순).
+`PENDING`이면 `decidedAt`·`pointRefunded`·`sessionCompletedRestored`는 전부 `null`이다. `REJECTED`와 `CLOSED`면 `decidedAt`만 채워진다 — 원복 두 필드는 인용(`ACCEPTED`)에서만 값이 있다. 정렬은 `createdAt` 내림차순(동률은 `appealId` 내림차순).
+
+`CLOSED`는 심사가 성립하지 않아 종결된 것이다(신청자 계정이 파기된 경우, B4). 인용도 기각도 아니므로 화면에서 "기각"으로 묶지 않는다. 다만 파기된 계정은 로그인 경로가 없어 이 목록을 여는 사람이 자기 이의에서 이 상태를 볼 일은 없다.
 
 관리자 `note`는 내려가지 않는다 — 사용자에게 보일 것을 전제하지 않고 쓰인 내부 판단 기록이다. 결과는 `status`(인용·기각)와 원복 사실(`pointRefunded`·`sessionCompletedRestored`)로 설명한다.
 

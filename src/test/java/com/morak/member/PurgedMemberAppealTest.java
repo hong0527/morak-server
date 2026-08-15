@@ -114,10 +114,13 @@ class PurgedMemberAppealTest extends IntegrationTest {
                 .extracting(exception -> ((BusinessException) exception).getErrorCode())
                 .isEqualTo(ErrorCode.APPEAL_MEMBER_PURGED);
         assertThat(fixtures.count("streak_day", "member_id = ?", memberId)).isZero();
-        // 기각도 막는다 — 근거가 사라진 뒤의 판단은 어느 쪽이든 심사가 아니다
+        // 기각도 막는다 — 근거가 사라진 뒤의 판단은 어느 쪽이든 심사가 아니다.
+        // 에러 코드까지 보는 이유는 타입만 보면 ALREADY_PROCESSED로 막혀도 통과하기 때문이다
         assertThatThrownBy(() -> appealAdminService.process(ADMIN_ID, appealId,
                 new AppealProcessRequest(AppealStatus.REJECTED, "근거 없음")))
-                .isInstanceOf(BusinessException.class);
+                .isInstanceOf(BusinessException.class)
+                .extracting(exception -> ((BusinessException) exception).getErrorCode())
+                .isEqualTo(ErrorCode.APPEAL_MEMBER_PURGED);
     }
 
     @Test

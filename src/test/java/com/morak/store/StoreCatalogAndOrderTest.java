@@ -272,8 +272,13 @@ class StoreCatalogAndOrderTest extends IntegrationTest {
         assertThat(detail.quantity()).isEqualTo(2);
         assertThat(detail.pointAmount()).isEqualTo(PRICE * 2);
         assertThat(detail.idempotencyKey()).isEqualTo(key);
-        assertThat(detail.pointLedgerId())
-                .isEqualTo(pointService.findLedgerId(mine, PointReason.ORDER_SPEND, orderId));
+        // 원장 번호를 먼저 붙잡고 비운 게 아닌지 본다 — 두 값을 바로 맞대면 연결이 통째로
+        // 끊겨 양쪽 다 null일 때도 통과한다
+        Long spendLedgerId = pointService.findLedgerId(mine, PointReason.ORDER_SPEND, orderId);
+        assertThat(spendLedgerId)
+                .as("주문 차감이 원장에 남지 않았다 — 무엇으로 결제했는지 되짚을 수 없다")
+                .isNotNull();
+        assertThat(detail.pointLedgerId()).isEqualTo(spendLedgerId);
 
         assertThatThrownBy(() -> storeOrderService.getOrder(other, orderId))
                 .isInstanceOf(BusinessException.class)

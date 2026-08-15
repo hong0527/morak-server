@@ -15,7 +15,7 @@
 실패 상세는 `build/reports/tests/test/index.html`, 기계가 읽을 형식은
 `build/test-results/test/*.xml`에 남는다.
 
-현재 **47개 파일 178건, 전건 통과, 전체 8.5초**(캐시 무시 기준, 컴파일 포함).
+현재 **47개 파일 180건, 전건 통과, 전체 8.5초**(캐시 무시 기준, 컴파일 포함).
 클래스 실행 시간 합의 절반 가까이가 `MorakServerApplicationTests` 하나다(§3-4 참조).
 나머지 46개 파일이 나머지를 나눠 쓰므로 **테스트를 두세 배로 늘려도 실행 시간은 문제가 되지
 않는다.** 실제로 76건을 더하는 동안 전체 실행 시간은 사실상 늘지 않았다 — 컨텍스트를 하나만
@@ -45,8 +45,14 @@
 
 dev 프로필로 애플리케이션 전체를 띄운다(H2, 조작 가능한 시계, 개발용 소셜·PG 클라이언트).
 모든 테스트 클래스가 이것을 상속하므로 **Spring 컨텍스트는 하나를 공유한다.** 새 테스트에
-`@SpringBootTest`나 `@TestPropertySource`를 직접 붙이면 컨텍스트가 하나 더 생겨 실행 시간이
-통째로 늘어난다 — 붙이지 않는다.
+`@SpringBootTest`·`@TestPropertySource`·`@MockitoBean`을 직접 붙이면 컨텍스트가 하나 더 생겨
+실행 시간이 통째로 늘어난다 — 붙이지 않는다.
+
+`@MockitoBean`이 함께 걸리는 이유는 **빈을 갈아끼우는 것이 컨텍스트 캐시 키를 바꾸기**
+때문이다. 애너테이션 이름만 보면 실행 시간과 무관해 보여 놓치기 쉽다. 지금 실제로 뜨는
+컨텍스트는 셋이다 — 공용 하나, `MorakServerApplicationTests`(§3-4) 하나, 그리고
+`SocialBirthDateJoinTest`·`SocialValueOverflowJoinTest`가 `@MockitoBean`으로 만드는 하나다.
+뒤엣것 둘은 소셜 응답을 조작해야 해서 다른 방법이 마땅치 않으므로 그대로 둔다.
 
 두 가지 규칙이 여기 걸려 있다.
 
@@ -225,7 +231,7 @@ JSON 직렬화·역직렬화가 실패 원인에 한 겹 더 끼어든다.
 | SS-2 | LiveKit 접속 토큰 | O | `SessionEntryTest` | 동의 게이트·검사 순서·재발급 |
 | SS-3 | 오늘 할 일 등록 | O | `SessionEntryTest` | |
 | SS-4 | 자리비움 이벤트 | O | `PauseAbsenceBoundaryTest`, `WarningAxisSeparationTest`, `MassEvictionClosingTest`, `WarningTraceVisibilityTest`, `AbsenceAfterScheduledEndTest` | 가장 촘촘한 자리 |
-| SS-5 | 화장실 모드 시작 | O | `PauseAbsenceBoundaryTest` | |
+| SS-5 | 화장실 모드 시작 | O | `PauseAbsenceBoundaryTest`, `AbsenceAfterScheduledEndTest` | 마감 구간을 SS-4와 같은 식으로 재는지 함께 본다 |
 | SS-6 | 화장실 모드 복귀 | O | `PauseAbsenceBoundaryTest`, `ActiveSessionInMeTest` | |
 | SS-7 | 자율 퇴장 | △ | `ActiveSessionInMeTest`, `SessionEntryTest`, `SessionCloseIdempotencyTest` | 다른 테스트의 준비 단계로만 쓰인다. **사유별 검증·중복 퇴장(409)이 없다** |
 | SS-8 | 세션 결과 | O | `WarningTraceVisibilityTest`, `SessionCompletionPersistenceTest`, `RetroactiveAcceptanceTest` | |

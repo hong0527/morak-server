@@ -100,7 +100,13 @@ class EvictionAppealJourneyTest extends IntegrationTest {
                 assertThat(closed.path("pointDelta").asInt())
                         .as("2단계: 퇴출 응답이 차감액을 싣지 않는다 — 화면이 사실이 아닌 값을 그린다")
                         .isEqualTo(-evictionPenalty);
-                evictionId = closed.path("evictionId").asLong();
+                // asLong()은 필드가 없거나 null이어도 0L을 돌려주고, 원시 long이라 뒤에서
+                // isNotNull()로 물어도 항상 참이다. 숫자로 실렸는지를 여기서 본다
+                JsonNode evictionIdNode = closed.path("evictionId");
+                assertThat(evictionIdNode.isNumber())
+                        .as("2단계: 퇴출 응답에 퇴출 번호가 없다 — 이의를 넣을 진입점이 사라진다")
+                        .isTrue();
+                evictionId = evictionIdNode.asLong();
             } else {
                 assertThat(closed.path("evicted").asBoolean())
                         .as("2단계: 경고 %d회에 퇴출됐다 — 기준은 %d회다", expectedWarnings,
@@ -108,7 +114,7 @@ class EvictionAppealJourneyTest extends IntegrationTest {
             }
         }
         assertThat(evictionId)
-                .as("2단계: 퇴출 응답에 퇴출 번호가 없다 — 이의를 넣을 진입점이 사라진다")
+                .as("2단계: 경고 %d회를 채웠는데 퇴출된 회차가 없다", evictWarningCount)
                 .isNotNull();
         assertThat(api.get("/api/members/me", me.token(), MemberMeResponse.class).pointBalance())
                 .as("2단계: 차감이 원장까지 닿지 않았다 — 응답과 잔액이 어긋난다")

@@ -43,12 +43,17 @@
 | 구성 요소 | 설정 | 유휴 | 부하 시 | 비고 |
 |---|---|---|---|---|
 | API 서버 | `-Xmx512m` | 382MB | **513MB** | 힙이 가득 차면 최대 약 750MB까지(추정) |
-| MySQL | 튜닝 후(§4-1) | 174MB | 181MB | 버퍼 풀이 다 차면 최대 약 450MB까지(추정) |
+| MySQL | 튜닝 후(§4-1) | 174MB | 181MB | **빈 DB 기준.** 아래 주석을 본다 |
 | MySQL | **기본 설정** | 454MB | — | 튜닝 전. 참고용 |
 | nginx + 프론트 정적 | — | 약 30MB(추정) | | 정적 파일만 서빙할 때 |
 | OS(리눅스 최소 설치) | — | 300~400MB(추정) | | |
 
 **합계는 최악의 경우로 잡아도 약 1.7GB**라 4GB에 2GB 이상 남는다. 여유는 파일 캐시로 쓰인다.
+
+MySQL의 174MB는 **테이블만 있고 데이터가 없을 때**의 값이다. 회원 46명·세션 13개·원장 131행을 넣고
+여정을 네 개 돌린 뒤 다시 재면 **287MB**였다. 버퍼 풀에 읽은 페이지가 남기 때문이고, 데이터가 늘면
+`innodb_buffer_pool_size`로 잡은 256M까지 올라간다. 위 표의 174MB를 운영 중 기대값으로 읽지 않는다 —
+**MySQL은 300MB 안팎으로 잡아 두는 편이 맞다.** 그래도 합계는 4GB 안에서 넉넉하다.
 
 ### 반드시 지정해야 하는 두 가지
 
@@ -149,9 +154,43 @@ mysql -u morak -p morak < schema.sql
 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'morak';
 ```
 
+`schema.sql`은 `db-schema.md`에서 뽑아낸 사본이라 정본이 아니다. `.gitignore`에 없으므로
+**쓰고 나면 지운다** — 남겨 두면 커밋에 딸려 들어가 정본이 둘이 된다.
+
+```bash
+rm schema.sql
+```
+
 ### 4-4. match_lock 조건 행
 
 수동 작업이 필요 없다. `MatchLockSeeder`가 기동할 때마다 시간 옵션(60·120·180·240)에 해당하는 잠금 행을 채우고, 이미 있으면 넘어간다. 회원별 잠금 행(`member:{id}`)은 가입 트랜잭션이 함께 넣는다.
+
+### 4-5. 이미 만든 DB가 있으면 — 스키마 변경분
+
+**새로 만드는 DB는 이 절이 필요 없다.** §4-3이 `db-schema.md`에서 DDL을 뽑아 만들고, 그 문서에는 최신 컬럼이 이미 들어 있다.
+
+문제가 되는 것은 **예전 DDL로 이미 만들어 둔 DB**다. §13 도커 검증용으로 며칠 전에 만든 DB가 여기 해당한다. 운영 프로필은 `ddl-auto: validate`라 엔티티와 테이블이 한 칸이라도 어긋나면 기동 자체가 실패한다.
+
+```
+Schema-validation: missing column [achieved_session_id] in table [member_goal]
+```
+
+이때는 DB를 다시 만들거나, 아래 변경분을 순서대로 적용한다.
+
+| 날짜 | 변경 | 적용 문장 |
+|---|---|---|
+| 2026-08-15 | `member_goal`에 목표를 채운 세션 컬럼 추가. SS-8 `goalAchieved`의 근거가 시각 비교에서 이 컬럼으로 바뀌었다 | `ALTER TABLE member_goal ADD COLUMN achieved_session_id BIGINT NULL;` |
+
+기존 행은 `NULL`로 남는다. 그 행들은 SS-8에서 `goalAchieved: false`가 되는데, 8/18 이전 데이터는 전부 검증용이라 채우지 않는다. 실사용 데이터가 생긴 뒤에 같은 변경을 하면 그때는 백필을 함께 계획해야 한다.
+
+**enum 값이 느는 것은 여기 적지 않는다.** `AppealStatus`에 `CLOSED`가, `DecidedBy`에 `SYSTEM`이 늘었지만 두 컬럼 모두 `VARCHAR(20)`이라 DDL이 그대로다. 적는 것은 테이블 구조가 실제로 바뀌는 경우뿐이다.
+
+#### 규칙 — 컬럼이 늘면 두 곳을 함께 고친다
+
+1. `docs/db-schema.md` — DDL 정본. `CREATE TABLE` 블록과 컬럼 설명표 양쪽.
+2. **이 표** — 이미 만든 DB를 따라오게 할 `ALTER` 문장.
+
+1번만 하면 새 DB는 맞지만 기존 DB가 `validate`에서 막히고, 2번만 하면 새로 만드는 DB에 컬럼이 아예 없다. 마이그레이션 도구(Flyway·Liquibase)를 두지 않기로 한 이상 이 표가 그 역할을 대신하므로, 엔티티에 `@Column`을 더한 커밋은 이 표에도 한 줄을 남긴다.
 
 ---
 
@@ -296,11 +335,31 @@ MySQL의 `innodb_lock_wait_timeout` 기본값은 **50초**다. 개발용 H2는 3
 
 커넥션 풀이 10개(HikariCP 기본값)라 이런 요청이 10개만 겹쳐도 풀이 비고, 뒤따르는 요청은 커넥션을 못 받아 30초 뒤 실패한다. 2코어 서버에서는 그 사이 스레드도 함께 묶인다.
 
-코드를 고치지 않고 JDBC URL로 낮춘다(§6의 URL에 이미 넣어 두었다). 실제로 세션 변수에 반영되는 것을 확인했다.
+코드를 고치지 않고 JDBC URL로 낮춘다(§6의 URL에 이미 넣어 두었다).
 
 ```
 jdbc:mysql://127.0.0.1:3306/morak?sessionVariables=innodb_lock_wait_timeout=5
 ```
+
+**이 파라미터가 있고 없고가 실제로 갈리는 것을 재 봤다.** `match:60` 잠금 행을 밖에서 잡아 둔 채
+매칭 요청을 넣고, 동시에 무관한 조회(`/api/members/me`)가 되는지를 함께 봤다.
+
+| | 매칭 요청 | 그 사이 무관한 조회 |
+|---|---|---|
+| URL에 넣었을 때 | **5초** 뒤 503 `LOCK_ACQUISITION_FAILED` | 200, 2초 |
+| 넣지 않았을 때 | **50초** 뒤 503 (기본값 그대로) | **500, 30초** |
+
+동시 11건이 잠금에 걸린 상태에서 잰 값이다. 아래 줄이 이 설정을 넣는 이유다 —
+**잠금과 아무 상관 없는 조회까지 30초를 기다리다 500으로 죽는다.** 풀 고갈은 503처럼 다듬어진
+응답이 아니라 그냥 500이라, 화면에서는 원인을 알 수 없는 오류로 보인다.
+
+### 격리 수준이 H2와 다르다
+
+MySQL InnoDB 기본은 `REPEATABLE-READ`이고 **개발용 H2는 `READ_COMMITTED`다**(실측 —
+기동 로그의 `Isolation level: REPEATABLE_READ`로도 확인된다). 같은 트랜잭션 안에서 두 번 읽으면
+MySQL은 처음 읽은 스냅샷을 계속 보여 준다. 네 여정을 MySQL에서 그대로 돌렸을 때 이 차이로
+깨진 자리는 없었지만, 읽고→판단하고→쓰는 경로를 새로 만들 때는 H2에서 통과한 것이 근거가
+되지 않는다는 뜻이다.
 
 ### CPU 2코어
 
@@ -315,9 +374,30 @@ jdbc:mysql://127.0.0.1:3306/morak?sessionVariables=innodb_lock_wait_timeout=5
 
 운영 로그는 조용하다. 매분 도는 배치 3종은 처리 건수가 0이면 아무것도 남기지 않고, 1초마다 도는 재접속 유예 스위퍼는 메모리만 보므로 DB를 건드리지도 로그를 남기지도 않는다. 기동 완료 후 2분간(배치 2회 통과) 추가 로그가 한 줄도 없었다.
 
+데이터가 든 상태(회원 46명·세션 13개)에서 3분을 그냥 두고 다시 재 봤다. **증가한 로그가 0줄이었다** — 배치가 매분 세 번 지나가는 동안에도 그렇다. 조용하다는 말은 사실이다.
+
 따라서 로그가 쌓인다면 그것은 실제 처리 건수이거나 오류다. 배치 실패는 처음 두 번은 `WARN`(경합으로 보고 다음 회차에 맡긴다), 같은 대상이 3회 연속 실패하면 `ERROR`로 올라온다 — **`ERROR`로 올라온 배치 로그는 다음 회차가 알아서 해결해 주지 않는다는 뜻이므로 사람이 봐야 한다.**
 
-journald가 로그를 받으므로 디스크가 걱정되면 `/etc/systemd/journald.conf`의 `SystemMaxUse`를 잡아 둔다.
+**문제는 배치가 아니라 예외 하나의 크기다.** 잠금 대기 실패(`CannotAcquireLockException`) 한 건이
+스택 트레이스 111줄, **약 15KB**를 남긴다(실측 — 11건에서 170KB). 유휴가 0바이트인 것과 대비된다.
+
+| 잠금 실패 빈도 | 하루 | 10일 |
+|---|---|---|
+| 분당 1건 | 21MB | **213MB** |
+| 분당 10건 | 213MB | **2.1GB** |
+
+매칭이 몰리는 시간대에 경합이 나는 것은 정상 동작이고, 그때마다 이 크기가 쌓인다.
+**그래서 journald 상한은 선택이 아니다.** 10일 쓰고 버릴 서버라 넉넉히 잡아도 500MB면 된다.
+
+```bash
+# /etc/systemd/journald.conf
+SystemMaxUse=500M
+```
+
+```bash
+sudo systemctl restart systemd-journald
+journalctl --disk-usage          # 현재 사용량 확인
+```
 
 ### 정렬 규칙이 대소문자를 구분하지 않는다
 
@@ -347,8 +427,13 @@ STAMP=$(date +%Y%m%d-%H%M)
 mkdir -p "$BACKUP_DIR"
 
 # --single-transaction: InnoDB를 잠그지 않고 일관된 시점을 뜬다. 서비스 중에 돌려도 된다.
+# --no-tablespaces: 이것이 없으면 morak 계정에 PROCESS 권한이 없어 아래 줄이 매번 찍힌다.
+#   mysqldump: Error: 'Access denied; you need (at least one of) the PROCESS privilege(s)
+#              for this operation' when trying to dump tablespaces
+#   덤프 자체는 정상이고 종료 코드도 0이라 백업은 만들어지지만(확인함), 매일 새벽 로그에
+#   Error가 한 줄씩 쌓여 진짜 실패와 구별되지 않는다. 우리는 테이블스페이스 정보가 필요 없다.
 mysqldump -u morak -p"$MORAK_DB_PASSWORD" \
-  --single-transaction --routines --triggers \
+  --single-transaction --routines --triggers --no-tablespaces \
   --default-character-set=utf8mb4 morak \
   | gzip > "$BACKUP_DIR/morak-$STAMP.sql.gz"
 
@@ -381,24 +466,49 @@ scp <계정>@<서버IP>:/opt/morak/backups/morak-*.sql.gz ./backups/
 
 ### 복원 절차
 
-덤프에는 `CREATE TABLE`이 들어 있으므로 빈 DB에 그대로 넣으면 된다. 실제로 확인한 절차다.
+덤프에는 `CREATE TABLE`이 들어 있으므로 빈 DB에 그대로 넣으면 된다.
 
-```sql
-CREATE DATABASE morak_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+**`morak` 계정으로는 이 절차가 되지 않는다.** §4-2에서 `GRANT ALL ON morak.*`만 줬기 때문에
+다른 이름의 DB를 만들 권한도, 거기에 쓸 권한도 없다. 그대로 하면 이렇게 막힌다(실측).
+
+```
+ERROR 1044 (42000): Access denied for user 'morak'@'localhost' to database 'morak_restore'
 ```
 
+**복원은 `root`로 한다.** 복원본은 검증용이지 서비스가 붙는 DB가 아니므로 앱 계정에 권한을
+넓히지 않는다.
+
 ```bash
-gunzip -c morak-20260828-0300.sql.gz | mysql -u morak -p morak_restore
+mysql -u root -p -e "CREATE DATABASE morak_restore
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+
+gunzip -c morak-20260828-0300.sql.gz | mysql -u root -p --default-character-set=utf8mb4 morak_restore
 ```
 
 확인 — 테이블 24개, 원장 행 수와 포인트 합, 한글이 깨지지 않았는지를 본다.
 
-```sql
+**`--default-character-set=utf8mb4`를 빼면 한글이 `????`로 보인다.** 데이터는 멀쩡한데 클라이언트가
+latin1로 받아서 그렇다(실측 — 같은 행을 두 방식으로 읽어 `????`와 `탈퇴회원`을 각각 확인했다).
+이것을 복원 실패로 오해하지 않는다. 의심되면 `SELECT HEX(nickname)`으로 바이트를 직접 본다.
+
+```bash
+mysql -u root -p --default-character-set=utf8mb4 -e "
 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'morak_restore';
 SELECT COUNT(*) AS ledger, (SELECT SUM(point_balance) FROM morak_restore.member) AS points
   FROM morak_restore.point_ledger;
-SELECT nickname FROM morak_restore.member LIMIT 1;
+SELECT nickname FROM morak_restore.member ORDER BY id LIMIT 1;"
 ```
+
+행 수만 맞춰 보는 것보다 확실한 방법이 있다. 원본과 복원본의 체크섬을 맞대 본다.
+
+```bash
+for t in member point_ledger store_order session_participant; do
+  mysql -u root -p -N -e "CHECKSUM TABLE morak.$t; CHECKSUM TABLE morak_restore.$t;"
+done
+```
+
+실측 결과: 24개 테이블 전부 행 수가 일치했고, 위 네 테이블의 체크섬이 원본과 같았다.
+한글 닉네임·이모지(`🔥`)·`DATETIME(6)` 마이크로초가 모두 그대로 돌아왔다.
 
 ---
 
@@ -437,6 +547,30 @@ SELECT COUNT(*) FROM match_lock;   -- 4
 ```
 
 `ddl-auto: validate`라서 엔티티와 스키마가 어긋나면 애초에 기동하지 않는다. 뜬 것 자체가 스키마 정합성 확인이다.
+
+### 10-4. 재시작
+
+배포 중에 한 번은 하게 되므로 무엇이 살아남는지 알고 한다. 진행 중인 6인 세션과 열린 자리비움을
+둔 채 실제로 껐다 켜 봤다.
+
+```bash
+sudo systemctl restart morak
+sudo journalctl -u morak -n 20
+```
+
+- **다시 응답하기까지 4초.** 기동 자체는 3.1초, 첫 요청까지 포함해 4초였다.
+- **진행 중이던 세션이 그대로 남는다.** 상태 `LIVE`, 참가자 6명, 적어 둔 할 일(이모지 포함)까지
+  그대로였다. `/api/members/me`의 `activeSession`도 같은 값을 계속 준다 — DB에 있기 때문이다.
+- **재시작 뒤에도 B1이 그 세션을 정상 종료시킨다.** 완주 판정과 포인트 지급이 평소대로 됐다.
+- 시드는 `신규 0행`이 정상이다(§10-1).
+
+사라지는 것은 **프로세스 메모리에만 있는 재접속 유예 90초**뿐이다(§12). 그 순간 끊겨 있던
+사람은 유예가 초기화되므로, **세션이 도는 시간대는 피해서 재시작한다.** 진행 중인 세션은
+이렇게 확인한다.
+
+```sql
+SELECT COUNT(*) FROM live_session WHERE status = 'LIVE';   -- 0일 때 올린다
+```
 
 ---
 
@@ -505,6 +639,9 @@ Actuator를 넣지 않아 `/actuator/health`가 없고(404), 인증 없이 200�
 docker network create morak-net
 
 # MySQL — 2코어 공유, §4-1 설정 적용
+# 호스트 포트: 로컬에 이미 MySQL·MariaDB가 떠 있으면 3306이 잡혀 있어 이 명령이 실패한다.
+# 그때는 왼쪽 숫자만 비어 있는 포트로 바꾼다(-p 3316:3306). 컨테이너끼리는 morak-net 안에서
+# 3306으로 통하므로 앱 쪽 MORAK_DB_URL은 바꾸지 않아도 된다.
 docker run -d --name morak-mysql --network morak-net \
   --cpuset-cpus=0,1 --memory=1500m --memory-swap=1500m \
   -e MYSQL_ROOT_PASSWORD=rootpw -e MYSQL_DATABASE=morak \
@@ -513,13 +650,30 @@ docker run -d --name morak-mysql --network morak-net \
   --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci \
   --performance_schema=OFF --innodb_buffer_pool_size=256M \
   --innodb_buffer_pool_instances=1 --max_connections=50
+```
 
+MySQL이 뜨는 데 15초쯤 걸린다. `docker exec morak-mysql mysqladmin ping -uroot -prootpw`가
+`mysqld is alive`를 돌려주면 준비된 것이다.
+
+**스키마를 먼저 넣어야 앱이 뜬다.** `ddl-auto: validate`라 테이블이 없으면 기동에 실패한다.
+§4-3으로 `schema.sql`을 만든 뒤 컨테이너 안으로 흘려 넣는다 — 서버에서 쓰는
+`mysql -u morak -p morak < schema.sql`은 컨테이너에는 그대로 쓸 수 없다.
+
+```bash
+docker exec -i morak-mysql mysql -umorak -pmorakpw morak < schema.sql
+
+# 24가 나와야 한다
+docker exec morak-mysql mysql -umorak -pmorakpw -N \
+  -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='morak';"
+```
+
+```bash
 # 앱 — 같은 2코어를 나눠 쓴다. 리눅스에서 도는 것도 함께 확인된다.
 docker run -d --name morak-app --network morak-net \
   --cpuset-cpus=0,1 --memory=1200m --memory-swap=1200m \
   -v "$PWD/build/libs/morak-server-0.0.1-SNAPSHOT.jar:/app/app.jar:ro" \
   -e SPRING_PROFILES_ACTIVE=prod -e SERVER_PORT=8110 -e TZ=Asia/Seoul \
-  -e MORAK_DB_URL="jdbc:mysql://morak-mysql:3306/morak" \
+  -e MORAK_DB_URL="jdbc:mysql://morak-mysql:3306/morak?sessionVariables=innodb_lock_wait_timeout=5" \
   -e MORAK_DB_USERNAME=morak -e MORAK_DB_PASSWORD=morakpw \
   -e MORAK_JWT_SECRET="로컬검증용-32바이트-이상-키-0123456789" \
   -e MORAK_SOCIAL_HASH_PEPPER=x -e MORAK_LIVEKIT_HOST=wss://x \
@@ -528,6 +682,90 @@ docker run -d --name morak-app --network morak-net \
   -p 8110:8110 eclipse-temurin:21-jre \
   java -Xms256m -Xmx512m -jar /app/app.jar
 ```
+
+`MORAK_DB_URL`의 `sessionVariables`는 §6의 운영 URL과 같아야 한다. 이전 판에는 이 부분이 빠져
+있었는데, 그러면 **재현 환경만 잠금 대기 50초로 돌아가** §8에서 막으려는 상황을 그대로 재현하지
+못한다. 실제로 이 차이 하나로 무관한 조회가 200/2초에서 500/30초로 갈렸다.
+
+### 키가 오기 전에 여정을 끝까지 확인하는 법
+
+§10-2까지는 "거절이 제대로 되는지"만 본다. 그런데 §12대로 **운영 프로필에서는 로그인이 401이라,
+가입부터 주문까지가 실제로 이어지는지를 확인할 방법이 문서에 없었다.** 소셜 키가 8/18에 함께
+오지 않으면 서버가 멀쩡한지 아닌지를 모른 채 기다리게 된다.
+
+확인하려면 **DB는 운영 그대로 두고 소셜·결제 자리만 여는 조합**으로 한 번 더 띄운다.
+프로필을 `dev,prod` 순으로 주면 뒤에 온 `prod`가 값 충돌을 이기므로 **MySQL 접속과
+`ddl-auto: validate`는 운영 설정 그대로**이고, `dev`가 활성이라 `DevSocialClient`·`DevPgClient`와
+`/api/dev/*`(시계 조작·배치 수동 실행)만 살아난다.
+
+```bash
+# 운영과 같은 MySQL·같은 스키마. 다른 것은 로그인·결제 스텁과 dev API뿐이다.
+docker run -d --name morak-app-smoke --network morak-net \
+  --cpuset-cpus=0,1 --memory=1200m --memory-swap=1200m \
+  -v "$PWD/build/libs/morak-server-0.0.1-SNAPSHOT.jar:/app/app.jar:ro" \
+  -e SPRING_PROFILES_ACTIVE=dev,prod -e SERVER_PORT=8111 -e TZ=Asia/Seoul \
+  -e MORAK_DEV_ENABLED=true \
+  -e MORAK_DB_URL="jdbc:mysql://morak-mysql:3306/morak?sessionVariables=innodb_lock_wait_timeout=5" \
+  -e MORAK_DB_USERNAME=morak -e MORAK_DB_PASSWORD=morakpw \
+  -e MORAK_JWT_SECRET="로컬검증용-32바이트-이상-키-0123456789" \
+  -e MORAK_SOCIAL_HASH_PEPPER=x -e MORAK_LIVEKIT_HOST=wss://x \
+  -e MORAK_LIVEKIT_API_KEY=x -e MORAK_LIVEKIT_API_SECRET=x -e MORAK_PG_SECRET_KEY=x \
+  -p 8111:8111 eclipse-temurin:21-jre \
+  java -Xms256m -Xmx512m -jar /app/app.jar
+```
+
+기동 로그에 `Database dialect: MySQLDialect`와 `신규 0행`이 보이면 운영 DB를 그대로 쓰고 있는
+것이다. 이 상태에서 `authorizationCode`가 그대로 회원 식별자가 되므로 여섯 명을 만들어
+매칭·세션·완주·주문까지 HTTP로 밟을 수 있고, 시계는 `POST /api/dev/clock`으로 민다.
+
+```bash
+curl -s -X POST localhost:8111/api/dev/clock -H 'Content-Type: application/json' \
+  -d '{"fixedAt":"2026-08-20T09:00:00"}'
+curl -s -X POST localhost:8111/api/auth/login -H 'Content-Type: application/json' \
+  -d '{"provider":"KAKAO","authorizationCode":"smoke-1","agreements":[
+       {"type":"TOS","agreed":true},{"type":"PRIVACY","agreed":true}]}'
+curl -s -X POST localhost:8111/api/dev/batches/B1   # 배치를 기다리지 않고 바로 돌린다
+```
+
+**확인이 끝나면 이 컨테이너를 반드시 지운다.** 이 조합은 인증 없는 로그인과 결제 없는 적립이
+동시에 열린 상태다 — 공개된 포트에 이대로 두면 누구나 아무 계정으로 로그인해 포인트를 채울 수
+있다. 실서비스로 여는 것은 언제나 `SPRING_PROFILES_ACTIVE=prod` 하나뿐이고,
+`MORAK_DEV_ENABLED`는 운영 `/etc/morak/env`에 **절대 넣지 않는다.**
+
+```bash
+docker rm -f morak-app-smoke
+```
+
+**컨테이너를 지워도 DB에 남는 것이 있다.** `dev` 프로필에는 `ProductSeeder`가 있어 기동만 해도
+개발용 상품 4종이 들어가고, 확인하며 만든 회원도 그대로 남는다(실측).
+
+```
+1  편의점 5,000원 금액권   5500  42  ON_SALE
+2  카페 아메리카노 교환권   4900   1  ON_SALE
+3  합격을 부르는 공부법    14000   0  SOLD_OUT
+4  출간 예정 제휴 도서     12000  20  HIDDEN
+```
+
+**그러므로 이 확인은 실서비스를 열기 전에 한다.** 순서를 지키면 뒷정리가 필요 없다 —
+스모크로 여정을 확인하고, DB를 지우고 §4-3으로 스키마를 다시 만든 다음, 운영 프로필로 올린다.
+
+```bash
+# 스모크가 끝난 뒤 DB를 원래대로 (운영 시작 전에만 한다)
+mysql -u root -p -e "DROP DATABASE morak;
+  CREATE DATABASE morak CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+mysql -u morak -p morak < schema.sql
+```
+
+이미 서비스가 돌기 시작한 뒤라면 DB를 지울 수 없으므로 남은 것만 골라 지운다. 상품은
+사용자에게 보이므로 특히 그렇다.
+
+```sql
+DELETE FROM product WHERE name IN ('편의점 5,000원 금액권','카페 아메리카노 교환권',
+                                   '합격을 부르는 공부법','출간 예정 제휴 도서');
+SELECT id, nickname, provider_user_id FROM member WHERE provider_user_id LIKE 'smoke-%';
+```
+
+### 자원 보기
 
 `--cpuset-cpus=0,1`이 두 컨테이너를 같은 2코어에 묶는 부분이 핵심이다. 메모리·CPU 사용량은 이렇게 본다.
 
@@ -554,6 +792,23 @@ docker stats --no-stream --format "{{.Name}} mem={{.MemUsage}} cpu={{.CPUPerc}}"
 - mysqldump 덤프와 복원이 한글까지 그대로 왕복한다.
 - CORS 헤더가 붙지 않는다(그래서 §7의 리버스 프록시가 필요하다).
 
+**2차 리허설에서 MySQL로 확인한 것** (네 여정을 전부 HTTP 호출로 다시 밟았다):
+
+- **여정 4종이 MySQL에서 전부 통과한다.** 가입→목표→매칭(6인)→세션→완주→포인트→주문,
+  퇴출→이의→인용→환급, 7일 목표 달성(자정을 넘기는 날 포함), 탈퇴→철회→재신청→파기.
+  H2에서 통과하고 MySQL에서 깨진 자리는 없었다.
+- 대소문자 무시 정렬이 §8이 지목한 세 컬럼 전부에서 실제로 중복 판정을 낸다
+  (`store_order.idempotency_key`·`point_charge.pg_tid`·`member.provider_user_id`).
+  주문 멱등키를 대문자로 바꿔 다시 보내면 `DUPLICATE_ORDER`로 막힌다 — 막는 쪽으로 실패한다.
+- 길이 제한이 코드포인트 기준이다. 한글 30자·이모지 30자가 `VARCHAR(30)`에 들어가고 31자는
+  거절된다. Bean Validation이 항상 DB보다 먼저 막는다(이모지 40자는 `VALIDATION_FAILED`,
+  32자는 통과 — 통과한 값은 DB에도 들어간다).
+- 전 컬럼이 utf8mb4이고 한글·이모지가 API→DB→덤프→복원까지 그대로 왕복한다.
+- 잠금 대기 5초 설정이 실제로 동작하고, 없을 때와 200/2초 대 500/30초로 갈린다(§8).
+- 재시작이 진행 중인 세션을 보존한다(§10-4).
+- 유휴 3분간 로그 증가가 0줄이다. 대신 잠금 실패 1건이 15KB를 남긴다(§8).
+- 백업·복원이 실제로 된다. 24개 테이블 행 수 일치, 표본 4개 테이블 체크섬 일치.
+
 확인하지 못한 것:
 
 - **가비아 클라우드 실기기.** OS 이미지·디스크 성능·방화벽 기본값을 모른다. 8/18에 서버를 받으면 §10을 그대로 한 번 돌려 본다.
@@ -561,3 +816,6 @@ docker stats --no-stream --format "{{.Name}} mem={{.MemUsage}} cpu={{.CPUPerc}}"
 - 외부 연동 3종(카카오·LiveKit·토스)의 실제 동작. 키가 없어 거절 경로만 확인했다.
 - HTTPS·도메인·nginx 구성. 도메인이 없어 문서상 구성만 적었다.
 - 6인이 실제로 캠을 켠 상태의 부하. LiveKit 미디어는 서버를 거치지 않으므로 API 서버 부하와는 별개다.
+- **`systemd`·`cron`으로 도는 형태.** 리허설은 도커 컨테이너로 했다. §6의 유닛 파일과 §9의
+  crontab 자체는 실행해 보지 못했고, 그 안의 명령만 따로 확인했다.
+- **10일치 실제 누적.** 로그·디스크 증가는 분당 측정값에서 계산한 값이다.

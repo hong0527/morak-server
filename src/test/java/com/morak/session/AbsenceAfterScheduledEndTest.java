@@ -3,7 +3,10 @@ package com.morak.session;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.morak.session.dto.request.AbsenceEventRequest;
+import com.morak.session.dto.response.AbsenceEventResponse;
+import com.morak.session.dto.response.PauseStartResponse;
 import com.morak.session.service.AbsenceJudgeService;
+import com.morak.session.service.PauseService;
 import com.morak.session.service.SessionClosingBatch;
 import com.morak.session.type.AbsenceEventType;
 import com.morak.support.IntegrationTest;
@@ -31,9 +34,14 @@ class AbsenceAfterScheduledEndTest extends IntegrationTest {
     private static final LocalDateTime ENDS_AT = BASE_TIME.plusMinutes(TARGET_MINUTES);
     /** 종료 뒤에 END가 도착하는 폭. B1이 매분 도므로 실제로 생기는 창의 크기다. */
     private static final long LATE_END_SECONDS = 20;
+    /** 종료 뒤에 비로소 START가 도착하는 폭. 같은 창 안이라 세션은 아직 LIVE다. */
+    private static final long LATE_START_SECONDS = 5;
 
     @Autowired
     private AbsenceJudgeService absenceJudgeService;
+
+    @Autowired
+    private PauseService pauseService;
 
     @Autowired
     private SessionClosingBatch sessionClosingBatch;
@@ -84,6 +92,41 @@ class AbsenceAfterScheduledEndTest extends IntegrationTest {
         assertThat(warningCount(sessionId, neverEnded)).isEqualTo(1);
     }
 
+    @Test
+    @DisplayName("예정 종료 이후에 시작된 자리비움은 0초로 판정된다")
+    void 종료_이후에_시작된_구간은_0초다() {
+        // 이 테스트가 죽으면: 끊는 자리가 구간의 끝에만 남은 것이다. 시작이 종료 뒤면 뺄셈이
+        // 거꾸로 돌아 closedAbsenceSeconds가 음수로 나가고, 영상이 없는 이상 그 값이 이의를
+        // 쓸 때 댈 유일한 근거인데 음수로는 읽히지 않는다.
+        List<Long> memberIds = fixtures.joinMembers(PARTICIPANTS);
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, BASE_TIME, memberIds);
+        Long lateStart = memberIds.get(0);
+
+        startAbsenceAfterEnd(lateStart, sessionId, 0L);
+        AbsenceEventResponse closed = endAbsence(lateStart, sessionId, 1L);
+
+        assertThat(closed.closedAbsenceSeconds()).isZero();
+        assertThat(closed.warningCount()).isZero();
+        assertThat(warningCount(sessionId, lateStart)).isZero();
+    }
+
+    @Test
+    @DisplayName("종료 이후에 시작된 구간은 화장실 모드가 마감해도 0초다")
+    void 종료_이후에_시작된_구간은_화장실_모드_마감에서도_0초다() {
+        // SS-4와 SS-5가 같은 판정 헬퍼를 공유한다. 한쪽만 고치면 다른 쪽으로 음수가 계속 나간다.
+        List<Long> memberIds = fixtures.joinMembers(PARTICIPANTS);
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, BASE_TIME, memberIds);
+        Long lateStart = memberIds.get(0);
+
+        startAbsenceAfterEnd(lateStart, sessionId, 0L);
+        clock.fixAt(ENDS_AT.plusSeconds(LATE_END_SECONDS));
+        PauseStartResponse paused = pauseService.start(lateStart, sessionId);
+
+        assertThat(paused.closedAbsenceSeconds()).isZero();
+        assertThat(paused.warningIssued()).isFalse();
+        assertThat(warningCount(sessionId, lateStart)).isZero();
+    }
+
     /** 예정 종료 시각 기준으로 {@code beforeEndSeconds}초 전에 자리를 비우기 시작한다. */
     private void startAbsence(Long memberId, Long sessionId, long beforeEndSeconds,
                               long clientSeq) {
@@ -91,9 +134,15 @@ class AbsenceAfterScheduledEndTest extends IntegrationTest {
                 ENDS_AT.minusSeconds(beforeEndSeconds));
     }
 
+    /** 예정 종료가 지난 뒤에 비로소 자리를 비우기 시작한다. B1 전이라 세션은 아직 LIVE다. */
+    private void startAbsenceAfterEnd(Long memberId, Long sessionId, long clientSeq) {
+        report(memberId, sessionId, AbsenceEventType.START, clientSeq,
+                ENDS_AT.plusSeconds(LATE_START_SECONDS));
+    }
+
     /** 예정 종료가 지난 뒤, B1이 아직 돌기 전에 END가 도착한다. */
-    private void endAbsence(Long memberId, Long sessionId, long clientSeq) {
-        report(memberId, sessionId, AbsenceEventType.END, clientSeq,
+    private AbsenceEventResponse endAbsence(Long memberId, Long sessionId, long clientSeq) {
+        return report(memberId, sessionId, AbsenceEventType.END, clientSeq,
                 ENDS_AT.plusSeconds(LATE_END_SECONDS));
     }
 
@@ -106,10 +155,10 @@ class AbsenceAfterScheduledEndTest extends IntegrationTest {
         return fixtures.count("warning", "session_id = ? AND member_id = ?", sessionId, memberId);
     }
 
-    private void report(Long memberId, Long sessionId, AbsenceEventType type, long clientSeq,
-                        LocalDateTime occurredAt) {
+    private AbsenceEventResponse report(Long memberId, Long sessionId, AbsenceEventType type,
+                                        long clientSeq, LocalDateTime occurredAt) {
         clock.fixAt(occurredAt);
-        absenceJudgeService.report(memberId, sessionId, new AbsenceEventRequest(
+        return absenceJudgeService.report(memberId, sessionId, new AbsenceEventRequest(
                 type, clientSeq, occurredAt.atZone(clock.getZone()).toOffsetDateTime()));
     }
 }
