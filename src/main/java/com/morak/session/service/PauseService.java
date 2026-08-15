@@ -28,8 +28,11 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>10분을 넘긴 채 복귀조차 하지 않은 경우의 정산은 5단계 세션 종료 배치(B1)가 같은
  * 규칙으로 한다. 여기에 별도 스위퍼를 두면 판정 주체가 둘이 되어 경고가 두 번 붙는다.
  *
- * <p><b>시작은 열려 있는 자리비움 구간을 끊는다</b>({@link AbsenceJudgeService#closeAbsenceOnPause}).
- * PAUSED 구간이 자리비움에 들어가지 않는다는 약속(★D1)은 그 마감이 있어야 성립한다.
+ * <p><b>시작은 열려 있는 자리비움 구간을 끊고, 복귀는 Pause 중에 열린 구간을 버린다</b>
+ * ({@link AbsenceJudgeService#closeAbsenceOnPause},
+ * {@link AbsenceJudgeService#discardAbsenceOnResume}). PAUSED 구간이 자리비움에 들어가지
+ * 않는다는 약속(★D1)은 <b>양쪽 경계가 다 있어야</b> 성립한다 — 시작만 끊으면 화장실에서
+ * 올라온 START를 복귀 뒤의 END가 닫아 그 시간이 그대로 자리비움이 된다.
  */
 @Service
 @Transactional
@@ -107,6 +110,9 @@ public class PauseService {
         }
         LocalDateTime now = LocalDateTime.now(clock);
         long elapsedSeconds = Duration.between(participant.getPauseStartedAt(), now).getSeconds();
+        // Pause 중에 열린 자리비움 구간을 버린다. 남겨 두면 복귀 뒤에 오는 END가 ACTIVE
+        // 상태에서 짝을 맞춰 화장실에 있던 시간이 자리비움으로 판정된다(★D1·D9).
+        absenceJudgeService.discardAbsenceOnResume(sessionId, participant, now);
         participant.resume();
         boolean overrun = elapsedSeconds > pauseLimitSeconds;
         if (overrun) {

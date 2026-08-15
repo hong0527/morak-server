@@ -56,6 +56,12 @@ public class AbsenceJudgeService {
      */
     private static final long PAUSE_BOUNDARY_CLIENT_SEQ = -1L;
 
+    /**
+     * 복귀가 Pause 중에 열린 자리비움 구간을 버릴 때 쓰는 {@code clientSeq}. Pause도 복귀도
+     * 세션당 1회여서 {@code -1}과 마찬가지로 {@code uk_ae}가 충돌할 경로가 없다.
+     */
+    private static final long RESUME_BOUNDARY_CLIENT_SEQ = -2L;
+
     private final LiveSessionRepository liveSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final AbsenceEventRepository absenceEventRepository;
@@ -179,6 +185,40 @@ public class AbsenceJudgeService {
     }
 
     /**
+     * SS-6 복귀가 부르는 마감. <b>Pause 중에 열린 자리비움 구간을 판정 없이 버린다.</b>
+     *
+     * <p>단말이 화장실 모드에서 감지를 멈추지 않으면(<b>카메라를 꺼도 검은 프레임이 계속
+     * 흐르면 그렇게 된다</b>) PAUSED 구간에서 START가 올라온다. 그 START는 도착 시점에는
+     * 판정되지 않지만, 복귀 뒤에 오는 END가 ACTIVE 상태에서 도착해 짝이 맞아 버린다 —
+     * 화장실에 있던 시간이 그대로 자리비움으로 계산돼 경고가 붙는다. 실제로 재현됐다.
+     *
+     * <p>여기서 막는 근거는 {@link #closeAbsenceOnPause}가 세운 불변식이다. Pause 시작이
+     * 열린 START를 반드시 닫으므로, <b>복귀 시점에 열려 있는 START는 Pause 중에 생긴 것밖에
+     * 없다.</b> 시각을 비교할 필요가 없다({@code pauseStartedAt}은 복귀와 함께 비워진다).
+     *
+     * <p>경고를 주지 않는 것이 Pause 시작 쪽과 다른 점이다. 시작 쪽은 <b>이미 진행 중이던</b>
+     * 자리비움이라 Pause로 무르게 하지 않는 것이 D9의 요지이지만, 여기서 버리는 것은
+     * 화장실에 있는 동안 생긴 구간이라 애초에 자리비움이 아니다(★D1·D9).
+     *
+     * <p>호출자는 상태 전이 <b>전에</b> 부른다 — 뒤로 미룰 이유는 없고, Pause 시작 쪽과
+     * 순서를 맞춰 두어야 두 경로를 같이 읽는 사람이 헷갈리지 않는다.
+     */
+    public void discardAbsenceOnResume(Long sessionId, SessionParticipant participant,
+                                       LocalDateTime at) {
+        AbsenceEvent last = absenceEventRepository
+                .findFirstBySessionIdAndMemberIdOrderByIdDesc(sessionId, participant.getMemberId())
+                .orElse(null);
+        if (last == null || last.getType() != AbsenceEventType.START) {
+            return;
+        }
+        absenceEventRepository.saveAndFlush(AbsenceEvent.report(sessionId,
+                participant.getMemberId(), AbsenceEventType.END,
+                RESUME_BOUNDARY_CLIENT_SEQ, at, at));
+        log.info("복귀로 Pause 중 자리비움 구간 폐기: session={}, member={}",
+                sessionId, participant.getMemberId());
+    }
+
+    /**
      * Pause 시작이 마감한 자리비움 구간. 마감할 구간이 없었으면 {@code null}이다.
      *
      * <p>이 값을 호출자에게 돌려주는 이유는 하나다 — <b>여기서 부여한 경고를 본인이 알아야
@@ -275,6 +315,10 @@ public class AbsenceJudgeService {
      * 자리비움 구간이 닫혔는가. 짝이 없는 END(직전이 START가 아님)는 정상 입력이고 판정하지
      * 않는다. PAUSED 구간도 판정에서 빠진다 — 화장실 모드는 자리를 비우라고 만든 기능이라
      * 여기서 경고를 주면 SS-5가 함정이 된다.
+     *
+     * <p><b>여기서 막는 것은 PAUSED 중에 도착한 END뿐이다.</b> Pause 중에 열린 START를
+     * 복귀 뒤의 END가 닫는 경로는 이 조건으로 걸리지 않는다 — 그 END는 ACTIVE 상태에서
+     * 도착하기 때문이다. 그쪽은 {@link #discardAbsenceOnResume}이 복귀 시점에 끊는다.
      */
     private boolean isAbsenceClosed(AbsenceEventRequest request, AbsenceEvent previous,
                                     SessionParticipant participant) {

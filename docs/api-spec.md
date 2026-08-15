@@ -904,13 +904,20 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 {"accepted": true, "warningCount": 3, "evicted": true, "evictionId": 77, "pointDelta": -300, "closedAbsenceSeconds": 81}
 ```
 
-`closedAbsenceSeconds`는 이 보고로 닫힌 자리비움 구간의 지속 초다. 닫힌 구간이 없으면(START 보고, 짝 없는 END) `null`이다. 경고가 붙는 순간 몇 초로 판정됐는지 당사자가 즉시 알아야 하고, 임계 이하로 닫혀 경고가 없을 때도 값을 내린다 — 임계에 얼마나 가까웠는지가 다음 자리비움을 조절할 근거다. 이름·형태는 SS-5의 같은 필드와 같다.
+`closedAbsenceSeconds`는 이 보고로 닫힌 자리비움 구간의 지속 초다. 닫힌 구간이 없으면(START 보고, 짝 없는 END, **PAUSED 관련 구간**) `null`이다. 경고가 붙는 순간 몇 초로 판정됐는지 당사자가 즉시 알아야 하고, 임계 이하로 닫혀 경고가 없을 때도 값을 내린다 — 임계에 얼마나 가까웠는지가 다음 자리비움을 조절할 근거다. 이름·형태는 SS-5의 같은 필드와 같다.
 
 발생 에러: 400 `VALIDATION_FAILED`(`occurredAt`이 [세션 시작 −5초, 현재 +5초]를 벗어남, `clientSeq`가 음수) / 409 `DUPLICATE_ABSENCE_EVENT`(같은 `clientSeq` 재수신 — 서버 상태는 바뀌지 않으므로 클라이언트는 정상 종료로 취급한다) / 429 `ABSENCE_RATE_LIMITED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
 
 검사 순서: 세션 존재(404) → **참가 자격(403)** → 세션 상태(409) → 참가자 상태(409 `ALREADY_EVICTED`) → 시각 검증(400) → 재전송(409) → 레이트리밋(429). 참가 자격이 세션 상태보다 먼저다(§0-3) — 뒤집으면 참가자가 아닌 사람이 세션 번호를 훑어 남의 세션이 끝났는지를 알 수 있다.
 
 게이트: ② ✓ · ④ ✓ · ⑤ ✓ · 세션 참가자 ACTIVE·PAUSED · 본인 이벤트만
+
+**PAUSED 중의 이벤트는 접수하되 자리비움으로 판정하지 않는다.** 거절하지 않는 이유는 둘이다 — 게이트가 PAUSED를 허용한다고 이미 약속했고, 이의 신청(AP-1)에 댈 기록은 남는 편이 낫다. 대신 판정에서 빠지며, 그 경계는 양쪽에 있다.
+
+- **PAUSED 중에 도착한 END**는 짝이 맞아도 판정하지 않는다. 화장실 모드는 자리를 비우라고 만든 기능이라 여기서 경고를 주면 SS-5가 함정이 된다.
+- **PAUSED 중에 열린 START**는 SS-6 복귀가 판정 없이 버린다(아래). 이것이 없으면 복귀 뒤에 도착한 END가 `ACTIVE` 상태에서 그 START와 짝을 맞춰 **화장실에 있던 시간이 그대로 자리비움이 된다.** 단말이 화장실 모드에서 감지를 멈추지 않으면 실제로 이 순서가 만들어진다 — 카메라를 꺼도 검은 프레임이 계속 흐르면 감지가 자리비움을 연다.
+
+즉 ★D1·D9의 "PAUSED 구간은 자리비움 판정 대상에서 제외된다"는 **단말이 감지를 멈추는지와 무관하게 서버가 보증한다.** 클라이언트를 믿지 않는다(★D4)는 원칙이 이 자리에도 적용된다.
 
 트랜잭션·부수효과 (퇴출 시 한 트랜잭션)
 
@@ -984,9 +991,10 @@ UPDATE session_participant
 
 1. 참가자 상태가 `PAUSED`가 아니면 409 `PAUSE_NOT_ACTIVE`
 2. 경과 = `now - pause_started_at`
-3. 경과 ≤ `session.pause-limit-minutes` → `status=ACTIVE`, `pause_started_at=NULL`. 경고 없음
-4. 경과 초과 → 경고 1회 부여(`warning` INSERT) 후 `status=ACTIVE` 복귀. 그 경고가 3회째면 퇴출 처리(SS-4의 퇴출 절차와 동일 경로)
-5. 클라이언트가 복귀를 호출하지 않은 채 세션이 끝나면 B1이 같은 규칙으로 정산한다
+3. **열려 있는 자리비움 구간을 판정 없이 버린다.** 마지막 `absence_event`가 `START`면 복귀 시각으로 `END` 행을 남겨 닫되 경고를 부여하지 않는다(`client_seq`는 단말 값과 겹치지 않도록 음수를 쓴다). SS-5 시작이 열린 구간을 반드시 끊으므로 **복귀 시점에 열려 있는 START는 Pause 중에 생긴 것밖에 없고**, 그것은 화장실에 있는 동안 생긴 구간이라 애초에 자리비움이 아니다(★D1·D9). 시작 쪽 마감과 달리 경고가 없는 이유가 이것이다 — 시작 쪽은 **이미 진행 중이던** 자리비움이라 Pause로 무르게 하지 않는다
+4. 경과 ≤ `session.pause-limit-minutes` → `status=ACTIVE`, `pause_started_at=NULL`. 경고 없음
+5. 경과 초과 → 경고 1회 부여(`warning` INSERT) 후 `status=ACTIVE` 복귀. 그 경고가 3회째면 퇴출 처리(SS-4의 퇴출 절차와 동일 경로)
+6. 클라이언트가 복귀를 호출하지 않은 채 세션이 끝나면 B1이 같은 규칙으로 정산한다. 이때는 참가자가 `PAUSED`이므로 §5 정산이 Pause 초과만 보고 짝 없는 자리비움 START는 보지 않는다 — 위 3번이 필요한 것은 **복귀한** 경우뿐이다
 
 응답 200 (정상 복귀)
 

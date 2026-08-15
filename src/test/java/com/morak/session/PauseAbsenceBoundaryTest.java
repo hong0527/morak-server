@@ -26,6 +26,10 @@ import org.springframework.beans.factory.annotation.Value;
  *
  * <p>그래서 Pause 시작이 열린 구간을 그 시각으로 끊는다. 끊을 때의 판정은 END를 받은 것과
  * 같아야 한다 — 이미 임계를 넘긴 자리비움은 Pause를 켜는 것으로 무를 수 없다(D9).
+ *
+ * <p><b>경계는 양쪽에 있어야 한다.</b> 시작만 끊으면 PAUSED 중에 올라온 START가 남고, 복귀
+ * 뒤에 도착한 END가 ACTIVE 상태에서 그것과 짝을 맞춘다 — 화장실에 있던 시간이 그대로
+ * 자리비움이 된다. 그래서 복귀는 Pause 중에 열린 구간을 판정 없이 버린다.
  */
 @DisplayName("Pause와 자리비움 경계")
 class PauseAbsenceBoundaryTest extends IntegrationTest {
@@ -133,6 +137,81 @@ class PauseAbsenceBoundaryTest extends IntegrationTest {
         assertThat(response.warningCount()).isZero();
         assertThat(response.closedAbsenceSeconds())
                 .isEqualTo(absenceThresholdSeconds - 10L);
+    }
+
+    @Test
+    @DisplayName("Pause 중에 올라온 START는 복귀 후 END가 와도 자리비움이 되지 않는다")
+    void Pause_중에_열린_구간은_복귀가_버린다() {
+        // 이 테스트가 죽으면: 화장실에 있던 시간이 그대로 자리비움으로 계산돼 경고가 붙는다.
+        // 단말이 화장실 모드에서 감지를 멈추지 않으면 실제로 이 순서가 만들어진다 —
+        // 카메라를 꺼도 검은 프레임이 계속 흐르면 상태기계가 자리비움을 연다.
+        List<Long> memberIds = fixtures.joinMembers(PARTICIPANTS);
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, BASE_TIME, memberIds);
+        Long memberId = memberIds.getFirst();
+
+        LocalDateTime pausedAt = BASE_TIME.plusMinutes(1);
+        clock.fixAt(pausedAt);
+        pauseService.start(memberId, sessionId);
+        // PAUSED 중에 올라온 START. 도착 시점에는 판정되지 않지만 행은 남는다
+        report(memberId, sessionId, AbsenceEventType.START, 0, pausedAt.plusMinutes(1));
+        LocalDateTime resumedAt = pausedAt.plusMinutes(2);
+        clock.fixAt(resumedAt);
+        pauseService.resume(memberId, sessionId);
+        // 복귀 후 도착한 END. 임계를 훌쩍 넘는 간격이지만 짝이 이미 버려져 있어야 한다
+        report(memberId, sessionId, AbsenceEventType.END, 1, resumedAt.plusSeconds(30));
+
+        assertThat(fixtures.participant(sessionId, memberId).getWarningCount()).isZero();
+        assertThat(fixtures.count("warning", "session_id = ? AND member_id = ?",
+                sessionId, memberId)).isZero();
+    }
+
+    @Test
+    @DisplayName("복귀가 버리는 것은 Pause 중 구간뿐이고 시작 쪽 마감은 그대로다")
+    void 복귀_폐기가_시작_마감을_건드리지_않는다() {
+        // 이 테스트가 죽으면: 복귀 쪽 방어가 Pause 시작의 판정까지 지워, 경고가 쌓일 때
+        // Pause를 켰다 끄는 것이 회피책이 된다(D9가 막으려던 바로 그것이다).
+        List<Long> memberIds = fixtures.joinMembers(PARTICIPANTS);
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, BASE_TIME, memberIds);
+        Long memberId = memberIds.getFirst();
+
+        LocalDateTime absenceStart = BASE_TIME.plusMinutes(1);
+        report(memberId, sessionId, AbsenceEventType.START, 0, absenceStart);
+        clock.fixAt(absenceStart.plusSeconds(absenceThresholdSeconds + 30L));
+        pauseService.start(memberId, sessionId);
+        LocalDateTime resumedAt = absenceStart.plusMinutes(pauseLimitMinutes - 1L);
+        clock.fixAt(resumedAt);
+        pauseService.resume(memberId, sessionId);
+
+        // 시작이 부여한 경고 1회가 복귀 뒤에도 그대로여야 한다
+        assertThat(fixtures.participant(sessionId, memberId).getWarningCount()).isEqualTo(1);
+        assertThat(fixtures.count("warning", "session_id = ? AND member_id = ?",
+                sessionId, memberId)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("복귀 뒤에 새로 열린 자리비움은 정상 판정된다")
+    void 복귀_후의_자리비움은_정상_판정된다() {
+        // 이 테스트가 죽으면: 화장실을 한 번 다녀온 사람은 그 뒤로 자리를 비워도 경고를
+        // 받지 않는다. 방어가 과해서 감지 자체를 꺼 버리는 자리다.
+        List<Long> memberIds = fixtures.joinMembers(PARTICIPANTS);
+        Long sessionId = fixtures.openSession(TARGET_MINUTES, BASE_TIME, memberIds);
+        Long memberId = memberIds.getFirst();
+
+        LocalDateTime pausedAt = BASE_TIME.plusMinutes(1);
+        clock.fixAt(pausedAt);
+        pauseService.start(memberId, sessionId);
+        LocalDateTime resumedAt = pausedAt.plusMinutes(1);
+        clock.fixAt(resumedAt);
+        pauseService.resume(memberId, sessionId);
+
+        LocalDateTime absenceStart = resumedAt.plusMinutes(1);
+        report(memberId, sessionId, AbsenceEventType.START, 0, absenceStart);
+        report(memberId, sessionId, AbsenceEventType.END, 1,
+                absenceStart.plusSeconds(absenceThresholdSeconds + 30L));
+
+        assertThat(fixtures.participant(sessionId, memberId).getWarningCount()).isEqualTo(1);
+        assertThat(fixtures.count("warning", "session_id = ? AND member_id = ?",
+                sessionId, memberId)).isEqualTo(1);
     }
 
     private void report(Long memberId, Long sessionId, AbsenceEventType type, long clientSeq,
