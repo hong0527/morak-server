@@ -121,8 +121,11 @@ public class MemberPurgeService {
         // 차단은 방향이 있는 2행이라 양쪽을 다 지운다. 한쪽만 남기면 탈퇴한 회원을 가리키는
         // 배제 관계가 남아 상대의 매칭 후보를 계속 깎는다.
         matchBlockRepository.deleteByMemberIdOrBlockedMemberId(memberId, memberId);
-        absenceEventRepository.deleteByMemberId(memberId);
+        // 경고가 먼저다. warning.absence_event_id가 absence_event를 참조하므로(fk_wn_absence)
+        // 순서가 뒤면 운영 MySQL이 참조 무결성 위반으로 이 배치를 죽인다. 개발 H2에는 엔티티가
+        // @ManyToOne 없이 Long을 들고 있어 FK 자체가 생기지 않아 테스트로는 드러나지 않는다.
         warningRepository.deleteByMemberId(memberId);
+        absenceEventRepository.deleteByMemberId(memberId);
         // 잠글 일이 없어진 회원의 잠금 행. 남기면 회원 없는 고아 행이 쌓인다.
         matchLockRepository.deleteById(MatchLock.memberKey(memberId));
 
