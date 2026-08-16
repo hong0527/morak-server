@@ -170,7 +170,7 @@ CREATE TABLE streak_day (
 
 | 컬럼 | 설명 |
 |---|---|
-| completed_on | 날짜. 시각이 아니다. 자정 경계는 `morak.timezone`(Asia/Seoul) 기준 |
+| completed_on | 날짜. 시각이 아니다. 자정 경계는 `morak.timezone`(Asia/Seoul) 기준. **= 세션 시작일(`live_session.started_at`의 날짜)이다. 종료일이 아니다** — 자정을 넘긴 세션은 시작일에 귀속된다(`SessionClosingService.completionDate`, `SessionService`). 종료일로 세면 23시 30분에 시작해 완주한 사람이 매일 연속을 끊긴다 |
 | session_id | 근거 세션. 하루에 여러 세션을 완주해도 첫 1건만 남는다 |
 
 **불변식**
@@ -244,6 +244,22 @@ CREATE TABLE match_lock (
 - 대기열을 건드리는 모든 트랜잭션은 `SELECT ... FROM match_lock WHERE lock_key='match:{minutes}' FOR UPDATE`를 **먼저** 잡는다. 이 순서를 어기면 6인 확정이 겹친다.
 - 회원 단위 직렬화가 필요한 경로(AU-7 목표 설정, MT-1 중복 요청 확인)는 `member:{id}` 행을 잡는다.
 - 잠금 획득 순서는 항상 `member:{id}` → `match:{minutes}`다. 역순 획득 경로를 만들면 교착이 생긴다.
+
+**잠금 순서 규약 전체**
+
+`match_lock` 안의 순서만으로는 부족하다. 잠금을 잡는 계열이 셋이고, 셋 사이의 순서까지 함께 지켜야 한다.
+
+| 계열 | 순서 | 근거 |
+|---|---|---|
+| 매칭 | `member:{id}` → `match:{minutes}` | 위 불변식, `MatchService` |
+| 세션 | `live_session` → `session_participant` → `member` | `SessionClosingService.LOCK_ORDER` |
+| 도메인 교차 | `live_session` → `match_lock` | `SanctionService.apply`가 세션 강제 퇴장을 먼저 하고 매칭 요청 취소를 뒤에 한다 |
+
+세션 행이 언제나 첫 자리인 이유는 퇴출과 종료 판정이 교차하기 때문이다. 퇴출은 참가자 행을 먼저 고치고 종료 판정으로 넘어오는데, 같은 순간 B1이 세션 행을 잡은 채 그 참가자 행을 정산하려 하면 둘이 서로를 기다린다.
+
+**지금 교착이 나지는 않는다.** 종료 경로는 `match_lock`을 잡지 않고, 매칭 경로는 세션 행을 잡지 않아 두 규약이 겹치는 쌍이 없다. 두 계열이 만나는 곳은 제재(`SanctionService`)와 AU-4 하나씩이고 둘 다 세션 행이 먼저다.
+
+**그래서 도메인 교차 순서를 명문으로 남긴다.** `match_lock`을 쥔 채 기존 세션 행을 잠그는 경로가 하나라도 생기면 그 순간 `live_session` → `match_lock`과 `match_lock` → `live_session`이 맞물려 교착이 된다. 새 경로를 만들 때 확인해야 하는 것은 "이 트랜잭션이 세션 행보다 `match_lock`을 먼저 잡는가"다.
 
 ```sql
 CREATE TABLE match_request (
@@ -438,7 +454,7 @@ CREATE TABLE absence_event (
 | 컬럼 | 설명 |
 |---|---|
 | member_id | 항상 요청자 본인. 서버가 JWT와 대조해 강제한다 |
-| client_seq | 세션·회원 스코프 시퀀스. 네트워크 재전송을 걸러내는 멱등키 |
+| client_seq | 세션·회원 스코프 시퀀스. 네트워크 재전송을 걸러내는 멱등키. **0 이상은 단말이 보낸 값, 음수는 서버가 구간을 닫을 때 쓰는 대역이다** — `-1`은 Pause 시작이 열린 자리비움을 끊으며 만든 END, `-2`는 복귀가 Pause 중에 열린 구간을 버릴 때다(`AbsenceJudgeService`). 단말 값은 `@PositiveOrZero`라 음수와 겹칠 수 없고, Pause·복귀는 세션당 1회씩이라 `uk_ae`가 충돌할 경로가 없다 |
 | occurred_at | 경고 판정(60초 초과)의 계산 기준 |
 | reported_at | 감사·레이트리밋 기준. occurred_at과 크게 벌어지면 조작 신호 |
 
@@ -954,7 +970,7 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 | match_block | 행 삭제(양방향 모두) |
 | match_lock | 회원 잠금 행(`member:{id}`) 삭제. 잠글 대상이 없어진 행이라 남기면 고아가 된다 |
 | session_participant | `goal_text`=NULL로 비운다. 행 자체는 다른 참가자의 세션 이력 정합성 때문에 남긴다 |
-| absence_event, warning | 행 삭제 |
+| warning, absence_event | 행 삭제. **이 순서다** — `warning.absence_event_id`가 `absence_event`를 참조하므로(`fk_wn_absence`) 뒤집으면 운영 MySQL에서 FK 위반으로 파기가 통째로 실패한다 |
 | appeal_case | **PENDING 건을 `CLOSED`(`decided_by='SYSTEM'`)로 종결한다.** 행은 남긴다 |
 
 `current_streak`·`last_completed_on`을 함께 비우는 것은 익명화 규칙의 연장이다. 이 둘의 진실인 `streak_day`를 지우면서 캐시만 남기면 "이 사람이 이 날 완주했다"는 기록이 회원 행에 그대로 남아, 파기했다고 말한 것이 파기되지 않는다.
@@ -995,6 +1011,7 @@ UNIQUE가 **없는** 곳 중 의도적인 것:
 - **UNIQUE 안의 NULL은 MySQL·H2 모두 서로 다른 값으로 취급한다.** 이 성질에 의존하는 곳(`uk_mr_active`, `uk_rc_open`, `uk_pc_tid`)과, 반대로 이 성질 때문에 NOT NULL이 필수인 곳(`point_ledger.ref_type`·`ref_id`)을 구분해야 한다. 후자에서 NULL을 허용하면 중복 지급 방어가 통째로 무력화된다.
 - `ddl-auto=update`는 기존 테이블에 UNIQUE를 자동으로 붙여 주지 않는 경우가 있다. 스키마를 바꿨으면 개발 DB를 새로 만들거나 `ALTER`를 직접 확인한다.
 - MySQL은 `DATETIME(6)`, H2도 동일 정밀도를 지원한다. `LocalDateTime` 매핑에서 정밀도 손실을 가정하지 않는다.
-- **FK 제약은 개발 DB에 생성되지 않는다.** 엔티티가 `@ManyToOne` 없이 순수 `Long` 참조를 쓰는 프로젝트 관례 때문이다(E단계 실측). 이 문서 DDL의 `CONSTRAINT fk_*`는 관계의 의미를 적은 것이고, 참조 무결성은 애플리케이션이 지킨다. 운영 MySQL에 FK를 실제로 걸지는 12단계에서 결정한다.
+- **FK 제약은 개발 DB에 생성되지 않는다.** 엔티티가 `@ManyToOne` 없이 순수 `Long` 참조를 쓰는 프로젝트 관례 때문이다(E단계 실측). 개발(H2)에서 이 문서 DDL의 `CONSTRAINT fk_*`는 관계의 의미를 적은 것이고, 참조 무결성은 애플리케이션이 지킨다.
+- **운영 MySQL에는 FK를 건다.** 배포 절차가 이 문서의 `CREATE TABLE`·`ALTER TABLE` 블록을 그대로 뽑아 `mysql`에 밀어 넣으므로(`deployment.md`), `CONSTRAINT` 줄도 함께 들어간다. 결정을 미룰 여지가 없는 자리라 미결로 두지 않는다. **개발과 운영이 이 지점에서 갈린다는 것이 요점이다** — H2에서 통과한 삭제 순서가 MySQL에서는 FK 위반으로 실패할 수 있다(B4 파기의 `warning` → `absence_event` 순서가 그 예다).
 - **DDL의 `DEFAULT` 절은 생성 스키마에 없다.** 엔티티 생성자가 모든 값을 채우므로 JPA 경로에서는 무해하다. 이 문서 DDL을 MySQL에 직접 적용해 만든 스키마와 개발 DB가 갈리는 지점이므로 12단계 전환 때 재확인한다.
 - **enum 컬럼은 `VARCHAR(n)`이 아니라 네이티브 `enum(...)`으로 생성된다.** Hibernate 7의 `@Enumerated(STRING)` 기본 동작(E단계 실측, `member.provider`도 동일). 값 표현은 같지만 운영 MySQL에서 enum 값을 추가하려면 `ALTER TABLE`이 필요하다. VARCHAR로 강제할지는 12단계 MySQL 전환 때 결정한다.

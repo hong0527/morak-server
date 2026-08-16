@@ -54,7 +54,7 @@
 
 분장표 라이브 세션 영역의 AI 항목 3개(감지 모델 설계 / 판정 로직 / 오탐률 튜닝)를 **백엔드가 함께 맡습니다.** 담당자 배정을 요청하는 항목이 아니라, **겸하는 데 따르는 두 가지를 확인받는 항목**입니다.
 
-**바닥부터 시작하는 것이 아닙니다.** 설계 문서(`docs/ai-pipeline.md`)와 실제로 도는 코드(`ai-detection/`)가 이미 있고 8/15에 실행 검증까지 마쳤습니다.
+**바닥부터 시작하는 것이 아닙니다.** 설계 문서(`docs/ai-pipeline.md`)와 실제로 도는 코드(`frontend/ai-detection/`)가 이미 있고 8/15에 실행 검증까지 마쳤습니다.
 
 실제로 돌려서 확인한 것
 
@@ -266,7 +266,7 @@
 
 서버는 앱이 보낸 "얼굴 안 보임" 신호를 받아서 경고를 계산하는 쪽만 맡습니다(Q3). 감지 자체는 사용자 기기에서 돕니다.
 
-**모델 권고**: 기획서에 적힌 **TensorFlow.js는 권하지 않습니다.** 얼굴 감지 모델은 마지막까지 남아 있던 포크마저 2025년 2월에 보관 처리(아카이브)됐습니다. 더 이상 관리되지 않는다는 뜻입니다. 반면 구글 **MediaPipe**(`tasks-vision`)는 2026년 8월에 정식 1.0.1이 나와 안정화됐습니다. **MediaPipe로 확정하는 것을 권합니다.**
+**모델 권고**: 기획서에 적힌 **TensorFlow.js는 권하지 않습니다.** 아카이브된 것은 아니고 **사실상 동결**입니다 — `tfjs-models` 저장소는 archived 상태가 아니고 `face-detection` npm 1.0.3이 2024년 10월에 배포됐지만, `pose-detection`은 2023년 8월, tfjs 본체 릴리스는 2024년 10월 이후가 없습니다. 반면 구글 **MediaPipe**(`tasks-vision`)는 2026년 8월에 정식 1.0.1이 나와 안정화됐습니다. 동결된 스택에 새로 올라탈 이유가 없으므로 **MediaPipe로 확정하는 것을 권합니다.**(`ai-pipeline.md` §3)
 
 ### 담당자분께 전달할 구현 주의사항 7가지
 
@@ -522,6 +522,6 @@
 - 배포 절차: `docs/deployment.md`
 - 검증 내역: `docs/testing.md`
 - 프론트 인계: `docs/frontend-guide.md`, `docs/frontend-walkthrough.sh`
-- AI 감지 설계: `docs/ai-pipeline.md` / 레퍼런스 구현 `ai-detection/`
+- AI 감지 설계: `docs/ai-pipeline.md` / 레퍼런스 구현 `frontend/ai-detection/`
 - 절단선 원문: `제출문서/모락_범위조정_제안.txt`
 - 요구 원천: `docs/source/molock-requirements.md`, `docs/source/molock-task-breakdown.md`

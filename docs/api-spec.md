@@ -187,6 +187,7 @@ morak:
     rematch-cooldown-minutes: 30          # 퇴출자 재매칭 쿨다운 (D14)
   session:
     absence-threshold-seconds: 60         # 경고 부여 임계 (★D4)
+    absence-warning-escalation-seconds: 300  # [팀 확정 대기] 첫 경고 뒤 추가 경고 눈금 (★D4)
     evict-warning-count: 3                # 퇴출 누적 경고 수 (FR-304)
     reconnect-grace-seconds: 90           # 재접속 유예 (D13)
     pause-limit-minutes: 10               # 화장실 모드 상한 (FR-305, D9)
@@ -237,7 +238,7 @@ morak:
 | Streak 리셋 | 완주일이 하루라도 끊기면 연속이 끊긴다. **끊긴 날에 캐시를 0으로 써 두는 배치는 없고**, 다음 완주 때 `last_completed_on`과의 거리로 판정해 1부터 다시 센다 | 목표는 유지 (★D3). 회원 수만큼 매일 UPDATE를 도는 대신 판정을 다음 완주로 미룬 것이라 `streak_day` 기준 결과는 같다. 저장된 `member.current_streak`에는 끊긴 뒤에도 직전 연속 일수가 남으므로, **AU-2가 내려보내기 전에 이 판정을 서버에서 수행한다** — `last_completed_on`이 오늘도 어제도 아니면(NULL 포함) `streak.current = 0`. 어제는 오늘 완주로 이어질 수 있어 유지한다 |
 | 세션 시점 Streak | SS-8의 `before`·`after` = `streak_day`에서 해당 `completed_on`을 기준으로 **역방향 연속 행 수** | `member.current_streak`(현재값 캐시)를 쓰면 과거 세션 결과를 다시 열었을 때 그때가 아닌 지금 값이 나온다 |
 | 목표 달성 | `current_streak >= period_days` **AND** `member_goal.started_on` 이후의 `streak_day` 행 수 `>= period_days` | 두 조건이 모두 필요하다. 연속 캐시만 보면 **같은 연속을 몇 번이든 다시 팔 수 있다** — 7일을 채워 달성한 회원이 곧바로 7일 목표를 새로 걸면 `current_streak`가 이미 7이라 다음 날 한 번 완주하는 것으로 또 1,000p가 나간다(실측). 목표는 "지금까지 며칠 했는가"가 아니라 "여기서부터 며칠 더 하는가"이므로 시작일 이후의 완주일 수를 함께 본다. 거꾸로 완주일 수만 보면 중간에 하루 끊긴 7일도 달성이 되므로 연속 조건도 남긴다. 달성 시 `GoalStatus=ACHIEVED`, `point.goal-achieved` 지급, `BadgeCode=GOAL_ACHIEVED`. 달성 후에는 새 목표를 걸 수 있다(진행 중 변경은 불가 — §2 `member_goal`) (★D3) |
-| 경고 부여 | **캠이 연결된 상태에서** 얼굴 미검출 지속시간 > `session.absence-threshold-seconds` | 경고 1회. `warning.seq`는 세션 내 1~3 (★D4) |
+| 경고 부여 | **캠이 연결된 상태에서** 얼굴 미검출 지속시간 > `session.absence-threshold-seconds` | 구간 길이에 비례. `1 + floor((지속초 − 임계 − 1) / escalation)`, 임계 이하 0회. `warning.seq`는 세션 내 1~3 (★D4, 식은 §4 SS-4) |
 | 연결 끊김 처리 | `participant_left` 후 `session.reconnect-grace-seconds` 내 미복귀 | **자리비움 경고와 별개 축이다.** 경고·포인트 차감 없이 `LEFT(DEVICE_ISSUE)` 자동 처리, 그 세션만 미완주 (D13 확정) |
 | 퇴출 | `warning_count >= session.evict-warning-count` | `EVICTED` + `point.eviction-penalty` 차감 + LiveKit 강제 퇴장. **차감은 퇴출과 같은 트랜잭션에서 즉시 한다** — SS-4 응답이 `pointDelta=-300`을 싣는데 원장을 배치로 미루면 최대 1분 동안 그 값이 사실이 아니다. 이중 차감은 원장 멱등키 `(member_id, EVICTION_PENALTY, EVICTION, eviction_id)`가 막고, B1은 그 트랜잭션이 원장을 남기지 못하고 끊긴 경우의 안전망이다 |
 | 경고 카운터 범위 | 세션 스코프. 세션 종료 시 소멸 | 계정 누적 매너 점수는 Phase 4 (D11) |
@@ -403,7 +404,7 @@ morak:
 
 절차
 
-1. 소셜 검증 실패 → 401 `INVALID_SOCIAL_TOKEN`
+1. 소셜 검증 실패, 또는 반환된 식별자가 191자(`member.provider_user_id` 길이)를 넘음 → 401 `INVALID_SOCIAL_TOKEN`. 식별자만은 절단하지 않고 거절한다 — 잘라 저장하면 앞부분이 같은 다른 계정과 한 회원으로 합쳐진다
 2. `HMAC-SHA256(provider + providerUserId, pepper)`가 `blocked_social_hash`에 있으면 → 403 `REJOIN_BLOCKED`
 3. 기존 회원이 `WITHDRAW_PENDING`이면 철회·복구(시각 컬럼 NULL, `ACTIVE`) 후 `loginResult="RESTORED"`
 4. 신규 회원: 필수 약관 2종(`TOS`, `PRIVACY`)이 모두 `agreed=true`가 아니면 → 400 `AGREEMENT_REQUIRED`. `MARKETING`은 선택이며, **누락되거나 `agreed=false`이면 `member_agreement` 행을 만들지 않는다** — 행의 유무가 곧 동의 여부다(미동의를 뜻하는 행을 따로 저장하지 않는다) (D20). 위치정보 약관은 근거가 없어 두지 않는다
@@ -425,7 +426,7 @@ morak:
 
 **개발용 로그인도 이 엔드포인트를 쓴다** — `provider=DEV`로 호출하면 `DevSocialClient`가 실제 소셜 검증을 대신하고, `authorizationCode`를 `provider_user_id`로 삼아 upsert한다(같은 값으로 다시 부르면 기존 회원 로그인). `@Profile("dev")` AND `morak.dev.enabled=true` 이중 스위치가 걸려 있어 운영 프로필에서는 `DevSocialClient` 빈이 등록되지 않고 401 `INVALID_SOCIAL_TOKEN`으로 떨어진다. 별도 dev 로그인 엔드포인트를 두지 않는 이유는, 가입 경로가 둘이면 약관·웰컴 포인트·`match_lock` 시드 같은 부수효과가 한쪽에서만 빠지기 때문이다. 관리자 계정은 어느 경로로도 만들 수 없고 DB 수동 UPDATE로만 만든다(`role` 파라미터 없음).
 
-발생 에러: 401 `INVALID_SOCIAL_TOKEN` / 401 `UNAUTHORIZED`(기존 계정이 `WITHDRAW_PENDING`인데 `delete_scheduled_at`이 이미 지난 경우 — B4 실행 전이어도 파기된 계정으로 보아 3단계 복구를 하지 않는다. 느슨하게 두면 로그인으로 계정이 부활한다) / 403 `REJOIN_BLOCKED` / 403 `UNDER_AGE_SIGNUP_BLOCKED` / 400 `AGREEMENT_REQUIRED` / 400 `VALIDATION_FAILED`
+발생 에러: 401 `INVALID_SOCIAL_TOKEN`(소셜 검증 실패, 또는 반환된 식별자가 191자를 넘음) / 401 `UNAUTHORIZED`(기존 계정이 `WITHDRAW_PENDING`인데 `delete_scheduled_at`이 이미 지난 경우 — B4 실행 전이어도 파기된 계정으로 보아 3단계 복구를 하지 않는다. 느슨하게 두면 로그인으로 계정이 부활한다) / 403 `REJOIN_BLOCKED` / 403 `UNDER_AGE_SIGNUP_BLOCKED` / 400 `AGREEMENT_REQUIRED` / 400 `VALIDATION_FAILED`
 
 게이트: ① 예외(JWT skip) · ② 예외 · ④ 예외 · ⑤ 미적용
 
@@ -878,7 +879,7 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 
 - 클라이언트는 타인에 대한 판정을 보낼 수 없다. `memberId`는 요청 본문이 아니라 JWT에서 가져온다
 - `clientSeq`는 세션 내 단조 증가하는 클라이언트 시퀀스이며 **0 이상**이다(음수는 400 `VALIDATION_FAILED`). `UNIQUE(session_id, member_id, client_seq)`가 재전송을 흡수한다. 음수를 막는 것은 서버가 만드는 END 행이 그 대역을 쓰기 때문이다(SS-5)
-- 지속시간(60초 초과) 계산의 기준은 **`occurredAt` 간격**이다(서버 수신 시각이 아님 — 자기 자신만 보고하는 구조라 부풀려도 자해일 뿐이다). 서버는 수신 시각(`reported_at`)을 감사용으로 함께 저장한다
+- 지속시간(60초 초과) 계산의 기준은 **`occurredAt` 간격**이다(서버 수신 시각이 아님 — 자기 자신만 보고하는 구조라 부풀려도 자해일 뿐이다). 서버는 수신 시각(`reported_at`)을 감사용으로 함께 저장한다. 단 판정 구간은 `ends_at`에서 양끝을 자른다 — 자리를 지킬 의무가 있던 시간과 겹친 만큼만 센다. §5 종료 정산과 같은 값을 내기 위한 것이고, 겹침이 없으면 `closedAbsenceSeconds`는 0이다. §0-7이 인정한 "`endsAt` 도래 후 최대 1분간 세션 LIVE" 창에서 종료를 걸친 자리비움은 그만큼 짧게 나오고, 종료 후에 시작해 끝난 구간은 0이 된다
 - **이 구조가 못 막는 것**: 클라이언트가 이벤트를 **아예 보내지 않으면** 몇 시간을 비워도 경고 0으로 완주가 된다. 서버는 영상을 보지 않으므로(D17) v1에서 이를 막을 수단이 없다 — 연령 검증의 자기 신고 한계와 같은 종류의, 알고 받아들인 한계다. 위조 방어 장치(clientSeq·레이트리밋·서버 판정)는 전부 "보낸 것"에 대해서만 작동한다
 - `occurredAt` 허용 범위는 [세션 시작 −5초, 현재 +5초]. 벗어나면 400 `VALIDATION_FAILED`(±5초 여유는 단말이 초 단위로 자른 시각을 보내는 것을 흡수하기 위함 — 4단계 실측)
 - 같은 참가자의 직전 이벤트로부터 `session.absence-min-interval-seconds`(현재 5초) 안에 다시 들어오면 429 `ABSENCE_RATE_LIMITED`. 정상 클라이언트는 얼굴 검출 상태가 바뀔 때만 보내므로 초당 여러 건이 올 이유가 없다 — 위조·폭주 트래픽을 정상과 분리하는 방어선이다
@@ -888,7 +889,7 @@ FR-202(대기 2분 초과 시 인접 시간대 합류 팝업)는 보류다. 매�
 서버 판정
 
 1. `type=START` — `absence_event` INSERT. 이 시점에는 경고를 만들지 않는다
-2. `type=END` — 직전 미종료 `START`와 짝을 지어 지속시간을 계산한다. `session.absence-threshold-seconds`(60초)를 초과했으면 `warning` INSERT (`seq = warning_count + 1`, UNIQUE(session_id, member_id, seq))
+2. `type=END` — 직전 미종료 `START`와 짝을 지어 지속시간을 계산한다. `session.absence-threshold-seconds`(60초)를 초과했으면 **구간 길이에 비례해** `warning` N행 INSERT (`seq`는 `warning_count + 1`부터 한 행마다 하나씩, UNIQUE(session_id, member_id, seq)). N은 아래 계산식이고, 퇴출 상한에 닿으면 그 자리에서 멈춘다
 3. `warning_count`가 `session.evict-warning-count`(3)에 도달하면 즉시 퇴출 처리
 4. 짝이 없는 `START`(END 미수신)는 세션 종료 시점에 세션 종료 시각을 END로 간주해 정산한다. 정시 종료·조기 종료·`room_finished` 어느 쪽으로 끝나든 같다(§5)
 
@@ -963,7 +964,7 @@ UPDATE session_participant
 
 영향 행 0이면 원인을 구분해 응답한다. `pause_used=true`면 409 `PAUSE_ALREADY_USED`, `status != ACTIVE`면 상태에 맞는 코드(`ALREADY_EVICTED` / `NOT_SESSION_PARTICIPANT`).
 
-부수효과: **위 UPDATE 직전에 열려 있는 자리비움 구간을 Pause 시작 시각으로 끊는다.** 마지막 `absence_event`가 `START`면 그 시각을 END로 간주해 SS-4와 같은 임계로 판정하고(초과면 경고 1회, 3회째면 퇴출), 서버가 만든 `END` 행을 남겨 구간을 닫는다(`client_seq`는 단말 값과 겹치지 않도록 음수를 쓴다). 닫지 않으면 화장실에 있던 시간이 자리비움 간격에 그대로 들어가, 복귀 후 도착한 END가 10분짜리 자리비움으로 판정된다 — "PAUSED 구간은 자리비움에 들어가지 않는다"(★D1·D9)가 성립하려면 이 마감이 필요하다. 반대로 **이미 임계를 넘긴 구간은 Pause를 켜도 무를 수 없다**(D9). 이 판정으로 퇴출되면 위 UPDATE가 0행이 되어 409 `ALREADY_EVICTED`로 끝난다.
+부수효과: **위 UPDATE 직전에 열려 있는 자리비움 구간을 Pause 시작 시각으로 끊는다.** 마지막 `absence_event`가 `START`면 그 시각을 END로 간주해 SS-4와 같은 규칙으로 판정하고(초과면 길이에 비례해 경고 1회 이상, 그 경고가 3회째에 닿으면 퇴출), 서버가 만든 `END` 행을 남겨 구간을 닫는다(`client_seq`는 단말 값과 겹치지 않도록 음수를 쓴다). 닫지 않으면 화장실에 있던 시간이 자리비움 간격에 그대로 들어가, 복귀 후 도착한 END가 10분짜리 자리비움으로 판정된다 — "PAUSED 구간은 자리비움에 들어가지 않는다"(★D1·D9)가 성립하려면 이 마감이 필요하다. 반대로 **이미 임계를 넘긴 구간은 Pause를 켜도 무를 수 없다**(D9). 이 판정으로 퇴출되면 위 UPDATE가 0행이 되어 409 `ALREADY_EVICTED`로 끝난다.
 
 응답 200
 
@@ -981,7 +982,7 @@ UPDATE session_participant
 
 `warningIssued`·`warningCount`는 **위 마감으로 경고가 붙었는지**를 알린다. 3회째는 UPDATE가 0행이 되어 409로 드러나지만 1·2회째는 화장실 모드가 정상 시작되므로, 여기 싣지 않으면 사용자는 경고가 는 것을 모른 채 다음 경고에 퇴출된다. 필드 이름은 SS-6과 같다 — 같은 값을 두 화면이 다르게 부르면 클라이언트가 분기한다.
 
-`closedAbsenceSeconds`는 마감된 구간의 지속 초다. 마감할 구간이 없었으면 `null`이고, 임계 안쪽이라 경고가 붙지 않은 경우에도 값은 실린다. 판정이 몇 초로 계산됐는지가 이의(AP-1)를 쓸 때 본인이 댈 수 있는 유일한 근거라서다(영상은 저장하지 않는다 — ★D17).
+`closedAbsenceSeconds`는 마감된 구간의 지속 초다. 마감할 구간이 없었으면 `null`이고, 임계 안쪽이라 경고가 붙지 않은 경우에도 값은 실린다. 판정이 몇 초로 계산됐는지가 이의(AP-1)를 쓸 때 본인이 댈 수 있는 유일한 근거라서다(영상은 저장하지 않는다 — ★D17). SS-4와 마찬가지로 판정 구간은 `ends_at`에서 양끝을 자르므로 종료를 걸친 구간은 겹친 만큼만 세고, 겹침이 없으면 0이다.
 
 발생 에러: 409 `PAUSE_ALREADY_USED` / 409 `ALREADY_EVICTED` / 409 `SESSION_ENDED` / 403 `NOT_SESSION_PARTICIPANT` / 404 `SESSION_NOT_FOUND` / 503 `LOCK_ACQUISITION_FAILED`
 
