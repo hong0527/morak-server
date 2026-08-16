@@ -1,0 +1,5 @@
+node_modules/
+dist/
+
+# sync:ai 가 만드는 것. 3.7MB 모델과 wasm 런타임이라 저장소에 넣지 않는다.
+public/ai/

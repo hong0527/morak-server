@@ -1,0 +1,33 @@
+{
+  "name": "molock-ai-detection",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MoLock 온디바이스 자리비움 감지 레퍼런스 구현. docs/ai-pipeline.md 가 계약이다.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "vendor": "node scripts/vendor.mjs",
+    "replay": "node dist/harness/cli.js",
+    "selftest": "node dist/harness/selftest.js",
+    "score": "node dist/harness/cli.js score",
+    "sweep": "node dist/harness/cli.js sweep",
+    "contract": "node dist/harness/server-contract.js",
+    "w1-check": "npm run build && node harness/w1-check.mjs",
+    "build:worker": "esbuild dist/src/worker/detector.worker.js --bundle --format=iife --platform=browser --target=es2022 --outfile=dist/worker-classic.js",
+    "browser-check": "npm run build && npm run build:worker && node harness/browser-check.mjs --classicWorker=1",
+    "video-check": "npm run build && npm run build:worker && node harness/browser-check.mjs --classicWorker=1 --runMs=60000"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "esbuild": "^0.25.12",
+    "puppeteer-core": "^24.43.1",
+    "typescript": "5.9.3"
+  }
+}

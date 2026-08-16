@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>MoLock 실시간 경로 점검 — 카메라부터 SS-4 까지</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 760px; line-height: 1.6; }
+  video { width: 320px; background: #000; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px;
+         background: #f5f5f5; padding: 12px; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<h1>실시간 경로 점검</h1>
+<p>
+  <code>record-page.html</code> 이 <strong>파일 하나를 오프라인으로 추론</strong>하는 도구라면,
+  이 페이지는 <strong>서비스가 실제로 타는 경로</strong>를 그대로 돈다 —
+  getUserMedia → <code>frame-source</code> → Worker → 상태기계 → <code>sender</code> → SS-4.
+</p>
+<p>
+  사람이 열어서 봐도 되고, <code>browser-check.mjs</code> 가 헤드리스로 몰아서 돌리기도 한다.
+  결과는 <code>window.__probe</code> 에 쌓인다.
+</p>
+
+<video id="video" playsinline muted autoplay></video>
+<div id="log">준비 중…</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "@mediapipe/tasks-vision": "/harness/vendor/tasks-vision/vision_bundle.mjs"
+  }
+}
+</script>
+
+<script type="module">
+import { AbsenceDetectionController } from "/dist/src/client/controller.js";
+import { FetchAbsenceTransport } from "/dist/src/client/sender.js";
+import { DEFAULT_CONFIG } from "/dist/src/config.js";
+
+const params = new URLSearchParams(location.search);
+const logEl = document.getElementById("log");
+
+/** 헤드리스 드라이버가 읽어 가는 자리. 사람이 열었을 때는 콘솔에서 본다. */
+const probe = (window.__probe = {
+  steps: [],
+  errors: [],
+  frames: 0,
+  ticks: [],
+  states: [],
+  effects: [],
+  posts: [],
+  verdicts: [],
+  inferenceMs: [],
+  samples: [],
+  calibration: null,
+  seqStoreAtStart: null,
+  seqStoreNow: () => readStore(),
+  done: false,
+});
+
+function step(name, detail) {
+  probe.steps.push({ name, detail, atMs: Date.now() });
+  logEl.textContent = probe.steps.map((s) => `${s.name} ${s.detail ?? ""}`).join("\n");
+  console.log("[probe]", name, detail ?? "");
+}
+
+const sessionId = Number(params.get("sessionId") ?? 1);
+const storeKey = `molock.absence.v1.${sessionId}`;
+function readStore() {
+  try {
+    return JSON.parse(sessionStorage.getItem(storeKey) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+/** 서버가 없을 때 쓰는 대역. 서버 응답 형태만 흉내 낸다. */
+class StubTransport {
+  async post(body) {
+    probe.posts.push({ body, atMs: Date.now(), mode: "stub" });
+    return {
+      kind: "OK",
+      response: {
+        accepted: true,
+        warningCount: 0,
+        evicted: false,
+        evictionId: null,
+        pointDelta: 0,
+        closedAbsenceSeconds: null,
+      },
+    };
+  }
+}
+
+/** 실제 서버로 쏘되, 무엇이 오갔는지 기록한다. */
+class RecordingTransport {
+  constructor(inner) {
+    this.inner = inner;
+  }
+  async post(body) {
+    const outcome = await this.inner.post(body);
+    probe.posts.push({ body, outcome, atMs: Date.now(), mode: "server" });
+    return outcome;
+  }
+}
+
+/**
+ * 모듈 워커 안이 실제로 어떤 환경인지 본다. MediaPipe 로더가 갈림길에서 무엇을 고르는지가
+ * 여기서 갈린다 — `typeof importScripts` 가 "function" 이면 importScripts 를 시도하고,
+ * 그것이 TypeError 로 튕기면 동적 import() 로 넘어간다.
+ */
+async function probeWorkerEnv() {
+  const src = `
+    self.postMessage({
+      importScripts: typeof importScripts,
+      document: typeof document,
+      hasSelfImport: typeof self.import,
+      importScriptsThrows: (() => {
+        try { importScripts("data:text/javascript,void 0"); return "던지지 않음"; }
+        catch (e) { return e.constructor.name + ": " + e.message; }
+      })(),
+    });
+  `;
+  const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+  const w = new Worker(url, { type: "module" });
+  const out = await new Promise((resolve) => {
+    w.onmessage = (e) => resolve(e.data);
+    setTimeout(() => resolve({ error: "응답 없음" }), 5000);
+  });
+  w.terminate();
+  URL.revokeObjectURL(url);
+  return out;
+}
+
+/** 메인 스레드에서 모델을 직접 띄워 본다. 워커 문제와 모델·자산 문제를 가른다. */
+async function mainThreadCheck(video) {
+  const { FaceDetectorRunner } = await import("/dist/src/detector.js");
+  const { DEFAULT_CONFIG } = await import("/dist/src/config.js");
+  const runner = new FaceDetectorRunner(DEFAULT_CONFIG.scoring);
+  const t0 = Date.now();
+  await runner.load({
+    wasmBasePath: "/harness/vendor/tasks-vision/wasm",
+    modelAssetPath: "/harness/vendor/models/face_landmarker.task",
+  });
+  probe.mainThread = { loadMs: Date.now() - t0, inferMs: [], features: null, present: 0, total: 0 };
+  step("메인 스레드 모델 로딩", `${probe.mainThread.loadMs}ms`);
+
+  const iters = Number(params.get('mainIters') ?? 20);
+  const gapMs = Number(params.get('mainGapMs') ?? 60);
+  for (let i = 0; i < iters; i += 1) {
+    const bitmap = await createImageBitmap(video);
+    const s = performance.now();
+    const features = runner.detect(bitmap, Date.now() + i);
+    probe.mainThread.inferMs.push(performance.now() - s);
+    probe.mainThread.features = features;
+    probe.mainThread.total += 1;
+    if (features.present) probe.mainThread.present += 1;
+    bitmap.close();
+    await new Promise((r) => setTimeout(r, gapMs));
+  }
+  step("메인 스레드 추론", `${probe.mainThread.inferMs.length}회`);
+}
+
+async function main() {
+  // ── 1. 카메라 ──────────────────────────────────────────────
+  // 서비스에서는 LiveKit 이 이 자리를 대신한다(컨트롤러는 카메라를 열지 않는다).
+  // 여기서는 가짜 카메라를 물린 크롬이 그 자리에 선다.
+  const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  const video = document.getElementById("video");
+  video.srcObject = stream;
+  await video.play();
+  const track = stream.getVideoTracks()[0];
+  probe.videoStartAtMs = Date.now();
+  step("getUserMedia", `${video.videoWidth}x${video.videoHeight} label=${track.label}`);
+  probe.videoSize = { w: video.videoWidth, h: video.videoHeight };
+
+  // rVFC 가 실제로 있는지. 타입에 있다고 런타임에 있는 것이 아니다(frame-source.ts 주석).
+  probe.hasRvfc = typeof video.requestVideoFrameCallback === "function";
+  step("requestVideoFrameCallback", probe.hasRvfc ? "있다" : "없다");
+
+  probe.workerEnv = await probeWorkerEnv();
+  step("모듈 워커 환경", JSON.stringify(probe.workerEnv));
+
+  if (params.get("mainThread") === "1") {
+    await mainThreadCheck(video);
+    probe.done = true;
+    return;
+  }
+
+  // ── 2. Worker + 모델 ───────────────────────────────────────
+  // 클래식 워커: 번들러가 IIFE 한 덩이로 뽑은 것. MediaPipe 로더가 importScripts 를 쓸 수 있어
+  // wasm 글루가 클래식 스크립트로 평가된다. 모듈 워커에서 왜 안 되는지는 README §9 참조.
+  const classic = params.get("classicWorker") === "1";
+  const workerUrl = params.get("workerUrl")
+    ?? (classic ? "/dist/worker-classic.js" : "/worker-graph/dist/src/worker/detector.worker.js");
+  const config = structuredClone(DEFAULT_CONFIG);
+  if (params.get("fastPrompt") === "1") {
+    // 전송까지 걸리는 45초를 줄인다. 상태기계 자체는 selftest 가 이미 덮으므로
+    // 여기서 보는 것은 "효과가 sender 를 거쳐 서버까지 가는가"다.
+    config.stateMachine.promptDelayMs = 6000;
+    config.stateMachine.promptAnswerWindowMs = 4000;
+  }
+
+  // server 가 빈 문자열이면 같은 오리진(프록시)으로 부른다 — 배포 §7 이 규정한 구성이다.
+  // 값이 있으면 그 오리진으로 직접 쏜다(CORS 가 없어 브라우저가 막는 것을 보려는 경우).
+  const transport = params.has("server")
+    ? new RecordingTransport(
+        new FetchAbsenceTransport(
+          `${params.get("server")}/api/sessions/${sessionId}/absence-events`,
+          () => ({ Authorization: `Bearer ${params.get("token") ?? ""}` }),
+        ),
+      )
+    : new StubTransport();
+
+  let lastFrameAtMs = 0;
+  const controller = new AbsenceDetectionController({
+    video,
+    createWorker: () => (classic ? new Worker(workerUrl) : new Worker(workerUrl, { type: "module" })),
+    sessionId,
+    assets: {
+      // 워커가 받아 가는 경로다. 서버가 로더의 전역 대입을 보정한다(browser-check.mjs 주석).
+      wasmBasePath: classic || params.get("rawWasm") === "1"
+        ? "/harness/vendor/tasks-vision/wasm"
+        : "/worker-graph/harness/vendor/tasks-vision/wasm",
+      modelAssetPath: "/harness/vendor/models/face_landmarker.task",
+    },
+    transport,
+    config,
+    emitFeatures: true,
+    hooks: {
+      onShowPrompt: () => probe.effects.push({ kind: "SHOW_PROMPT", atMs: Date.now() }),
+      onHidePrompt: () => probe.effects.push({ kind: "HIDE_PROMPT", atMs: Date.now() }),
+      onShowAdjustHint: () => probe.effects.push({ kind: "ADJUST_HINT", atMs: Date.now() }),
+      onServerVerdict: (r) => probe.verdicts.push(r),
+      onTerminal: (code) => probe.effects.push({ kind: "TERMINAL", code }),
+      onError: (message, fatal) => probe.errors.push({ message, fatal }),
+      onTick: ({ tMs, state, score }) => {
+        probe.ticks.push({ tMs, state, verdict: score.verdict, score: score.score });
+        if (probe.states.at(-1) !== state) probe.states.push(state);
+      },
+      onFeatures: (features) => {
+        probe.frames += 1;
+        // 영상 대본과 맞대려면 프레임마다 시각·검출·각도가 필요하다.
+        probe.samples.push({
+          tMs: features.tMs,
+          present: features.present,
+          pitchDeg: features.pitchDeg,
+          faceSize: features.faceSize,
+          luminance: features.luminance,
+        });
+        // 프레임 사이 간격 = 추론이 실제로 따라오는 주기. 2Hz 를 감당하는지 여기서 본다.
+        const now = Date.now();
+        if (lastFrameAtMs) probe.inferenceMs.push(now - lastFrameAtMs);
+        lastFrameAtMs = now;
+        probe.lastFeatures = features;
+      },
+    },
+  });
+
+  const loadStart = Date.now();
+  await controller.init();
+  probe.modelLoadMs = Date.now() - loadStart;
+  step("모델 로딩", `${probe.modelLoadMs}ms`);
+
+  // ── 3. 캘리브레이션 8초 ────────────────────────────────────
+  if (params.get("skipCalibration") !== "1") {
+    const calStart = Date.now();
+    const outcome = await controller.calibrate();
+    probe.calibration = {
+      elapsedMs: Date.now() - calStart,
+      warnings: outcome.warnings ?? null,
+      hasProfile: Boolean(outcome.profile),
+      raw: outcome,
+    };
+    step("캘리브레이션", `${probe.calibration.elapsedMs}ms 경고=${probe.calibration.warnings} 프로필=${probe.calibration.hasProfile}`);
+  }
+
+  // ── 4. 감지 시작 ───────────────────────────────────────────
+  probe.seqStoreAtStart = readStore();
+  probe.detectStartAtMs = Date.now();
+  controller.start();
+  step("감지 시작", `sessionStorage=${JSON.stringify(probe.seqStoreAtStart)}`);
+
+  const runMs = Number(params.get("runMs") ?? 20000);
+  await new Promise((r) => setTimeout(r, runMs));
+  controller.stop();
+
+  probe.seqStoreEnd = readStore();
+  probe.done = true;
+  step("끝", `프레임=${probe.frames} 전송=${probe.posts.length}`);
+}
+
+main().catch((e) => {
+  probe.errors.push({ message: String(e && e.stack ? e.stack : e), fatal: true });
+  probe.done = true;
+  step("실패", String(e));
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "clipId": "hwasu-01-야간-필기",
+  "durationMs": 4800000,
+  "conditions": {
+    "device": "MacBook Air M2 / Chrome 138",
+    "lighting": "스탠드만 켠 야간",
+    "glasses": true,
+    "posture": "고개 숙여 필기 위주"
+  },
+  "absences": [
+    { "startMs": 612000, "endMs": 645000, "note": "물 마시러 — 33초, 임계 미만이라 경고가 없어야 정상" },
+    { "startMs": 1830000, "endMs": 1962000, "note": "화장실 — 132초, 경고 1회가 나야 정탐" },
+    { "startMs": 3305000, "endMs": 3401000, "note": "택배 수령 — 96초" }
+  ]
+}

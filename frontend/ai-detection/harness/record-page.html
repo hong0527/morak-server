@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>MoLock 오탐률 하네스 — 추론 로그 생성</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 720px; line-height: 1.6; }
+  video { width: 100%; background: #000; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px;
+         background: #f5f5f5; padding: 12px; margin-top: 12px; }
+  label { display: block; margin: 8px 0; }
+  button { padding: 8px 16px; }
+</style>
+</head>
+<body>
+
+<h1>추론 로그 생성</h1>
+<p>
+  녹화한 클립 하나를 넣으면 프레임별 원시 특징을 JSON 으로 내려준다.
+  <strong>추론은 여기서 한 번만 돈다.</strong> 임계값 튜닝은 이 로그 위에서
+  <code>cli.js</code> 로 하고, 재녹화나 재추론은 하지 않는다.
+</p>
+
+<label>클립 ID <input id="clipId" placeholder="예: hwasu-01-야간-필기"></label>
+<label>영상 파일 <input id="file" type="file" accept="video/*"></label>
+<button id="run" disabled>추론 시작</button>
+
+<video id="video" playsinline muted controls></video>
+<div id="log">모델을 준비하는 중…</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "@mediapipe/tasks-vision": "./vendor/tasks-vision/vision_bundle.mjs"
+  }
+}
+</script>
+
+<script type="module">
+// dist 는 `npm run build` 결과다. 번들러 없이 브라우저가 그대로 읽는다.
+import { recordClip } from "../dist/harness/record.js";
+
+const els = {
+  clipId: document.getElementById("clipId"),
+  file: document.getElementById("file"),
+  run: document.getElementById("run"),
+  video: document.getElementById("video"),
+  log: document.getElementById("log"),
+};
+
+const ASSETS = {
+  // npm run vendor 가 채워 넣는 경로다.
+  wasmBasePath: "./vendor/tasks-vision/wasm",
+  modelAssetPath: "./vendor/models/face_landmarker.task",
+};
+
+function print(text) { els.log.textContent = text; }
+
+els.file.addEventListener("change", () => {
+  const file = els.file.files?.[0];
+  if (!file) return;
+  els.video.src = URL.createObjectURL(file);
+  if (!els.clipId.value) els.clipId.value = file.name.replace(/\.[^.]+$/, "");
+  els.run.disabled = false;
+  print("준비됨. 추론 시작을 누르면 영상이 처음부터 재생되며 기록한다.");
+});
+
+els.run.addEventListener("click", async () => {
+  els.run.disabled = true;
+  try {
+    const log = await recordClip({
+      video: els.video,
+      clipId: els.clipId.value || "unnamed",
+      assets: ASSETS,
+      onProgress: (ratio, frames) =>
+        print(`추론 중… ${(ratio * 100).toFixed(0)}%  (${frames} 프레임)`),
+    });
+
+    const blob = new Blob([JSON.stringify(log)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${log.clipId}.json`;
+    a.click();
+
+    const detected = log.frames.filter((f) => f.present).length;
+    print(
+      `완료. ${log.frames.length} 프레임, 검출 ${detected} (${
+        ((detected / Math.max(1, log.frames.length)) * 100).toFixed(1)
+      }%)\n` +
+      `캘리브레이션: ${log.calibration ? JSON.stringify(log.calibration) : "실패(수집 프레임 부족)"}\n` +
+      `파일이 내려받아졌다. logs/ 에 넣고 같은 clipId 의 라벨을 labels/ 에 넣어라.`
+    );
+  } catch (e) {
+    print(`실패: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    els.run.disabled = false;
+  }
+});
+
+print("영상 파일을 고르면 시작할 수 있다.");
+</script>
+
+</body>
+</html>

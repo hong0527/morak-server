@@ -1,0 +1,34 @@
+{
+  "name": "molock-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "npm run sync:ai && vite",
+    "build": "npm run sync:ai && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "sync:ai": "node scripts/sync-ai-detection.mjs",
+    "smoke": "node scripts/smoke-check.mjs",
+    "gen:api": "openapi-typescript ../docs/openapi.yaml -o src/api/schema.gen.ts"
+  },
+  "dependencies": {
+    "livekit-client": "^2.15.7",
+    "molock-ai-detection": "file:./ai-detection",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.0.4",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.12"
+  }
+}
