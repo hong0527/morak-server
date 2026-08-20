@@ -1,6 +1,10 @@
 # morak-server
 
-시간 단일 조건 6인 자동 매칭 실시간 캠스터디 서비스 'MoLock'의 백엔드 서버입니다.
+시간 단일 조건 6인 자동 매칭 실시간 캠스터디 서비스 'MoLock'의 저장소입니다.
+백엔드 서버와 웹 프론트엔드(`frontend/`), 온디바이스 자리비움 감지 모듈
+(`frontend/ai-detection/`)이 함께 있습니다.
+
+**실서버: https://morak.duckdns.org**
 
 하루 목표 시간 하나만 고르면 같은 시간을 고른 6명이 자동으로 묶이고,
 실시간 캠 세션에서 함께 공부합니다. 자리를 비우면 경고가 쌓이고 3회면 퇴출됩니다.
@@ -10,10 +14,12 @@
 
 ## 기술 스택
 
-- Java 21, Spring Boot 4.1
-- Spring Data JPA
+- Java 21, Spring Boot 4.1, Spring Data JPA
 - H2 (개발) / MySQL (운영)
-- LiveKit (실시간 캠 세션)
+- React 19, Vite, TypeScript (프론트엔드)
+- LiveKit (6인 실시간 캠·스티커 데이터 채널)
+- MediaPipe 얼굴 감지 (참가자 브라우저 안에서만 돌고, 영상은 감지 목적으로 서버에 가지 않습니다)
+- 카카오 로그인
 - Gradle
 
 ## 실행 방법
@@ -31,6 +37,14 @@ JDBC URL은 `jdbc:h2:mem:morak;MODE=MySQL;LOCK_TIMEOUT=3000` 입니다.
 ```bash
 curl http://localhost:8080/api/ping
 # {"error":{"code":"ENDPOINT_NOT_FOUND","message":"존재하지 않는 경로입니다.","details":null}}
+```
+
+프론트엔드는 따로 띄웁니다.
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:5173, /api는 8080으로 프록시. 감지 모델 배치까지 알아서 합니다
 ```
 
 ### 재기동 실측·시연 시 주의 두 가지
@@ -60,19 +74,21 @@ H2의 기본값은 500ms 비동기 기록이라, 그 사이에 프로세스를 �
 공통 파일에는 비밀값의 기본값을 두지 않습니다. 공개 저장소에 커밋되는 파일이라
 폴백이 있으면 운영에서 환경변수를 빠뜨려도 누구나 아는 키로 조용히 기동합니다.
 
-## 외부 연동은 아직 스텁입니다
+## 외부 연동
 
-소셜 로그인(카카오)과 결제(토스페이먼츠) 실구현은 앱 키·테스트 키가 나오는 12단계에 넣습니다.
-그때까지 두 자리는 프로필에 따라 다른 구현이 채웁니다.
+소셜 로그인은 카카오 실연동이 붙어 있습니다. `RoutingSocialClient`가 provider별로
+구현을 고릅니다 — `KAKAO`는 카카오 토큰·프로필 API를 실제로 호출하고, `DEV`는
+심사·개발용 코드 로그인(받은 코드를 그대로 계정 번호로 쓰는 `DevSocialClient`)으로
+갑니다. 카카오 키가 없는 환경에서 `KAKAO` 요청이 오면 401로 거절합니다.
 
-| 프로필 | 소셜 로그인 | PG 승인 조회 |
-| --- | --- | --- |
-| `dev` (+ `morak.dev.enabled=true`) | `DevSocialClient` — 받은 인가 코드를 그대로 소셜 계정 번호로 씁니다 | `DevPgClient` — 받은 거래를 승인으로 돌려줍니다(`fail-`·`mismatch-` 접두사로 실패 경로 재현) |
-| 그 외 (`prod` 포함) | `RejectingSocialClient` — 어떤 코드든 401 `INVALID_SOCIAL_TOKEN` | `RejectingPgClient` — 어떤 거래도 승인하지 않아 409 `PAYMENT_NOT_APPROVED` |
+결제(토스페이먼츠)는 아직 스텁입니다. `dev`·`demo` 프로필에서는 `DevPgClient`가
+받은 거래를 승인으로 돌려주고(`fail-`·`mismatch-` 접두사로 실패 경로 재현),
+그 외 프로필에서는 `RejectingPgClient`가 어떤 거래도 승인하지 않아
+409 `PAYMENT_NOT_APPROVED`가 됩니다.
 
-**거절하는 쪽이 기본값인 것이 핵심입니다.** 통과시키는 스텁이 운영에 남으면 인증 없는 로그인과
-결제 없는 포인트 적립이 열립니다. 그래서 운영 프로필에서는 로그인과 결제가 막힌 상태로 기동하고,
-그 상태가 정상입니다 — 나머지 API·배치·헬스체크는 실서버에서 그대로 확인할 수 있습니다.
+**거절하는 쪽이 기본값인 것이 핵심입니다.** 통과시키는 스텁이 운영에 남으면
+결제 없는 포인트 적립이 열립니다. 개발용 코드 로그인도 프로필과
+`morak.dev.enabled` 이중 스위치를 켠 곳에서만 열립니다.
 
 ## 환경 변수
 
@@ -85,7 +101,11 @@ H2의 기본값은 500ms 비동기 기록이라, 그 사이에 프로세스를 �
 | `MORAK_JWT_SECRET` | JWT 서명 키 | 현재 |
 | `MORAK_SOCIAL_HASH_PEPPER` | 소셜 식별자 해시용 pepper | 현재 |
 | `MORAK_LIVEKIT_HOST`·`MORAK_LIVEKIT_API_KEY`·`MORAK_LIVEKIT_API_SECRET` | LiveKit 토큰 발급·웹훅 서명 검증 | 라이브 세션 단계 |
+| `MORAK_KAKAO_REST_KEY`·`MORAK_KAKAO_REDIRECT_URI`·`MORAK_KAKAO_CLIENT_SECRET` | 카카오 로그인. 비우면 카카오만 꺼진 채 기동 | 카카오 로그인 |
 | `MORAK_PG_SECRET_KEY` | 포인트 충전 PG 웹훅 서명 검증 | 결제 단계 |
+
+프론트 빌드에는 `VITE_KAKAO_REST_KEY`가 따로 필요합니다. 없으면 카카오 버튼이
+안내 문구로 대체되고 코드 로그인만 열립니다.
 
 운영 프로필로 기동만 확인할 때도 위 값이 전부 필요합니다. 폴백이 없어서 하나라도 비면
 기동 자체가 실패하고, 그것이 의도한 동작입니다.
@@ -106,6 +126,11 @@ com.morak
 ├── report          신고, 제재
 └── dev             개발 전용 API (시각 조작, 배치 트리거, 세션 시드)
 ```
+
+프론트엔드는 `frontend/`에 있습니다. 화면은 `src/screens`(사용자 15종 + 관리자 5종),
+LiveKit 연결은 `src/livekit`, 자리비움 감지 연결은 `src/detection`이 맡습니다.
+감지 모듈 자체는 `frontend/ai-detection/`이 소유하고, 모델·wasm은
+`npm run sync:ai`가 `public/ai`로 배치합니다.
 
 각 도메인 패키지는 `controller`, `service`, `repository`, `entity`, `dto`, `type` 으로 구성합니다.
 `dto`는 `request`와 `response`로 다시 나눕니다.
@@ -149,10 +174,12 @@ com.morak
 | 완주 판정, 포인트 | 완료 |
 | 스토어, 결제 | 완료 (PG는 개발용 스텁 기준) |
 | 신고·운영, 관리자 콘솔 | 완료 |
-| 운영 준비 | 진행 중 — 카카오·토스페이먼츠 실연동이 남았습니다 |
+| 웹 프론트엔드 (사용자 + 관리자 화면) | 완료 |
+| 카카오 로그인 실연동 | 완료 |
+| 실서버 배포 (MySQL·HTTPS·LiveKit Cloud) | 완료 — morak.duckdns.org 운영 중 |
+| 토스페이먼츠 실연동 | 남음 (스텁으로 흐름은 끝까지 돌아갑니다) |
 
-2026-08-12 기획이 MoLock으로 전환됐고, 그 뒤 12단계까지의 구현이 끝났습니다.
-남은 것은 위 표의 마지막 줄(실연동)과 강의 자료 정리입니다.
+2026-08-12 기획이 MoLock으로 전환됐고, 그 뒤 12단계까지의 구현과 배포가 끝났습니다.
 단계별 상세는 [docs/implementation-plan.md](docs/implementation-plan.md),
 경위와 범위는 [docs/project-overview.md](docs/project-overview.md)에 있습니다.
 
