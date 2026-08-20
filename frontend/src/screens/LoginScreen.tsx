@@ -64,19 +64,27 @@ export default function LoginScreen() {
   return (
     <div className="screen login">
       <div className="brand login-brand">
-        <h1>MoLock</h1>
-        <span>함께 모여 몰입하는 실시간 캠 스터디</span>
+        <h1>모락</h1>
+        <span>함께 시작하는 목표 달성</span>
       </div>
       <div className="wide-box">캠 스터디 6인 매칭</div>
       <form className="socials" onSubmit={submit}>
-        <label className="muted">
-          authorizationCode — 개발용 로그인이다. 아무 문자열이나 넣으면 그 문자열이 곧
-          계정이 된다.
-          <input value={code} onChange={(e) => setCode(e.target.value)} required />
-        </label>
+        <details className="demo-account">
+          <summary>시연용 계정 변경</summary>
+          <label>
+            체험 계정 ID
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="예) tester-1"
+              autoComplete="username"
+              required
+            />
+          </label>
+        </details>
         <button className="kakao" type="submit" disabled={busy}>
-          <span className="icon kakao-dot"></span>
-          {busy ? "로그인 중..." : "Continue with Kakao"}
+          <span className="icon kakao-icon" aria-hidden="true"></span>
+          <span>{busy ? "로그인 중..." : "카카오로 계속하기"}</span>
         </button>
         <label className="row" style={{ gap: 6, fontWeight: 500 }}>
           <input
@@ -90,7 +98,7 @@ export default function LoginScreen() {
       </form>
       <p className="caption">
         SNS 계정으로 빠르게 가입하고 같은 시간을 고른 동료들과 함께 몰입하세요.
-        이용약관·개인정보 처리방침은 필수라 자동으로 동의 처리됩니다.
+        계속하면 이용약관과 개인정보 처리방침에 동의하게 됩니다.
       </p>
       {error && <p className="error" style={{ textAlign: "center" }}>{error}</p>}
     </div>

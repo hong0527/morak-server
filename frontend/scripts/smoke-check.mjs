@@ -100,7 +100,7 @@ try {
   console.log(`\n앱 ${APP} · 계정 ${CODE}\n`);
 
   await page.goto(`${APP}/login`, { waitUntil: "networkidle2" });
-  record((await text()).includes("MoLock"), "로그인 화면이 뜬다");
+  record((await text()).includes("모락"), "로그인 화면이 뜬다");
 
   await page.evaluate(() => {
     localStorage.clear();

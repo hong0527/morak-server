@@ -50,7 +50,11 @@ if (!existsSync(model) || !existsSync(wasm)) {
 // ai-detection 의 명령을 그대로 부른다. esbuild 옵션을 여기 복제하면 두 곳이 어긋난다.
 console.log("ai-detection 빌드 중...");
 for (const script of ["build", "build:worker"]) {
-  execFileSync("npm", ["run", script], { cwd: ai, stdio: "inherit" });
+  const command = process.platform === "win32" ? (process.env.ComSpec ?? "cmd.exe") : "npm";
+  const args = process.platform === "win32"
+    ? ["/d", "/s", "/c", `npm run ${script}`]
+    : ["run", script];
+  execFileSync(command, args, { cwd: ai, stdio: "inherit" });
 }
 
 const worker = join(ai, "dist", "worker-classic.js");
