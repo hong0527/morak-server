@@ -59,7 +59,7 @@ export default function StoreScreen() {
       setBalance(me.pointBalance);
       setError(null);
     } catch (e) {
-      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+      setError(e instanceof ApiError ? e.message : String(e));
     }
   }, []);
 
@@ -75,7 +75,7 @@ export default function StoreScreen() {
       const product = await api.store.product(productId);
       setDraft({ product, quantity: 1, idempotencyKey: crypto.randomUUID() });
     } catch (e) {
-      setOrderError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+      setOrderError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -114,11 +114,11 @@ export default function StoreScreen() {
         setDraft(null);
         void load();
       } else if (e instanceof ApiError && e.code === "INSUFFICIENT_POINT") {
-        setOrderError("포인트가 부족하다.");
+        setOrderError("포인트가 부족해요.");
       } else if (e instanceof ApiError && e.code === "OUT_OF_STOCK") {
-        setOrderError("재고가 없다.");
+        setOrderError("품절된 상품이에요.");
       } else {
-        setOrderError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+        setOrderError(e instanceof ApiError ? e.message : String(e));
       }
     } finally {
       setBusy(false);
@@ -136,7 +136,7 @@ export default function StoreScreen() {
   if (!products) {
     return (
       <div className="screen">
-        <p className="muted">불러오는 중...</p>
+        <p className="muted loading">불러오는 중이에요</p>
       </div>
     );
   }
@@ -155,8 +155,10 @@ export default function StoreScreen() {
 
       {placed && (
         <div className="notice">
-          주문 완료 — {placed.productName} {placed.quantity}개, {placed.pointAmount.toLocaleString()}P
-          차감{placed.pointBalance !== null && `, 잔액 ${placed.pointBalance.toLocaleString()}P`}.
+          주문이 완료됐어요. {placed.productName} {placed.quantity}개 ·{" "}
+          {placed.pointAmount.toLocaleString()}P 사용
+          {placed.pointBalance !== null &&
+            ` · 남은 포인트 ${placed.pointBalance.toLocaleString()}P`}
         </div>
       )}
 
@@ -196,7 +198,7 @@ export default function StoreScreen() {
 
       <h2>상품</h2>
       {products.content.length === 0 ? (
-        <p className="muted">판매 중인 상품이 없다.</p>
+        <p className="empty">지금은 판매 중인 상품이 없어요. 곧 새 상품이 채워질 예정이에요.</p>
       ) : (
         <table>
           <thead>
@@ -231,7 +233,7 @@ export default function StoreScreen() {
 
       <h2>구매 내역</h2>
       {!orders || orders.content.length === 0 ? (
-        <p className="muted">아직 구매한 것이 없다.</p>
+        <p className="empty">아직 구매 내역이 없어요. 모은 포인트로 상품을 바꿔 보세요.</p>
       ) : (
         <table>
           <thead>

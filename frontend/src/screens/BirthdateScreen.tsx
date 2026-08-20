@@ -41,12 +41,12 @@ export default function BirthdateScreen() {
     } catch (e) {
       if (e instanceof ApiError) {
         if (e.code === "UNDER_AGE_SIGNUP_BLOCKED") {
-          setError("만 14세 미만은 가입할 수 없다. 이 계정은 더 이상 쓸 수 없다.");
+          setError("만 14세 미만은 가입할 수 없어요. 이 계정은 더 이상 이용할 수 없어요.");
         } else if (e.code === "ALREADY_VERIFIED") {
           navigate("/", { replace: true });
           return;
         } else {
-          setError(`${e.message} (${e.code})`);
+          setError(e.message);
         }
       } else {
         setError(String(e));
@@ -107,7 +107,7 @@ export default function BirthdateScreen() {
       ) : (
         <div className="card small-text">
           <h3>저장 전 확인</h3>
-          <p>{birthDate} 로 저장한다. 저장 후에는 바꿀 수 없다.</p>
+          <p>{birthDate}로 저장할게요. 저장한 뒤에는 바꿀 수 없어요.</p>
           <button className="cta black-cta" style={{ marginTop: 12 }} onClick={submit} disabled={busy}>
             저장
           </button>

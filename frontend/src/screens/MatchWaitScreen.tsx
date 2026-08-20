@@ -63,12 +63,14 @@ export default function MatchWaitScreen() {
           return;
         }
         if (e.code === "REMATCH_COOLDOWN") {
-          setError(`퇴출 후 재매칭 대기 중이다. ${e.details?.availableAt ?? ""} 부터 가능하다.`);
+          setError(
+            `퇴출 후에는 잠시 매칭을 쉬어야 해요. ${e.details?.availableAt ?? ""}부터 다시 신청할 수 있어요.`,
+          );
         } else if (e.code === "CONSENT_REQUIRED") {
           navigate("/media-consent");
           return;
         } else {
-          setError(`${e.message} (${e.code})`);
+          setError(e.message);
         }
       } else {
         setError(String(e));
@@ -99,7 +101,7 @@ export default function MatchWaitScreen() {
         {!waiting && (
           <>
             <h1>매칭 조건 선택</h1>
-            <p className="muted">공부할 시간을 고르면 같은 시간을 고른 6명이 자동으로 묶인다.</p>
+            <p className="muted">공부할 시간을 고르면 같은 시간을 고른 6명이 한 팀이 돼요.</p>
             <h3>하루 목표 시간</h3>
             <div className="chips">
               {CHOICES.map((m) => (
@@ -149,8 +151,7 @@ export default function MatchWaitScreen() {
               </p>
             </div>
             <p className="caption left">
-              대기가 만료돼도 최대 1분간 대기 중으로 보일 수 있다. 만료 처리를 매분 도는
-              배치가 하기 때문이다.
+              대기가 만료된 뒤에도 최대 1분간 대기 중으로 표시될 수 있어요.
             </p>
             <button className="link" disabled={busy} onClick={() => cancel(current.matchRequestId)}>
               매칭 요청 취소
@@ -160,7 +161,8 @@ export default function MatchWaitScreen() {
 
         {(current?.status === "EXPIRED" || current?.status === "CANCELLED") && (
           <p className="muted">
-            {current.status === "EXPIRED" ? "대기가 만료됐다." : "대기를 취소했다."} 다시 신청할 수 있다.
+            {current.status === "EXPIRED" ? "대기 시간이 만료됐어요." : "매칭 신청을 취소했어요."}{" "}
+            언제든 다시 신청할 수 있어요.
           </p>
         )}
 

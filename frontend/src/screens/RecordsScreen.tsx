@@ -40,7 +40,7 @@ export default function RecordsScreen() {
       setAppeals(appealPage);
       setError(null);
     } catch (e) {
-      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+      setError(e instanceof ApiError ? e.message : String(e));
     }
   }, []);
 
@@ -59,7 +59,7 @@ export default function RecordsScreen() {
   if (!sessions) {
     return (
       <div className="screen">
-        <p className="muted">불러오는 중...</p>
+        <p className="muted loading">불러오는 중이에요</p>
       </div>
     );
   }
@@ -86,7 +86,7 @@ export default function RecordsScreen() {
 
       <h2>세션 기록</h2>
       {sessions.content.length === 0 ? (
-        <p className="muted">아직 참여한 세션이 없다.</p>
+        <p className="empty">아직 참여한 세션이 없어요. 첫 매칭을 시작해 보세요.</p>
       ) : (
         <table>
           <thead>
@@ -138,7 +138,7 @@ export default function RecordsScreen() {
 
       <h2>퇴출 이의</h2>
       {!appeals || appeals.content.length === 0 ? (
-        <p className="muted">낸 이의가 없다.</p>
+        <p className="empty">신청한 이의가 없어요.</p>
       ) : (
         appeals.content.map((a) => (
           <div className="card" key={a.appealId} style={{ marginBottom: 8 }}>
@@ -152,12 +152,14 @@ export default function RecordsScreen() {
             {/* 처리 사유(note)는 내려오지 않는다. 결과는 원복 사실로만 설명한다(스키마 주석) */}
             {a.status === "ACCEPTED" && (
               <p className="muted">
-                포인트 {a.pointRefunded ?? 0}P 반환
-                {a.sessionCompletedRestored && ", 완주 복구"}
+                포인트 {a.pointRefunded ?? 0}P가 반환됐어요
+                {a.sessionCompletedRestored && ". 완주 기록도 복구됐어요"}.
               </p>
             )}
             {a.status === "PENDING" && (
-              <p className="muted">{a.slaDueAt.slice(0, 16).replace("T", " ")} 까지 검토된다.</p>
+              <p className="muted">
+                {a.slaDueAt.slice(0, 16).replace("T", " ")}까지 검토될 예정이에요.
+              </p>
             )}
           </div>
         ))

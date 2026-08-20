@@ -60,7 +60,7 @@ export default function ReportScreen() {
         }
       } catch (e) {
         if (cancelled) return;
-        setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+        setError(e instanceof ApiError ? e.message : String(e));
       }
     })();
     return () => {
@@ -91,7 +91,7 @@ export default function ReportScreen() {
             .map((p) => ({ memberId: p.memberId, nickname: p.nickname }));
         } catch (e) {
           if (!cancelled) {
-            setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+            setError(e instanceof ApiError ? e.message : String(e));
           }
           return;
         }
@@ -128,13 +128,13 @@ export default function ReportScreen() {
       setDone(created);
     } catch (e) {
       if (e instanceof ApiError && e.code === "DUPLICATE_REPORT") {
-        setError("같은 대상을 이미 신고했다.");
+        setError("이미 신고한 대상이에요.");
       } else if (e instanceof ApiError && e.code === "NOT_SESSION_PARTICIPANT") {
-        setError("같은 세션에 참가한 대상만 신고할 수 있다.");
+        setError("같은 세션에 참가했던 대상만 신고할 수 있어요.");
       } else if (e instanceof ApiError && e.code === "TARGET_NOT_FOUND") {
-        setError("신고 대상을 찾을 수 없다.");
+        setError("신고 대상을 찾을 수 없어요.");
       } else {
-        setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+        setError(e instanceof ApiError ? e.message : String(e));
       }
     } finally {
       setBusy(false);
@@ -170,7 +170,7 @@ export default function ReportScreen() {
   if (!sessions) {
     return (
       <div className="screen">
-        {error ? <p className="error">{error}</p> : <p className="muted">불러오는 중...</p>}
+        {error ? <p className="error">{error}</p> : <p className="muted loading">불러오는 중이에요</p>}
       </div>
     );
   }
@@ -179,7 +179,9 @@ export default function ReportScreen() {
     return (
       <div className="screen center-title done">
         <h1>신고</h1>
-        <p className="muted">참여한 세션이 없다. 신고는 같이 세션을 한 대상에게만 할 수 있다.</p>
+        <p className="muted">
+          참여한 세션이 없어요. 신고는 같은 세션에 참가했던 대상에게만 할 수 있어요.
+        </p>
         <button className="black-button" onClick={() => navigate("/")}>
           홈으로 돌아가기
         </button>
@@ -223,10 +225,10 @@ export default function ReportScreen() {
         </label>
         {targetType === "MEMBER" &&
           (candidates === null ? (
-            <p className="muted" style={{ marginTop: 12 }}>참가자를 불러오는 중...</p>
+            <p className="muted loading" style={{ marginTop: 12 }}>참가자를 불러오는 중이에요</p>
           ) : candidates.length === 0 ? (
             <p className="muted" style={{ marginTop: 12 }}>
-              이 세션에는 신고할 수 있는 다른 참가자가 없다.
+              이 세션에는 신고할 수 있는 다른 참가자가 없어요.
             </p>
           ) : (
             <label>
@@ -260,7 +262,7 @@ export default function ReportScreen() {
             maxLength={500}
             value={detail}
             onChange={(e) => setDetail(e.target.value)}
-            placeholder="무슨 일이 있었는지 적는다. 최대 500자."
+            placeholder="무슨 일이 있었는지 적어 주세요 (최대 500자)"
           />
         </label>
       </div>

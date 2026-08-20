@@ -15,7 +15,7 @@
   --charcoal: #2f3033;
 
   color-scheme: light;
-  font-family: Arial, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 500;
 }
@@ -42,11 +42,33 @@ body {
   width: 100%;
   max-width: 430px;
   min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 100dvh; /* 모바일 주소창을 뺀 실제 화면 높이. 탭이 화면 밖으로 밀리지 않는다 */
   margin: 0 auto;
-  padding: 22px 18px 64px;
+  padding: 24px 20px 64px;
   background: linear-gradient(180deg, #fffdfb 0%, #fff8f4 100%);
   overflow-wrap: break-word;
+  animation: screen-in 220ms ease both;
+}
+
+/* 화면 전환. 라우트가 바뀌면 새 .screen 이 마운트되며 한 번 돈다 */
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* 세션 캠 그리드는 폭이 필요해서 이 화면만 넓힌다 */
@@ -68,6 +90,20 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.55);
     border-radius: 26px;
     box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+    overflow: hidden; /* sticky 탭이 카드의 둥근 모서리를 벗어나지 않게 */
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .screen.login {
+    min-height: min(760px, calc(100vh - 56px));
   }
 
   .screen.login {
@@ -270,6 +306,15 @@ p {
   font-size: 11px;
 }
 
+/* .socials button의 카카오 버튼용 2열 그리드가 이 버튼까지 잡아 글자가 갈라진다 */
+.socials .demo-account button {
+  display: block;
+  height: 36px;
+  margin-top: 10px;
+  font-size: 12px;
+  text-align: center;
+}
+
 .caption {
   margin: 22px 0 0;
   color: #766a62;
@@ -306,10 +351,19 @@ button {
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
+  transition: transform 120ms ease, border-color 150ms ease, filter 150ms ease, opacity 150ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button:hover:not(:disabled) {
   border-color: #d9a892;
+}
+
+.cta:hover:not(:disabled),
+button.primary:hover:not(:disabled),
+.black-cta:hover:not(:disabled),
+.black-button:hover:not(:disabled) {
+  filter: brightness(1.05);
 }
 
 button:active:not(:disabled) {
@@ -650,6 +704,34 @@ label textarea {
   padding: 10px 12px;
   font-size: 13px;
   margin: 12px 0;
+  animation: fade-in 200ms ease;
+}
+
+/* 빈 목록 자리. 밋밋한 한 줄 대신 가운데 정렬된 안내 상자로 */
+.empty {
+  margin: 8px 0 12px;
+  padding: 28px 16px;
+  border: 1px dashed #e3cec2;
+  border-radius: 10px;
+  background: #fffaf7;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* 로딩 문구. 은은하게 숨쉬는 정도만 */
+.loading {
+  animation: loading-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes loading-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 
 /* ── 하단 탭 ──────────────────────────────────────────────────────────────── */
@@ -657,30 +739,45 @@ label textarea {
 .tab {
   position: sticky;
   bottom: 0;
+  z-index: 20;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  align-items: center;
-  height: 58px;
+  align-items: stretch;
   flex: none;
-  margin: auto -18px 0;
+  margin: auto -20px 0;
+  padding-bottom: env(safe-area-inset-bottom);
   border-top: 1px solid #f1ddd3;
-  background: rgba(255, 245, 239, 0.98);
+  background: rgba(255, 245, 239, 0.94);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: #8d7a70;
   font-size: 11px;
   text-align: center;
 }
 
-/* with-tab 은 flex column 이라 본문이 탭을 바닥까지 밀어낸다 */
-.with-tab > .tab {
-  margin-top: 28px;
+/* with-tab 은 flex column 이라 margin-top:auto 가 탭을 바닥까지 밀어낸다.
+   여기서 margin-top 을 고정값으로 덮으면 내용이 짧은 화면에서 탭이 중간에 뜬다.
+   본문과의 최소 간격은 본문 쪽 margin-bottom 으로 준다. */
+.with-tab > :first-child {
+  margin-bottom: 28px;
 }
 
+/* 링크가 탭 행 전체 높이를 차지해야 터치 영역이 44px 를 넘는다 */
 .tab a {
+  position: relative;
   display: grid;
   gap: 3px;
   place-items: center;
+  align-content: center;
+  min-height: 56px;
   color: inherit;
   font-size: 11px;
+  transition: color 150ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tab a:active {
+  color: #5d4c43;
 }
 
 .tab a.active {
@@ -688,9 +785,22 @@ label textarea {
   font-weight: 800;
 }
 
+/* 활성 탭 표시. 위쪽에 짧은 주황 바 하나 */
+.tab a.active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 22px;
+  height: 3px;
+  border-radius: 0 0 999px 999px;
+  background: var(--orange);
+  transform: translateX(-50%);
+}
+
 .tab svg {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   fill: currentColor;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -798,6 +908,7 @@ label textarea {
   place-items: center;
   background: rgba(0, 0, 0, 0.6);
   z-index: 50;
+  animation: fade-in 150ms ease;
 }
 
 .prompt-overlay .box {
@@ -809,6 +920,18 @@ label textarea {
   max-width: 320px;
   color: var(--ink);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+  animation: box-pop 200ms ease;
+}
+
+@keyframes box-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .todo {
@@ -844,6 +967,7 @@ th {
   font-size: 12px;
   font-weight: 800;
   background: #fffaf7;
+  white-space: nowrap;
 }
 
 tr:last-child td {

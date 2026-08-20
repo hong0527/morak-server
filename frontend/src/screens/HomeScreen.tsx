@@ -33,7 +33,7 @@ export default function HomeScreen() {
         if (cancelled) return;
         // 탈퇴 유예 중이면 조회 API 까지 전부 막힌다(§2-7 ②). 남는 건 내 정보와 탈퇴 철회뿐이다.
         if (e instanceof ApiError && e.code === "WITHDRAWAL_PENDING") {
-          setError("탈퇴 유예 중이다. 철회하면 다시 쓸 수 있다.");
+          setError("탈퇴 유예 기간이에요. 철회하시면 다시 이용할 수 있어요.");
         } else if (e instanceof ApiError && e.code === "AGE_NOT_VERIFIED") {
           navigate("/birthdate", { replace: true });
         } else {
@@ -47,12 +47,12 @@ export default function HomeScreen() {
   }, [navigate]);
 
   if (error) return <div className="screen"><p className="error">{error}</p></div>;
-  if (!me) return <div className="screen"><p className="muted">불러오는 중...</p></div>;
+  if (!me) return <div className="screen"><p className="muted loading">불러오는 중이에요</p></div>;
 
   return (
     <div className="screen with-tab">
       <div>
-        <h1>오늘도 몰입하는 하루</h1>
+        <h1>{me.nickname}님,<br />오늘도 몰입해 볼까요?</h1>
 
         <div className="card">
           <h3>내 현황</h3>
@@ -85,14 +85,16 @@ export default function HomeScreen() {
 
         {me.sanction && (
           <div className="notice">
-            제재 중이다. {me.sanction.endsAt ? `${me.sanction.endsAt} 까지` : "영구 제재다"}.
+            {me.sanction.endsAt
+              ? `이용이 제한된 상태예요. ${me.sanction.endsAt}까지 제한이 적용돼요.`
+              : "계정 이용이 영구 제한된 상태예요."}
           </div>
         )}
 
         <div className="card">
           <h3>시작하기</h3>
-          <p className="small-text" style={{ color: "#555", fontSize: 12 }}>
-            공부할 시간을 고르면 같은 시간을 고른 6명이 자동으로 묶인다.
+          <p className="muted" style={{ fontSize: 12 }}>
+            공부할 시간을 고르면 같은 시간을 고른 6명이 한 팀이 돼요.
           </p>
           {/* 캠 동의를 매칭 전에 받는다. 안 받으면 매칭은 되는데 세션에 못 들어간다 */}
           {me.mediaConsented ? (
@@ -106,7 +108,7 @@ export default function HomeScreen() {
           )}
         </div>
 
-        <h3>그 밖에</h3>
+        <h3>바로가기</h3>
         <div className="chips">
           <Link to="/goal"><button>목표 설정</button></Link>
           <Link to="/records"><button>내 기록</button></Link>

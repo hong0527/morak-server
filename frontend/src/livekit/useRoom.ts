@@ -136,7 +136,7 @@ export function useSessionRoom(sessionId: number | null): SessionRoom {
           // 끊기면 서버가 90초를 기다린다. 넘기면 LEFT(DEVICE_ISSUE) 로 정산되고 되돌릴 수 없다.
           // livekit-client 가 그 안에서 알아서 재연결하지만, 실패하면 사용자에게 알려야 한다.
           if (s === ConnectionState.Disconnected) {
-            setError("연결이 끊겼다. 90초 안에 돌아오지 않으면 미완주로 정산된다");
+            setError("연결이 끊겼어요. 90초 안에 다시 연결되지 않으면 완주로 인정되지 않아요.");
           } else if (s === ConnectionState.Connected) {
             setError(null);
           }
@@ -169,7 +169,7 @@ export function useSessionRoom(sessionId: number | null): SessionRoom {
           setPhase("CAMERA_ONLY");
           // raw error.message 는 사용자에게 보여줄 문구가 아니다. 원문은 콘솔로 남긴다.
           console.warn("LiveKit connect failed:", e);
-          setError("실시간 연결에 붙지 못했다. 내 카메라만 열어 감지를 돌린다 — 남의 캠은 보이지 않는다");
+          setError("실시간 연결에 실패했어요. 내 캠 분석은 계속되지만 다른 참가자의 캠은 보이지 않아요.");
         } catch (camError) {
           setPhase("FAILED");
           console.warn("camera open failed:", camError);

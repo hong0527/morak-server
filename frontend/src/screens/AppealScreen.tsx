@@ -28,9 +28,9 @@ export default function AppealScreen() {
       setDone(true);
     } catch (e) {
       if (e instanceof ApiError) {
-        if (e.code === "APPEAL_DEADLINE_PASSED") setError("이의 기한 3일이 지났다.");
-        else if (e.code === "APPEAL_ALREADY_FILED") setError("이미 이의를 냈다.");
-        else setError(`${e.message} (${e.code})`);
+        if (e.code === "APPEAL_DEADLINE_PASSED") setError("이의 신청 기한(3일)이 지났어요.");
+        else if (e.code === "APPEAL_ALREADY_FILED") setError("이미 이의를 신청했어요.");
+        else setError(e.message);
       } else {
         setError(String(e));
       }
@@ -42,10 +42,10 @@ export default function AppealScreen() {
   if (done) {
     return (
       <div className="screen">
-        <h1>이의를 접수했다</h1>
+        <h1>이의 신청이 접수됐어요</h1>
         <p className="muted">
-          검토 결과는 내 기록에서 확인할 수 있다. 인용되면 차감된 포인트가 돌아오고 완주가
-          복구된다.
+          검토 결과는 내 기록에서 확인할 수 있어요. 인용되면 차감된 포인트가 돌아오고 완주
+          기록이 복구돼요.
         </p>
         <button onClick={() => navigate("/")}>홈으로</button>
       </div>
@@ -56,12 +56,13 @@ export default function AppealScreen() {
     <div className="screen">
       <h1>퇴출 이의 신청</h1>
       <p className="muted">
-        무슨 일이 있었는지 적는다. 최대 200자, 한 퇴출에 한 번만 낼 수 있다.
+        무슨 일이 있었는지 적어 주세요. 최대 200자, 한 번만 신청할 수 있어요.
       </p>
       <textarea
         rows={5}
         maxLength={200}
         value={reasonText}
+        placeholder="당시 상황을 자세히 적어 주세요"
         onChange={(e) => setReasonText(e.target.value)}
       />
       <div className="row" style={{ marginTop: 12 }}>

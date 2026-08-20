@@ -34,7 +34,7 @@ export default function PointsScreen() {
       setData(await api.member.points({ page: p, size: PAGE_SIZE }));
       setError(null);
     } catch (e) {
-      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+      setError(e instanceof ApiError ? e.message : String(e));
     }
   }, []);
 
@@ -54,9 +54,9 @@ export default function PointsScreen() {
       setPgTid(`demo-${created.chargeId}-${Date.now()}`);
     } catch (e) {
       if (e instanceof ApiError && e.code === "VALIDATION_FAILED" && e.details?.amountKrw) {
-        setChargeError(`충전 금액이 허용 범위를 벗어났다. ${e.details.amountKrw}`);
+        setChargeError("충전 금액은 1,000원부터 1,000,000원까지 입력할 수 있어요.");
       } else {
-        setChargeError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+        setChargeError(e instanceof ApiError ? e.message : String(e));
       }
     } finally {
       setBusy(false);
@@ -74,7 +74,7 @@ export default function PointsScreen() {
         amountKrw: charge.amountKrw,
       });
       setChargeDone(
-        `${confirmed.pointAmount.toLocaleString()}P 적립됐다. 잔액 ${confirmed.pointBalance.toLocaleString()}P.`,
+        `${confirmed.pointAmount.toLocaleString()}P가 적립됐어요. 현재 잔액은 ${confirmed.pointBalance.toLocaleString()}P예요.`,
       );
       setCharge(null);
       setPage(0);
@@ -82,7 +82,7 @@ export default function PointsScreen() {
     } catch (e) {
       // 승인 실패여도 충전 건은 READY 로 남는다. pgTid 를 고쳐 다시 확인할 수 있게
       // charge 를 지우지 않는다.
-      setChargeError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+      setChargeError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -99,7 +99,7 @@ export default function PointsScreen() {
   if (!data) {
     return (
       <div className="screen">
-        <p className="muted">불러오는 중...</p>
+        <p className="muted loading">불러오는 중이에요</p>
       </div>
     );
   }
@@ -138,13 +138,12 @@ export default function PointsScreen() {
       ) : (
         <div className="card">
           <p>
-            <b>{charge.amountKrw.toLocaleString()}원</b> 결제하면{" "}
-            <b>{charge.pointAmount.toLocaleString()}P</b> 가 들어온다.
+            <b>{charge.amountKrw.toLocaleString()}원</b>을 결제하면{" "}
+            <b>{charge.pointAmount.toLocaleString()}P</b>가 적립돼요.
           </p>
           <p className="muted">주문번호 {charge.pgOrderId}</p>
           <p className="muted">
-            PG 결제창이 아직 없다({charge.provider}). 아래 거래번호로 바로 승인을 확인한다.
-            fail- 로 시작하면 PG 거절, mismatch- 로 시작하면 금액 불일치가 재현된다.
+            지금은 테스트 결제 환경이에요. 아래 거래번호로 결제 승인을 진행해 주세요.
           </p>
           <input value={pgTid} maxLength={64} onChange={(e) => setPgTid(e.target.value)} />
           <div className="row" style={{ marginTop: 12 }}>
@@ -162,7 +161,7 @@ export default function PointsScreen() {
 
       <h2>내역</h2>
       {ledger.content.length === 0 ? (
-        <p className="muted">아직 포인트 내역이 없다.</p>
+        <p className="empty">아직 포인트 내역이 없어요. 세션을 완주하면 포인트가 쌓여요.</p>
       ) : (
         <table>
           <thead>

@@ -116,12 +116,12 @@ export function useAbsenceDetection(options: AbsenceDetectionOptions): AbsenceDe
         },
         onShowAdjustHint: () => setAdjustHint(true),
         onServerVerdict: applyVerdict,
-        onTerminal: (code) => {
+        onTerminal: () => {
           setPhase("STOPPED");
-          setError(`감지 종료: ${code}`);
+          setError("자리 비움 감지가 중단됐어요. 화면을 새로고침하면 다시 시작돼요.");
         },
         // 감지는 계속 돌고 이벤트는 큐에 쌓인다. 재로그인은 아래 토큰 구독이 이어받는다.
-        onAuthExpired: () => setError("로그인이 만료됐다. 다시 로그인하면 이어서 기록된다"),
+        onAuthExpired: () => setError("로그인이 만료됐어요. 다시 로그인하면 이어서 기록돼요."),
         onError: (message, fatal) => {
           setError(message);
           if (fatal) setPhase("FAILED");

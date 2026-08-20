@@ -32,7 +32,7 @@ export default function ProfileScreen() {
         if (e instanceof ApiError && e.code === "WITHDRAWAL_PENDING") {
           setWithdrawalPending(true);
         } else {
-          setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+          setError(e instanceof ApiError ? e.message : String(e));
         }
       }
     })();
@@ -45,7 +45,7 @@ export default function ProfileScreen() {
     return (
       <div className="screen">
         <h1>내 정보</h1>
-        <div className="notice">탈퇴 유예 중이다. 철회하면 다시 쓸 수 있다.</div>
+        <div className="notice">탈퇴 유예 기간이에요. 철회하시면 다시 이용할 수 있어요.</div>
         <Link to="/leave">
           <button className="cta">탈퇴 철회하러 가기</button>
         </Link>
@@ -57,7 +57,7 @@ export default function ProfileScreen() {
   }
 
   if (error) return <div className="screen"><p className="error">{error}</p></div>;
-  if (!me) return <div className="screen"><p className="muted">불러오는 중...</p></div>;
+  if (!me) return <div className="screen"><p className="muted loading">불러오는 중이에요</p></div>;
 
   return (
     <div className="screen with-tab">

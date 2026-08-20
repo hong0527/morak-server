@@ -88,7 +88,7 @@ export default function SessionScreen() {
     if (pollError.code === "CONSENT_REQUIRED") navigate("/media-consent", { replace: true });
     else if (pollError.code === "NOT_SESSION_PARTICIPANT") navigate("/", { replace: true });
     else if (pollError.code === "SESSION_ENDED") goToResult();
-    else setEntryError(`${pollError.message} (${pollError.code})`);
+    else setEntryError(pollError.message);
   }, [pollError, navigate, goToResult]);
 
   async function startRestroom() {
@@ -97,7 +97,7 @@ export default function SessionScreen() {
       setPauseEndsAt(res.resumeDueAt);
     } catch (e) {
       if (e instanceof ApiError && e.code === "PAUSE_ALREADY_USED") {
-        setEntryError("화장실 모드는 세션당 한 번만 쓸 수 있다.");
+        setEntryError("화장실 모드는 세션당 한 번만 쓸 수 있어요.");
       } else if (e instanceof ApiError && e.code === "ALREADY_EVICTED") {
         goToResult();
       } else {
@@ -208,7 +208,7 @@ export default function SessionScreen() {
   if (!session) {
     return (
       <div className="screen wide">
-        <p className="muted">세션을 불러오는 중...</p>
+        <p className="muted loading">세션을 불러오는 중이에요</p>
         {entryError && <p className="error">{entryError}</p>}
       </div>
     );
@@ -235,7 +235,7 @@ export default function SessionScreen() {
       {room.error && <div className="notice">{room.error}</div>}
       {detection.error && <div className="notice">{detection.error}</div>}
       {detection.calibrationWarnings.includes("LOW_LIGHT") && (
-        <div className="notice">조명이 어둡다. 밝게 하면 판정이 정확해진다.</div>
+        <div className="notice">주변이 조금 어두워요. 조명을 밝게 하면 판정이 더 정확해져요.</div>
       )}
       {detection.adjustHint && (
         <div className="notice">카메라 각도나 조명을 조정해 주세요.</div>
@@ -290,7 +290,8 @@ export default function SessionScreen() {
         </button>
       </div>
       <p className="muted">
-        나가면 미완주가 되고 다시 들어올 수 없다. 화장실 모드는 세션당 한 번, 10분까지다.
+        지금 나가면 이번 세션은 완주로 인정되지 않고 다시 들어올 수 없어요. 화장실 모드는
+        세션당 한 번, 10분까지 쓸 수 있어요.
       </p>
 
       {/* 스티커(FR-403). 목록은 SS-11, 전송은 서버를 거치지 않고 LiveKit 데이터 채널로만
@@ -309,9 +310,9 @@ export default function SessionScreen() {
         ))}
       </div>
       {stickerList === null ? (
-        <p className="muted">스티커 목록을 불러오는 중...</p>
+        <p className="muted loading">스티커를 불러오는 중이에요</p>
       ) : room.phase !== "CONNECTED" ? (
-        <p className="muted">실시간 연결이 붙어 있을 때만 보낼 수 있다.</p>
+        <p className="muted">실시간 연결 중일 때만 보낼 수 있어요.</p>
       ) : null}
 
       {/* 프롬프트. 15초 안에 반응해야 하고, 탭하면 반드시 tapPrompt() 를 부른다 —
@@ -410,7 +411,7 @@ function GoalText({ sessionId, initial }: { sessionId: number; initial: string |
       <input
         value={text}
         maxLength={50}
-        placeholder="같은 세션 사람들에게 보인다"
+        placeholder="오늘 할 일을 적어 주세요 (참가자에게 보여요)"
         onChange={(e) => {
           setText(e.target.value);
           setSaved(false);

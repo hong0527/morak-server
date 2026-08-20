@@ -32,7 +32,7 @@ export default function GoalScreen() {
         setLoaded(true);
       } catch (e) {
         if (cancelled) return;
-        setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+        setError(e instanceof ApiError ? e.message : String(e));
         setLoaded(true);
       }
     })();
@@ -48,9 +48,9 @@ export default function GoalScreen() {
       setGoal(await api.member.setGoal(periodDays));
     } catch (e) {
       if (e instanceof ApiError && e.code === "GOAL_ALREADY_ACTIVE") {
-        setError("이미 진행 중인 목표가 있다.");
+        setError("이미 진행 중인 목표가 있어요.");
       } else {
-        setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+        setError(e instanceof ApiError ? e.message : String(e));
       }
     } finally {
       setBusy(false);
@@ -60,7 +60,7 @@ export default function GoalScreen() {
   if (!loaded) {
     return (
       <div className="screen">
-        <p className="muted">불러오는 중...</p>
+        <p className="muted loading">불러오는 중이에요</p>
       </div>
     );
   }
@@ -102,11 +102,11 @@ export default function GoalScreen() {
       )}
 
       {active ? (
-        <p className="muted">목표가 진행 중인 동안에는 새 목표를 시작할 수 없다.</p>
+        <p className="muted">진행 중인 목표를 마치면 새 목표를 시작할 수 있어요.</p>
       ) : (
         <>
           <h2>{goal ? "새 목표 시작" : "목표 시작"}</h2>
-          <p className="muted">기간을 고르면 오늘부터 그 일수만큼 연속 완주에 도전한다.</p>
+          <p className="muted">기간을 고르면 오늘부터 연속 완주에 도전해요.</p>
           <div className="row">
             {CHOICES.map((d) => (
               <button key={d} className="primary" disabled={busy} onClick={() => choose(d)}>

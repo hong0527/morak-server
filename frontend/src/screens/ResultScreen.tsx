@@ -46,14 +46,14 @@ export default function ResultScreen() {
         if (e instanceof ApiError && e.code === "SESSION_NOT_ENDED") {
           if (Date.now() - startedAt > GIVE_UP_MS) {
             setSettling(false);
-            setError("정산이 90초를 넘겨도 끝나지 않는다. 서버 상태를 확인해야 한다.");
+            setError("결과 정리가 예상보다 오래 걸리고 있어요. 잠시 뒤 다시 확인해 주세요.");
             return;
           }
           window.setTimeout(attempt, RETRY_MS);
           return;
         }
         setSettling(false);
-        setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
+        setError(e instanceof ApiError ? e.message : String(e));
       }
     };
 
@@ -66,9 +66,9 @@ export default function ResultScreen() {
   if (settling) {
     return (
       <div className="screen">
-        <h1>정산 중</h1>
-        <p className="muted">
-          세션이 끝났다. 결과가 나오기까지 최대 1분 걸린다.
+        <h1>결과 정리 중</h1>
+        <p className="muted loading">
+          세션이 끝났어요. 결과가 나오기까지 최대 1분 정도 걸려요.
         </p>
       </div>
     );
@@ -77,7 +77,7 @@ export default function ResultScreen() {
   if (error || !result) {
     return (
       <div className="screen">
-        <p className="error">{error ?? "결과를 불러오지 못했다."}</p>
+        <p className="error">{error ?? "결과를 불러오지 못했어요."}</p>
         <button onClick={() => navigate("/")}>홈으로</button>
       </div>
     );
@@ -100,14 +100,14 @@ export default function ResultScreen() {
 
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share(shareData);
-        setShareMessage("공유 화면을 열었습니다.");
+        setShareMessage("공유 화면을 열었어요.");
       } else {
         downloadBlob(blob, file.name);
-        setShareMessage("공유 카드를 저장했습니다. 인스타그램 스토리 등에 올려보세요.");
+        setShareMessage("공유 카드를 저장했어요. 인스타그램 스토리 등에 올려 보세요.");
       }
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
-      setShareMessage("공유 카드를 만들지 못했습니다. 잠시 후 다시 시도해주세요.");
+      setShareMessage("공유 카드를 만들지 못했어요. 잠시 후 다시 시도해 주세요.");
     } finally {
       setSharing(false);
     }
@@ -115,12 +115,12 @@ export default function ResultScreen() {
 
   return (
     <div className="screen">
-      <h1>{my.completed ? "완주" : "미완주"}</h1>
+      <h1>{my.completed ? "완주했어요" : "완주하지 못했어요"}</h1>
 
       {/* 조기 종료여도 남아 있던 사람은 완주다. "중단됨"으로 그리면 사실과 다르다 */}
       {result.endReason === "EARLY_UNDER_MIN" && (
         <p className="muted">
-          인원이 부족해 세션이 일찍 끝났다. 남아 있었다면 완주로 인정된다.
+          인원이 부족해 세션이 일찍 끝났어요. 끝까지 남아 있었다면 완주로 인정돼요.
         </p>
       )}
 
@@ -128,8 +128,8 @@ export default function ResultScreen() {
       {my.evictionId !== null && (
         <div className="notice">
           <p>
-            경고 {my.warningCount}회로 세션에서 퇴출됐다. 판정이 잘못됐다고 생각하면 이의를
-            신청할 수 있다. <b>기한은 퇴출 시각으로부터 3일이다.</b>
+            경고가 {my.warningCount}회 누적되어 세션에서 퇴출됐어요. 판정이 잘못됐다고
+            생각하시면 이의를 신청할 수 있어요. <b>기한은 퇴출 시각부터 3일이에요.</b>
           </p>
           <Link to={`/appeals/${my.evictionId}`}>
             <button className="primary">이의 신청</button>
@@ -205,7 +205,15 @@ export default function ResultScreen() {
           {result.participants.map((p) => (
             <tr key={p.memberId}>
               <td>{p.nickname}{p.isMe && " (나)"}</td>
-              <td>{p.completed ? "완주" : p.participantStatus}</td>
+              <td>
+                {p.completed
+                  ? "완주"
+                  : p.participantStatus === "EVICTED"
+                    ? "퇴출"
+                    : p.participantStatus === "LEFT"
+                      ? "중도 퇴장"
+                      : "미완주"}
+              </td>
               <td>경고 {p.warningCount}</td>
             </tr>
           ))}

@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./auth/useAuth";
 import LoginScreen from "./screens/LoginScreen";
+import KakaoCallbackScreen from "./screens/KakaoCallbackScreen";
 import BirthdateScreen from "./screens/BirthdateScreen";
 import MediaConsentScreen from "./screens/MediaConsentScreen";
 import HomeScreen from "./screens/HomeScreen";
@@ -57,6 +58,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginScreen />} />
+      {/* 카카오 인가 리다이렉트의 착지점. 토큰이 아직 없으므로 RequireAuth 밖이다 */}
+      <Route path="/login/kakao" element={<KakaoCallbackScreen />} />
       <Route
         path="/*"
         element={
