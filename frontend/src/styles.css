@@ -685,6 +685,47 @@ label textarea {
   opacity: 0.45;
 }
 
+/* 스티커(FR-403). 발신자의 캠 타일 위에 떴다 사라진다. 길이는 화면 코드의
+   STICKER_SHOW_MS(2.5초)와 맞춰져 있다 */
+.sticker-pop {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  padding: 6px 14px;
+  border: 1px solid var(--orange);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffd45c, var(--yellow));
+  color: #6e3b2d;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  animation: sticker-pop 2.5s ease forwards;
+}
+
+@keyframes sticker-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 10px) scale(0.7);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1.08);
+  }
+  20% {
+    transform: translate(-50%, 0) scale(1);
+  }
+  82% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+}
+
 /* 프롬프트는 공부 중에 봐야 하므로 화면 한가운데를 덮는다. 15초 안에 반응해야 한다 */
 .prompt-overlay {
   position: fixed;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api/client";
@@ -6,7 +6,18 @@ import { ApiError } from "../api/http";
 import { usePolling } from "../hooks/usePolling";
 import { useSessionRoom } from "../livekit/useRoom";
 import { useAbsenceDetection } from "../detection/useAbsenceDetection";
-import type { LeaveReason, SessionDetail, SessionParticipant } from "../api/types";
+import type { LeaveReason, SessionDetail, SessionParticipant, StickerItem } from "../api/types";
+
+/** 캠 타일 위에 떠 있는 스티커. seq 가 바뀌면 같은 라벨이라도 애니메이션이 다시 돈다 */
+interface StickerPop {
+  label: string;
+  seq: number;
+}
+
+/** 연타 방지. 데이터 채널은 서버 제한이 없어 클라이언트가 스스로 잠근다 */
+const STICKER_COOLDOWN_MS = 2000;
+/** 프로토타입 토스트(1.7초)보다 약간 길게. CSS 애니메이션 길이와 맞춘다 */
+const STICKER_SHOW_MS = 2500;
 
 /** 서버가 강제하지 않는다. 2~3초를 권한다 — 짧으면 서버가 먼저 지친다 */
 const POLL_MS = 2500;
@@ -117,6 +128,83 @@ export default function SessionScreen() {
     }
   }
 
+  // ⑤ 스티커(FR-403). 목록만 서버(SS-11)에서 받고, 전송은 데이터 채널로만 간다(D17).
+  const [stickerList, setStickerList] = useState<StickerItem[] | null>(null);
+  const [stickerCooldown, setStickerCooldown] = useState(false);
+  const [pops, setPops] = useState<Record<number, StickerPop>>({});
+  const popSeqRef = useRef(0);
+  const popTimersRef = useRef<Record<number, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.stickers
+      .list()
+      .then((res) => {
+        if (!cancelled) setStickerList(res.stickers);
+      })
+      .catch(() => {
+        // 목록 실패로 세션 화면을 막지 않는다. 스티커 영역만 비어 있게 된다.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const showPop = useCallback((memberId: number, label: string) => {
+    popSeqRef.current += 1;
+    const seq = popSeqRef.current;
+    setPops((prev) => ({ ...prev, [memberId]: { label, seq } }));
+    window.clearTimeout(popTimersRef.current[memberId]);
+    popTimersRef.current[memberId] = window.setTimeout(() => {
+      setPops((prev) => {
+        // 그 사이 새 스티커가 왔으면 그쪽 타이머가 지운다.
+        if (prev[memberId]?.seq !== seq) return prev;
+        const next = { ...prev };
+        delete next[memberId];
+        return next;
+      });
+    }, STICKER_SHOW_MS);
+  }, []);
+
+  useEffect(() => {
+    const timers = popTimersRef.current;
+    return () => {
+      for (const id of Object.values(timers)) window.clearTimeout(id);
+    };
+  }, []);
+
+  // 수신. 발신자는 LiveKit identity(= memberId 문자열)로 찾고, 없으면 본문 값을 쓴다.
+  // 모르는 type 과 깨진 페이로드는 조용히 버린다 — 이 채널에 다른 데이터가 올 수 있다.
+  const { subscribeData } = room;
+  useEffect(() => {
+    if (!stickerList) return;
+    return subscribeData((payload, senderIdentity) => {
+      try {
+        const msg = JSON.parse(new TextDecoder().decode(payload)) as {
+          type?: string;
+          senderMemberId?: number;
+        };
+        const def = stickerList.find((s) => s.type === msg.type);
+        if (!def) return;
+        const senderId = Number(senderIdentity) || msg.senderMemberId;
+        if (!senderId) return;
+        showPop(senderId, def.label);
+      } catch {
+        /* 파싱 실패 무시 */
+      }
+    });
+  }, [subscribeData, stickerList, showPop]);
+
+  function sendSticker(item: StickerItem) {
+    if (stickerCooldown || !me) return;
+    const msg = { type: item.type, senderMemberId: me.memberId, sentAt: new Date().toISOString() };
+    if (!room.publishData(new TextEncoder().encode(JSON.stringify(msg)))) return;
+    // 자기 발신은 DataReceived 로 돌아오지 않는다. 내 타일에는 직접 띄운다.
+    showPop(me.memberId, item.label);
+    setStickerCooldown(true);
+    window.setTimeout(() => setStickerCooldown(false), STICKER_COOLDOWN_MS);
+  }
+
   if (!session) {
     return (
       <div className="screen wide">
@@ -127,6 +215,7 @@ export default function SessionScreen() {
   }
 
   const paused = me?.paused ?? false;
+  const myPop = me ? pops[me.memberId] : undefined;
 
   return (
     // 캠 6개가 들어가는 화면이라 이 화면만 wide 로 넓힌다
@@ -158,6 +247,11 @@ export default function SessionScreen() {
         <div className="cam">
           {/* 감지 모듈이 받아 쓰는 video 다. 여기서만 카메라를 잡는다 */}
           <video ref={room.localVideoRef} playsInline muted autoPlay />
+          {myPop && (
+            <div key={myPop.seq} className="sticker-pop">
+              {myPop.label}
+            </div>
+          )}
           <div className="label">나 {paused && "· 화장실 모드"}</div>
         </div>
         {session.participants
@@ -168,6 +262,7 @@ export default function SessionScreen() {
               sessionId={sessionId}
               participant={p}
               track={room.remoteCams.find((c) => c.identity === String(p.memberId))?.track}
+              pop={pops[p.memberId]}
             />
           ))}
       </div>
@@ -198,14 +293,26 @@ export default function SessionScreen() {
         나가면 미완주가 되고 다시 들어올 수 없다. 화장실 모드는 세션당 한 번, 10분까지다.
       </p>
 
-      {/* 스티커 전송은 서버를 거치지 않고 LiveKit 데이터 채널로 간다.
-          GET /api/stickers 는 목록만 준다. */}
+      {/* 스티커(FR-403). 목록은 SS-11, 전송은 서버를 거치지 않고 LiveKit 데이터 채널로만
+          간다(D17) — 서버는 저장하지도 중계하지도 않는다. */}
       <h2>스티커</h2>
-      <div className="todo">
-        TODO. 목록은 <code>api.stickers.list()</code> 로 받고, 전송은 서버가 아니라 LiveKit
-        데이터 채널(<code>room.localParticipant.publishData</code>)로 보낸다. 서버는 스티커를
-        저장하지도 중계하지도 않는다.
+      <div className="chips" style={{ marginBottom: 8 }}>
+        {(stickerList ?? []).map((s) => (
+          <button
+            key={s.type}
+            // 데이터 채널은 LiveKit 이 붙어 있어야만 있다. CAMERA_ONLY 대체 경로에는 없다.
+            disabled={room.phase !== "CONNECTED" || stickerCooldown}
+            onClick={() => sendSticker(s)}
+          >
+            {s.label}
+          </button>
+        ))}
       </div>
+      {stickerList === null ? (
+        <p className="muted">스티커 목록을 불러오는 중...</p>
+      ) : room.phase !== "CONNECTED" ? (
+        <p className="muted">실시간 연결이 붙어 있을 때만 보낼 수 있다.</p>
+      ) : null}
 
       {/* 프롬프트. 15초 안에 반응해야 하고, 탭하면 반드시 tapPrompt() 를 부른다 —
           그 시각이 재실 증거로 서버에 보낼 START 시각을 뒤로 민다. */}
@@ -228,10 +335,12 @@ function ParticipantCam({
   sessionId,
   participant,
   track,
+  pop,
 }: {
   sessionId: number;
   participant: SessionParticipant;
   track?: { attach: (el: HTMLVideoElement) => void; detach: () => void } | undefined;
+  pop?: StickerPop | undefined;
 }) {
   const [el, setEl] = useState<HTMLVideoElement | null>(null);
 
@@ -249,6 +358,11 @@ function ParticipantCam({
   return (
     <div className={`cam ${gone ? "left" : ""}`}>
       <video ref={setEl} playsInline autoPlay />
+      {pop && (
+        <div key={pop.seq} className="sticker-pop">
+          {pop.label}
+        </div>
+      )}
       <div className="label">
         {participant.nickname}
         {participant.status === "PAUSED" && " · 화장실"}

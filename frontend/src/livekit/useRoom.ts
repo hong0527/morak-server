@@ -40,7 +40,16 @@ export interface SessionRoom {
   error: string | null;
   /** 퇴출·자율 퇴장에서 부른다. 서버가 캠을 끊어 주지 않으므로 화면이 직접 끊는다(§6-3) */
   disconnect: () => void;
+  /**
+   * 데이터 채널 발신(D17: 스티커는 서버를 거치지 않는다). LiveKit 미연결이면
+   * 보내지 않고 false 를 돌려준다 — CAMERA_ONLY 대체 경로에는 채널이 없다.
+   */
+  publishData: (payload: Uint8Array<ArrayBuffer>) => boolean;
+  /** DataReceived 구독. 반환된 함수로 해제한다. 자기 발신은 돌아오지 않는다 */
+  subscribeData: (handler: DataHandler) => () => void;
 }
+
+type DataHandler = (payload: Uint8Array, senderIdentity: string) => void;
 
 export function useSessionRoom(sessionId: number | null): SessionRoom {
   const [phase, setPhase] = useState<RoomPhase>("IDLE");
@@ -51,6 +60,22 @@ export function useSessionRoom(sessionId: number | null): SessionRoom {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const roomRef = useRef<Room | null>(null);
   const fallbackStreamRef = useRef<MediaStream | null>(null);
+  const dataHandlersRef = useRef<Set<DataHandler>>(new Set());
+
+  const publishData = useCallback((payload: Uint8Array<ArrayBuffer>): boolean => {
+    const room = roomRef.current;
+    if (!room || room.state !== ConnectionState.Connected) return false;
+    // 스티커는 놓쳐도 다시 보내면 되지만, 몇 개 안 되는 이벤트라 reliable 로 보낸다.
+    void room.localParticipant.publishData(payload, { reliable: true });
+    return true;
+  }, []);
+
+  const subscribeData = useCallback((handler: DataHandler) => {
+    dataHandlersRef.current.add(handler);
+    return () => {
+      dataHandlersRef.current.delete(handler);
+    };
+  }, []);
 
   const disconnect = useCallback(() => {
     roomRef.current?.disconnect();
@@ -100,6 +125,12 @@ export function useSessionRoom(sessionId: number | null): SessionRoom {
         });
         room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
           setRemoteCams((prev) => prev.filter((c) => c.identity !== participant.identity));
+        });
+        room.on(RoomEvent.DataReceived, (payload: Uint8Array, participant?: RemoteParticipant) => {
+          // identity 는 memberId 의 문자열이다(SS-1 참가자와 같은 규약).
+          for (const handler of dataHandlersRef.current) {
+            handler(payload, participant?.identity ?? "");
+          }
         });
         room.on(RoomEvent.ConnectionStateChanged, (s: ConnectionState) => {
           // 끊기면 서버가 90초를 기다린다. 넘기면 LEFT(DEVICE_ISSUE) 로 정산되고 되돌릴 수 없다.
@@ -153,5 +184,5 @@ export function useSessionRoom(sessionId: number | null): SessionRoom {
     };
   }, [sessionId, disconnect]);
 
-  return { phase, localVideoRef, cameraReady, remoteCams, error, disconnect };
+  return { phase, localVideoRef, cameraReady, remoteCams, error, disconnect, publishData, subscribeData };
 }
