@@ -9,7 +9,13 @@ import MatchWaitScreen from "./screens/MatchWaitScreen";
 import SessionScreen from "./screens/SessionScreen";
 import ResultScreen from "./screens/ResultScreen";
 import AppealScreen from "./screens/AppealScreen";
-import { GoalScreen, PointsScreen, RecordsScreen, ReportScreen, StoreScreen } from "./screens/stubs";
+import GoalScreen from "./screens/GoalScreen";
+import PointsScreen from "./screens/PointsScreen";
+import StoreScreen from "./screens/StoreScreen";
+import RecordsScreen from "./screens/RecordsScreen";
+import ReportScreen from "./screens/ReportScreen";
+import ProfileScreen from "./screens/ProfileScreen";
+import LeaveScreen from "./screens/LeaveScreen";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
@@ -39,6 +45,8 @@ export default function App() {
               <Route path="/store" element={<StoreScreen />} />
               <Route path="/records" element={<RecordsScreen />} />
               <Route path="/report" element={<ReportScreen />} />
+              <Route path="/profile" element={<ProfileScreen />} />
+              <Route path="/leave" element={<LeaveScreen />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </RequireAuth>

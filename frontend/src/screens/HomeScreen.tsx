@@ -3,10 +3,14 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import { ApiError } from "../api/http";
-import { authStore } from "../auth/session";
+import TabBar from "../components/TabBar";
 import type { MemberMe } from "../api/types";
 
-/** S4. GET /api/members/me 하나로 화면 전체가 채워진다 */
+/**
+ * S4. GET /api/members/me 하나로 화면 전체가 채워진다.
+ * 마크업은 프로토타입 data-screen="home"(제목 + stats 카드 + pill + 하단 탭)을 옮겼다.
+ * 로그아웃은 프로토타입처럼 내 정보 화면으로 옮겼다.
+ */
 export default function HomeScreen() {
   const navigate = useNavigate();
   const [me, setMe] = useState<MemberMe | null>(null);
@@ -46,56 +50,69 @@ export default function HomeScreen() {
   if (!me) return <div className="screen"><p className="muted">불러오는 중...</p></div>;
 
   return (
-    <div className="screen">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1>{me.nickname}</h1>
-        <button onClick={() => authStore.signOut()}>로그아웃</button>
+    <div className="screen with-tab">
+      <div>
+        <h1>오늘도 몰입하는 하루</h1>
+
+        <div className="card">
+          <h3>내 현황</h3>
+          <div className="stats three">
+            <span>
+              닉네임
+              <br />
+              <b>{me.nickname}</b>
+            </span>
+            <span>
+              보유 포인트
+              <br />
+              <b>{me.pointBalance.toLocaleString()}P</b>
+            </span>
+            <span>
+              연속 완주
+              <br />
+              <b>{me.streak?.current ?? 0}일</b>
+            </span>
+          </div>
+          {me.goal && (
+            <div className="pill">
+              목표 {me.goal.periodDays}일 중 {me.goal.progressDays}일째
+            </div>
+          )}
+          {(me.streak?.current ?? 0) > 0 && (
+            <div className="pill">연속 {me.streak.current}일 완주 중</div>
+          )}
+        </div>
+
+        {me.sanction && (
+          <div className="notice">
+            제재 중이다. {me.sanction.endsAt ? `${me.sanction.endsAt} 까지` : "영구 제재다"}.
+          </div>
+        )}
+
+        <div className="card">
+          <h3>시작하기</h3>
+          <p className="small-text" style={{ color: "#555", fontSize: 12 }}>
+            공부할 시간을 고르면 같은 시간을 고른 6명이 자동으로 묶인다.
+          </p>
+          {/* 캠 동의를 매칭 전에 받는다. 안 받으면 매칭은 되는데 세션에 못 들어간다 */}
+          {me.mediaConsented ? (
+            <Link to="/match">
+              <button className="cta">매칭 시작</button>
+            </Link>
+          ) : (
+            <Link to="/media-consent">
+              <button className="cta">캠 분석 동의하고 시작</button>
+            </Link>
+          )}
+        </div>
+
+        <h3>그 밖에</h3>
+        <div className="chips">
+          <Link to="/goal"><button>목표 설정</button></Link>
+          <Link to="/records"><button>내 기록</button></Link>
+        </div>
       </div>
-
-      <div className="card">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span>보유 포인트</span>
-          <b>{me.pointBalance.toLocaleString()}P</b>
-        </div>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span>연속 완주</span>
-          <b>{me.streak?.current ?? 0}일</b>
-        </div>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span>목표</span>
-          <b>
-            {me.goal
-              ? `${me.goal.periodDays}일 중 ${me.goal.progressDays}일`
-              : "설정 안 함"}
-          </b>
-        </div>
-      </div>
-
-      {me.sanction && (
-        <div className="notice">
-          제재 중이다. {me.sanction.endsAt ? `${me.sanction.endsAt} 까지` : "영구 제재다"}.
-        </div>
-      )}
-
-      <h2>시작하기</h2>
-      {/* 캠 동의를 매칭 전에 받는다. 안 받으면 매칭은 되는데 세션에 못 들어간다 */}
-      {me.mediaConsented ? (
-        <Link to="/match">
-          <button className="primary">매칭 시작</button>
-        </Link>
-      ) : (
-        <Link to="/media-consent">
-          <button className="primary">캠 분석 동의하고 시작</button>
-        </Link>
-      )}
-
-      <h2>그 밖에</h2>
-      <div className="row">
-        <Link to="/goal"><button>목표 설정</button></Link>
-        <Link to="/records"><button>내 기록</button></Link>
-        <Link to="/points"><button>포인트</button></Link>
-        <Link to="/store"><button>스토어</button></Link>
-      </div>
+      <TabBar />
     </div>
   );
 }
