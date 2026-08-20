@@ -32,7 +32,7 @@ final class JourneySteps {
     /** 세션에 들어갈 수 있는 상태까지 밟은 회원. */
     static Traveler onboard(ApiClient api, String socialCode) {
         LoginResponse joined = api.post("/api/auth/login", null,
-                new LoginRequest(SocialProvider.KAKAO, socialCode, List.of(
+                new LoginRequest(SocialProvider.DEV, socialCode, List.of(
                         new AgreementItem(AgreementType.TOS, true),
                         new AgreementItem(AgreementType.PRIVACY, true))),
                 LoginResponse.class);
@@ -46,7 +46,7 @@ final class JourneySteps {
     /** 가입만 한 상태(연령 미확인). 게이트가 걸린 자리를 확인하는 여정이 쓴다. */
     static Traveler join(ApiClient api, String socialCode) {
         LoginResponse joined = api.post("/api/auth/login", null,
-                new LoginRequest(SocialProvider.KAKAO, socialCode, List.of(
+                new LoginRequest(SocialProvider.DEV, socialCode, List.of(
                         new AgreementItem(AgreementType.TOS, true),
                         new AgreementItem(AgreementType.PRIVACY, true))),
                 LoginResponse.class);

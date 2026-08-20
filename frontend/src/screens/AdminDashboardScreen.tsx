@@ -21,7 +21,7 @@ export default function AdminDashboardScreen() {
       appeals: appeals.totalElements,
       sessions: sessions.totalElements,
       withdrawals: withdrawals.totalElements,
-    })).catch((e) => setError(String(e)));
+    })).catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
   return (

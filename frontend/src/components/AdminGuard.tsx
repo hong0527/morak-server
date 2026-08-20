@@ -17,7 +17,7 @@ export default function AdminGuard({ children }: { children: React.ReactNode }) 
   }, []);
 
   if (failed) return <Navigate to="/" replace />;
-  if (!me) return <div className="screen"><p className="muted">관리자 권한을 확인하고 있습니다.</p></div>;
+  if (!me) return <div className="screen"><p className="muted loading">관리자 권한을 확인하고 있습니다</p></div>;
   if (me.role !== "ADMIN") return <Navigate to="/" replace />;
   return <>{children}</>;
 }

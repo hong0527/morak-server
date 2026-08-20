@@ -81,9 +81,9 @@ public class TestFixtures {
     /** 같은 코드로 다시 부르면 같은 소셜 계정의 재로그인이다(DevSocialClient 규약). */
     public Long joinMember(String authorizationCode) {
         authService.login(new LoginRequest(
-                SocialProvider.KAKAO, authorizationCode, MANDATORY_AGREEMENTS));
+                SocialProvider.DEV, authorizationCode, MANDATORY_AGREEMENTS));
         return memberRepository
-                .findByProviderAndProviderUserId(SocialProvider.KAKAO, authorizationCode)
+                .findByProviderAndProviderUserId(SocialProvider.DEV, authorizationCode)
                 .orElseThrow(() -> new IllegalStateException("가입한 회원을 찾지 못했다"))
                 .getId();
     }

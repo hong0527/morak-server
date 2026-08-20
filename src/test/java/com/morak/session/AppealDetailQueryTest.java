@@ -222,7 +222,7 @@ class AppealDetailQueryTest extends IntegrationTest {
     /** 토큰만 필요한 재로그인. 같은 코드는 같은 소셜 계정이다(DevSocialClient 규약). */
     private String loginToken(String authorizationCode) {
         LoginResponse response = authService.login(new LoginRequest(
-                SocialProvider.KAKAO, authorizationCode,
+                SocialProvider.DEV, authorizationCode,
                 List.of(new AgreementItem(AgreementType.TOS, true),
                         new AgreementItem(AgreementType.PRIVACY, true))));
         return response.accessToken();

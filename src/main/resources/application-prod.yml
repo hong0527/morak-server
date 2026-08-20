@@ -20,7 +20,11 @@ morak:
   dev:
     enabled: false       # 개발용 소셜 로그인은 운영에서 꺼진다
 
-# 소셜 로그인·PG 실구현은 12단계다. 그때까지 이 프로필은 전부 거절하는 기본 구현
-# (RejectingSocialClient·RejectingPgClient)을 쓴다 — AU-1은 401 INVALID_SOCIAL_TOKEN,
-# PY-2는 409 PAYMENT_NOT_APPROVED가 정상 동작이고, 그 밖의 API는 그대로 동작한다.
+# 소셜 로그인은 카카오만 실구현이 있다. 카카오 환경변수 3종(MORAK_KAKAO_REST_KEY,
+# MORAK_KAKAO_REDIRECT_URI, 선택 MORAK_KAKAO_CLIENT_SECRET)을 주면 KAKAO 로그인이 열리고,
+# 없으면 RoutingSocialClient가 KAKAO를 401 INVALID_SOCIAL_TOKEN으로 거절한 채 나머지 API는
+# 그대로 동작한다. redirect-uri는 프론트 콜백과 같아야 한다: https://<도메인>/login/kakao
+#
+# PG 실구현은 아직이다. 이 프로필은 전부 거절하는 기본 구현(RejectingPgClient)을 쓴다 —
+# PY-2는 409 PAYMENT_NOT_APPROVED가 정상 동작이다.
 # 통과시키는 스텁을 두지 않는 이유는 그 하나로 인증 없는 로그인과 결제 없는 적립이 열리기 때문이다.

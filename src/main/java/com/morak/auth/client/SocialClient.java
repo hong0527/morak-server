@@ -5,9 +5,9 @@ import com.morak.member.type.SocialProvider;
 /**
  * 소셜 서비스에서 사용자 정보를 받아온다.
  *
- * <p>구현이 둘이라 인터페이스를 둔다. 개발 중에는 앱 키가 없어도 로그인이 되어야
+ * <p>구현이 여럿이라 인터페이스를 둔다. 개발 중에는 앱 키가 없어도 로그인이 되어야
  * 뒤 단계를 만들 수 있고, 운영에서는 실제 소셜 서버를 호출해야 한다.
- * 프로필로 갈아끼운다.
+ * 주입점은 provider별로 위임하는 {@link RoutingSocialClient} 하나다.
  */
 public interface SocialClient {
 

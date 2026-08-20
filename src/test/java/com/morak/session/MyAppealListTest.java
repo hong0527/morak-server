@@ -209,7 +209,7 @@ class MyAppealListTest extends IntegrationTest {
 
     private String loginToken(String authorizationCode) {
         return authService.login(new LoginRequest(
-                        SocialProvider.KAKAO, authorizationCode,
+                        SocialProvider.DEV, authorizationCode,
                         List.of(new AgreementItem(AgreementType.TOS, true),
                                 new AgreementItem(AgreementType.PRIVACY, true))))
                 .accessToken();

@@ -227,7 +227,7 @@ class LoginFlowTest extends IntegrationTest {
 
     private LoginResponse login(String authorizationCode, List<AgreementItem> agreements) {
         return authService.login(
-                new LoginRequest(SocialProvider.KAKAO, authorizationCode, agreements));
+                new LoginRequest(SocialProvider.DEV, authorizationCode, agreements));
     }
 
     private List<AgreementItem> mandatory() {

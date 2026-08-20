@@ -47,6 +47,15 @@ morak:
   dev:
     enabled: false          # dev 프로필에서만 true. @Profile("dev")와 AND 조건
 
+  # 카카오 로그인 키. 값은 환경변수로만 주입한다 — MORAK_KAKAO_REST_KEY,
+  # MORAK_KAKAO_REDIRECT_URI, MORAK_KAKAO_CLIENT_SECRET(콘솔에서 켠 앱만).
+  # 다른 비밀값처럼 ${...} 항목을 여기 두지 않는 이유: KakaoSocialClient의 빈 조건
+  # (@ConditionalOnProperty)이 이 키를 읽는데, 환경변수가 없으면 placeholder 해석 실패로
+  # 키가 필요 없는 dev·demo 기동까지 깨진다. 환경변수는 relaxed binding으로
+  # morak.kakao.rest-key에 그대로 잡히므로 yml 항목이 없어도 된다.
+  # 키가 없으면 빈이 안 뜨고 RoutingSocialClient가 KAKAO 로그인을 401로 거절한다.
+  kakao:
+
   scheduling:
     enabled: true           # 배치(B1·B2·B4·B5)와 재접속 유예 스위퍼. 테스트만 false로 끈다
 

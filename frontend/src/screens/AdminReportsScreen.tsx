@@ -26,7 +26,7 @@ function ReportList() {
   useEffect(() => {
     setData(null); setError(null);
     void api.admin.reports({ page, size: 20, status: status || undefined, severity: severity || undefined, overdue: overdue || undefined, q: q.trim() || undefined })
-      .then(setData).catch((e) => setError(String(e)));
+      .then(setData).catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [page, status, severity, overdue, q]);
 
   return <AdminFrame title="신고 관리">
@@ -58,19 +58,19 @@ function ReportDetail({ caseId }: { caseId: number }) {
   const [days, setDays] = useState(7);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { void api.admin.report(caseId).then(setDetail).catch((e) => setError(String(e))); }, [caseId]);
+  useEffect(() => { void api.admin.report(caseId).then(setDetail).catch((e) => setError(e instanceof Error ? e.message : String(e))); }, [caseId]);
 
   async function process() {
     setBusy(true); setError(null);
     try {
       await api.admin.processReport(caseId, { status: decision, reviewNote: note.trim() || undefined, sanction: decision === "SANCTIONED" ? { type: sanctionType, days: sanctionType === "TEMP" ? days : undefined } : undefined });
       navigate("/admin/reports", { replace: true });
-    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
 
   return <AdminFrame title="신고 상세">
     <button className="back" onClick={() => navigate(-1)}>‹</button>
-    {!detail ? <p className="muted">{error ?? "불러오는 중..."}</p> : <>
+    {!detail ? <p className={`muted${error ? "" : " loading"}`}>{error ?? "불러오는 중입니다"}</p> : <>
       <div className="admin-heading"><div><p className="eyebrow">사건 #{detail.caseId}</p><h1>{detail.target.nickname ?? `세션 ${detail.target.sessionId}`}</h1></div><span className={`admin-badge ${detail.severity === "HIGH" ? "danger" : ""}`}>{detail.severity === "HIGH" ? "고위험" : "일반"}</span></div>
       <div className="admin-detail-grid">
         <section><h2>사건 요약</h2><Info label="현재 상태" value={STATUS[detail.status]} /><Info label="접수 시각" value={formatDate(detail.receivedAt)} /><Info label="처리 기한" value={formatDate(detail.slaDueAt)} /><Info label="관련 세션" value={detail.target.sessionId ? `#${detail.target.sessionId}` : "-"} /></section>

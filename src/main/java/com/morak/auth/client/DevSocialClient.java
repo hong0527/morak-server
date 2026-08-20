@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
  * 개발용 소셜 클라이언트. 소셜 서버를 호출하지 않고 authorizationCode를 그대로
  * providerUserId로 쓴다. 같은 코드로 다시 로그인하면 같은 회원이 된다.
  *
- * <p>실제 카카오·구글 구현은 앱 키 발급 후 12단계에서 추가한다. 그때까지 dev가 아닌
- * 프로필은 모든 코드를 거절하는 {@link RejectingSocialClient}를 쓴다.
+ * <p>{@link RoutingSocialClient}가 provider=DEV일 때만 여기로 위임한다. KAKAO는
+ * {@link KakaoSocialClient} 몫이라, 실구현이 붙은 뒤에도 이 문은 심사·개발용으로 그대로 남는다.
  *
  * <p>{@code @Profile}과 {@code morak.dev.enabled} 이중 스위치다. 프로필 실수 하나로
  * 운영에서 인증 우회 로그인이 열리는 사고를 막는다.

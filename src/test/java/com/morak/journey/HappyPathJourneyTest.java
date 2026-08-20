@@ -92,7 +92,7 @@ class HappyPathJourneyTest extends IntegrationTest {
 
         // ── 1. 가입 ── 약관에 동의하고 계정을 얻는다. 이 응답의 토큰이 이후 전부의 입력이다
         LoginResponse joined = api.post("/api/auth/login", null,
-                new LoginRequest(SocialProvider.KAKAO, SOCIAL_CODE, mandatoryAgreements()),
+                new LoginRequest(SocialProvider.DEV, SOCIAL_CODE, mandatoryAgreements()),
                 LoginResponse.class);
         String token = joined.accessToken();
         assertThat(joined.isNewMember())
