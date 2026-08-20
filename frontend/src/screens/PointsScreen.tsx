@@ -80,9 +80,15 @@ export default function PointsScreen() {
       setPage(0);
       void load(0);
     } catch (e) {
-      // 승인 실패여도 충전 건은 READY 로 남는다. pgTid 를 고쳐 다시 확인할 수 있게
-      // charge 를 지우지 않는다.
-      setChargeError(e instanceof ApiError ? e.message : String(e));
+      // 입력 오류(400)는 pgTid 를 고쳐 다시 확인할 수 있지만, PG 가 거절한 건(409)은
+      // 서버가 FAILED 로 닫는다. 닫힌 건에 재시도 버튼을 계속 내주면 절대 성공하지
+      // 않는 확인을 권하는 셈이라, 그때는 접고 새 충전 요청으로 안내한다.
+      if (e instanceof ApiError && e.status === 409) {
+        setCharge(null);
+        setChargeError("결제가 승인되지 않아 이 충전 건이 닫혔어요. 새로 충전을 요청해 주세요.");
+      } else {
+        setChargeError(e instanceof ApiError ? e.message : String(e));
+      }
     } finally {
       setBusy(false);
     }

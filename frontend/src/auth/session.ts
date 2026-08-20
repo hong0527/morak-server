@@ -90,3 +90,19 @@ configureHttp({
   readToken: () => authStore.get().accessToken,
   onUnauthorized: (code) => authStore.markExpired(code),
 });
+
+/**
+ * 로그아웃을 다른 문서에도 전파한다. authStore는 자기 문서 안의 변화만 알리기 때문에,
+ * 이 둘이 없으면 다른 탭과 bfcache로 복원된 문서가 메모리 토큰으로 계속 동작한다 —
+ * 공용 PC에서 로그아웃하고 자리를 떠도 뒤로가기 한 번이면 잔액이 보이는 구멍.
+ */
+window.addEventListener("storage", (e) => {
+  if (e.key === TOKEN_KEY && e.newValue === null && state.accessToken !== null) {
+    authStore.signOut();
+  }
+});
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted && state.accessToken !== null && read(TOKEN_KEY) === null) {
+    authStore.signOut();
+  }
+});

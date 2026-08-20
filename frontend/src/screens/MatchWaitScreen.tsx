@@ -62,7 +62,9 @@ export default function MatchWaitScreen() {
           navigate(`/sessions/${e.details.sessionId}`, { replace: true });
           return;
         }
-        if (e.code === "REMATCH_COOLDOWN") {
+        if (e.code === "DUPLICATE_MATCH_REQUEST") {
+          setError("이미 신청해 둔 매칭이 있어요. 잠시 후 대기 화면으로 이어져요.");
+        } else if (e.code === "REMATCH_COOLDOWN") {
           setError(
             `퇴출 후에는 잠시 매칭을 쉬어야 해요. ${e.details?.availableAt ?? ""}부터 다시 신청할 수 있어요.`,
           );
