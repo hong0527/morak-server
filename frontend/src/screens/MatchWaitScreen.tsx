@@ -145,7 +145,7 @@ export default function MatchWaitScreen() {
                 하루 목표 시간 <b>{current.targetMinutes / 60}시간</b>
               </p>
               <p>
-                그룹 인원 <b>{current.requiredCount}명</b>
+                참여 인원 <b>{current.requiredCount}명</b>
               </p>
             </div>
             <p className="caption left">
