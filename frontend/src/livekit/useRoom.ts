@@ -142,7 +142,21 @@ export function useSessionRoom(sessionId: number | null): SessionRoom {
           }
         });
 
-        await room.connect(access.url, access.token);
+        // 첫 접속이 간헐적으로 미끄러진다(재입장 직후 특히). 새로고침하면 붙는 수준의
+        // 일시 실패라, 사용자에게 배너를 보이기 전에 코드가 같은 재시도를 한다.
+        let lastConnectError: unknown = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            if (attempt > 0) await new Promise((r) => setTimeout(r, 2000 * attempt));
+            if (disposed) return;
+            await room.connect(access.url, access.token);
+            lastConnectError = null;
+            break;
+          } catch (connectError) {
+            lastConnectError = connectError;
+          }
+        }
+        if (lastConnectError) throw lastConnectError;
         if (disposed) {
           room.disconnect();
           return;
