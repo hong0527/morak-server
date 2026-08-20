@@ -16,6 +16,12 @@ import RecordsScreen from "./screens/RecordsScreen";
 import ReportScreen from "./screens/ReportScreen";
 import ProfileScreen from "./screens/ProfileScreen";
 import LeaveScreen from "./screens/LeaveScreen";
+import AdminGuard from "./components/AdminGuard";
+import AdminDashboardScreen from "./screens/AdminDashboardScreen";
+import AdminReportsScreen from "./screens/AdminReportsScreen";
+import AdminAppealsScreen from "./screens/AdminAppealsScreen";
+import AdminSessionsScreen from "./screens/AdminSessionsScreen";
+import AdminWithdrawalsScreen from "./screens/AdminWithdrawalsScreen";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
@@ -47,6 +53,13 @@ export default function App() {
               <Route path="/report" element={<ReportScreen />} />
               <Route path="/profile" element={<ProfileScreen />} />
               <Route path="/leave" element={<LeaveScreen />} />
+              <Route path="/admin" element={<AdminGuard><AdminDashboardScreen /></AdminGuard>} />
+              <Route path="/admin/reports" element={<AdminGuard><AdminReportsScreen /></AdminGuard>} />
+              <Route path="/admin/reports/:caseId" element={<AdminGuard><AdminReportsScreen /></AdminGuard>} />
+              <Route path="/admin/appeals" element={<AdminGuard><AdminAppealsScreen /></AdminGuard>} />
+              <Route path="/admin/appeals/:appealId" element={<AdminGuard><AdminAppealsScreen /></AdminGuard>} />
+              <Route path="/admin/sessions" element={<AdminGuard><AdminSessionsScreen /></AdminGuard>} />
+              <Route path="/admin/withdrawals" element={<AdminGuard><AdminWithdrawalsScreen /></AdminGuard>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </RequireAuth>

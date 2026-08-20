@@ -94,6 +94,13 @@ export default function ProfileScreen() {
           </div>
         )}
 
+        {me.role === "ADMIN" && (
+          <button className="admin-entry" onClick={() => navigate("/admin")}>
+            운영자 페이지
+            <span>신고·이의·세션 관리 →</span>
+          </button>
+        )}
+
         <button className="ghost" onClick={() => navigate("/records")}>
           내 기록 보기
         </button>
