@@ -123,7 +123,15 @@ export default function SessionScreen() {
       room.disconnect();
       navigate("/", { replace: true });
     } catch (e) {
-      setEntryError(String(e));
+      // 이미 나갔거나 끝난 세션이면 오류를 보일 일이 아니라 내보내 줄 일이다.
+      // 재접속 화면에서 나가기를 또 누르는 경우가 실제로 있다.
+      if (e instanceof ApiError
+        && (e.code === "ALREADY_LEFT" || e.code === "SESSION_ENDED" || e.code === "ALREADY_EVICTED")) {
+        room.disconnect();
+        navigate(e.code === "ALREADY_LEFT" ? "/" : `/sessions/${sessionId}/result`, { replace: true });
+        return;
+      }
+      setEntryError(e instanceof ApiError ? e.message : String(e));
       setLeaving(false);
     }
   }

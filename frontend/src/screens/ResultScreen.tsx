@@ -27,6 +27,9 @@ export default function ResultScreen() {
   const [result, setResult] = useState<SessionResult | null>(null);
   const [settling, setSettling] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 세션이 아직 진행 중인데 내가 먼저 나온 경우. 이때의 409는 정산 지연이 아니라
+  // "결과가 아직 존재하지 않는다"는 뜻이라, 기다리게 하면 안 되고 보내 줘야 한다.
+  const [leftWhileLive, setLeftWhileLive] = useState<null | "LEFT" | "EVICTED" | "ACTIVE">(null);
   const [sharing, setSharing] = useState(false);
   const [shareMessage, setShareMessage] = useState<string | null>(null);
 
@@ -44,6 +47,21 @@ export default function ResultScreen() {
       } catch (e) {
         if (cancelled) return;
         if (e instanceof ApiError && e.code === "SESSION_NOT_ENDED") {
+          // 같은 409라도 두 상황이 있다. 세션이 끝났고 배치만 안 돈 것이면 기다리고,
+          // 세션이 아직 진행 중이면(내가 먼저 나옴·퇴출됨) 기다릴 것이 없다.
+          try {
+            const s = await api.session.get(sessionId);
+            if (cancelled) return;
+            if (s.status === "LIVE") {
+              const me = s.participants.find((p) => p.isMe);
+              setLeftWhileLive(me?.status === "EVICTED" ? "EVICTED"
+                : me?.status === "LEFT" ? "LEFT" : "ACTIVE");
+              setSettling(false);
+              return;
+            }
+          } catch {
+            // 세션 조회가 안 되면 기존 재시도 경로로 둔다.
+          }
           if (Date.now() - startedAt > GIVE_UP_MS) {
             setSettling(false);
             setError("결과 정리가 예상보다 오래 걸리고 있어요. 잠시 뒤 다시 확인해 주세요.");
@@ -63,6 +81,37 @@ export default function ResultScreen() {
     };
   }, [sessionId]);
 
+  if (leftWhileLive === "ACTIVE") {
+    // 진행 중인 세션의 참가자가 결과 주소로 잘못 들어온 경우다. 자리로 돌려보낸다.
+    return (
+      <div className="screen">
+        <h1>세션이 아직 진행 중이에요</h1>
+        <button className="primary" onClick={() => navigate(`/sessions/${sessionId}`, { replace: true })}>
+          세션으로 돌아가기
+        </button>
+      </div>
+    );
+  }
+
+  if (leftWhileLive) {
+    return (
+      <div className="screen">
+        <h1>{leftWhileLive === "EVICTED" ? "세션에서 퇴출됐어요" : "세션에서 나왔어요"}</h1>
+        <p className="muted">
+          {leftWhileLive === "EVICTED"
+            ? "판정이 잘못됐다고 생각하시면 내 기록에서 바로 이의를 신청할 수 있어요. 자세한 결과는 세션이 끝난 뒤 내 기록에 남아요."
+            : "이번 세션은 완주로 인정되지 않아요. 세션이 끝나면 내 기록에서 결과를 확인할 수 있어요."}
+        </p>
+        <div className="row">
+          <button className="primary" onClick={() => navigate("/records", { replace: true })}>
+            내 기록 보기
+          </button>
+          <button onClick={() => navigate("/", { replace: true })}>홈으로</button>
+        </div>
+      </div>
+    );
+  }
+
   if (settling) {
     return (
       <div className="screen">
@@ -70,6 +119,7 @@ export default function ResultScreen() {
         <p className="muted loading">
           세션이 끝났어요. 결과가 나오기까지 최대 1분 정도 걸려요.
         </p>
+        <button onClick={() => navigate("/", { replace: true })}>홈으로</button>
       </div>
     );
   }
