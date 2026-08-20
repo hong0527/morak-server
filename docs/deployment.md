@@ -8,7 +8,7 @@
 
 # 배포 당일 한 장
 
-**이 문서는 836줄이고 8/18에 그걸 다 읽을 시간은 없다.** 아래 순서대로만 따라가면 끝난다.
+**이 문서는 1,000줄이 넘고 8/18에 그걸 다 읽을 시간은 없다.** 아래 순서대로만 따라가면 끝난다.
 각 줄의 괄호가 막혔을 때 펼칠 절이다.
 
 ## 전날까지 (8/17)
@@ -18,13 +18,14 @@
 | 0-1 | **도메인 준비.** 없으면 카메라가 안 켜져 세션 화면이 통째로 죽는다 | 10분 | §7 |
 | 0-2 | 환경변수 9개 값을 모아 둔다. DB 3개는 여기서 정하면 된다 | 10분 | §3 |
 | 0-3 | 로컬에서 `./gradlew clean bootJar` — 서버에서 빌드하지 않는다 | 3분 | §5 |
+| 0-4 | 프론트도 로컬에서. `ai-detection` vendor → `npm run build`로 `dist/` 준비 | 10분 | §7 프론트 절 |
 
 ## 당일 — 서버를 받은 뒤 (총 90~120분)
 
 | # | 할 일 | 시간 | 상세 |
 |---|---|---|---|
-| 1 | 서버 접속. JDK 21 이상 설치 확인 (`java -version`) | 10분 | §1 |
-| 2 | MySQL 8 설치. `/etc/mysql/conf.d/morak.cnf`에 §4-1 설정을 넣고 재시작 | 15분 | §4-1 |
+| 1 | 서버 접속. §1-1 설치 명령 일괄 실행 + §1-2 방화벽. `java -version`이 **21**인지 확인 | 15분 | §1-1 · §1-2 |
+| 2 | MySQL 확인. `/etc/mysql/conf.d/morak.cnf`에 §4-1 설정을 넣고 `systemctl restart mysql` | 15분 | §4-1 |
 | 3 | DB·계정 생성 (`morak`, utf8mb4, localhost 한정) | 5분 | §4-2 |
 | 4 | **스키마 생성.** `db-schema.md`에서 `schema.sql`을 뽑아 넣고 **테이블 24개 확인** | 10분 | §4-3 |
 | 5 | jar 업로드 (`/opt/morak/morak-server.jar`) | 5분 | §5 |
@@ -32,7 +33,7 @@
 | 7 | `systemctl enable --now morak` → **로그에 `Started MorakServerApplication`** | 5분 | §6 · §10-1 |
 | 8 | 호출 확인. 로그인은 401이 정상이다(키가 없으면) | 5분 | §10-2 |
 | 9 | DB 확인. `match_lock` 조건 행 4개가 자동으로 들어갔는지 | 5분 | §10-3 |
-| 10 | nginx + 도메인 + 인증서. **프론트와 API를 같은 오리진에** | 25분 | §7 |
+| 10 | 프론트 `dist/`를 `/opt/morak-web`에 업로드 → nginx + 도메인 + 인증서. **프론트와 API를 같은 오리진에** | 30분 | §7 |
 | 11 | 백업 크론 등록. **서버 밖으로 내보내는 것까지** | 15분 | §9 |
 | 12 | 관리자 계정 승격 | 5분 | §11 |
 
@@ -49,6 +50,9 @@
 | **기동이 안 된다** — `missing table [...]` | 스키마를 안 넣었다. §4-3 |
 | **브라우저에서 카메라가 안 켜진다** | HTTPS가 아니다. IP로는 안 된다 — 도메인·인증서. §7 |
 | **브라우저에서 API 호출이 전부 막힌다** | CORS. 프론트와 API를 같은 오리진에 둔다. §7 |
+| **밖에서 아예 안 닿는다(타임아웃)** | 방화벽 두 겹. 가비아 보안그룹(콘솔)과 서버 안 ufw 양쪽을 연다. §1-2 |
+| **모든 API가 502** | 앱이 죽어 있다 — `systemctl status morak`. Rocky를 골랐다면 SELinux부터. §1-3 |
+| **화면은 뜨는데 감지가 안 돈다** | `dist/ai/`가 비었다. vendor를 건너뛴 빌드다. §7 프론트 절 |
 | **무관한 조회까지 느리다가 500** | 커넥션 풀 고갈. JDBC URL의 `innodb_lock_wait_timeout=5` 확인. §8 |
 | **로그 시각이 DB와 9시간 다르다** | `TZ=Asia/Seoul` 누락. §6 · §8 |
 | **매칭이 6명 모여도 안 된다** | `match_lock` 조건 행. §4-4 · §10-3 |
@@ -68,13 +72,19 @@
 
 | 항목 | 값 |
 |---|---|
+| OS | **Ubuntu 22.04/24.04 LTS — 생성 시 직접 선택한다** (기본 표시값은 Rocky Linux 8.10) |
 | CPU | 2 vCore (High CPU) |
 | 메모리 | 4GB |
-| 공인 IP | 1개 |
+| 디스크 | 100GB |
+| 공인 IP | 1개 — **콘솔에서 별도로 생성해 서버에 연결해야 한다** |
 | 트래픽 | 무료 1TB |
 | 사용 기간 | **8/18(화) ~ 8/28(금), 10일** |
 
 **8/28에 서버가 일괄 삭제된다.** 그 안에 있는 데이터는 함께 사라지므로 §9 백업이 선택 사항이 아니다.
+
+생성 화면의 기본 표시값은 Rocky Linux지만 **Ubuntu를 선택한다** — 이 문서의 명령이 전부
+Ubuntu(Debian 계열) 기준이라 그대로 성립한다. 이미 Rocky로 만들어 버렸다면 §1-3의 대비 표로
+갈리는 명령만 바꿔 진행한다. 접속은 가비아 콘솔의 브라우저 터미널(root + 이메일로 받은 비밀번호) 또는 SSH다.
 
 한 대에 API 서버·MySQL·프론트가 모두 올라간다. 사양을 올리면 과금되므로 아래 설정은 전부 4GB 안에서 끝나도록 잡았다.
 
@@ -89,6 +99,66 @@
 | DB | MySQL 8, InnoDB, utf8mb4 | 8.4.11에서 확인 |
 | 웹 서버 | nginx | 프론트 정적 파일 + API 리버스 프록시(§7). **없으면 브라우저에서 API를 부를 수 없다** |
 | 도메인 | 필요 | HTTPS 없이는 카메라가 열리지 않는다(§7) |
+
+### 1-1. 설치 명령 (Ubuntu 22.04/24.04)
+
+```bash
+sudo apt update    # 갓 만든 서버는 패키지 목록이 비어 있어 install이 실패한다
+
+# JDK 21 — 실행만 하므로 jre, GUI 없는 서버라 headless면 된다.
+# 22.04는 jammy-updates에, 24.04는 기본 저장소에 있다.
+sudo apt install -y openjdk-21-jre-headless
+java -version    # "21"이 나와야 한다. 다른 java가 있어 아니라면: sudo update-alternatives --config java
+
+# MySQL 8 — 8.0.x가 설치된다. 이 문서 실측은 8.4.11이지만
+# 여기서 쓰는 설정과 정렬(utf8mb4_0900_ai_ci)은 전부 8.0에 있어 8.0이면 된다.
+sudo apt install -y mysql-server
+
+# nginx + certbot — Ubuntu는 둘 다 기본 저장소에 있다
+sudo apt install -y nginx certbot python3-certbot-nginx
+```
+
+Ubuntu의 MySQL은 root가 `auth_socket` 인증이다 — 비밀번호가 아니라 "리눅스 root로 접속했는가"를
+본다. 그래서 `sudo mysql`로 들어가고, 이 문서 뒤쪽의 `mysql -u root -p` 자리는 전부 `sudo mysql`로
+읽으면 된다. 원격이나 다른 리눅스 계정에서는 root로 못 들어가므로 그대로 둬도 안전하다.
+
+### 1-2. 방화벽 두 겹
+
+**방화벽이 두 겹이다.** 가비아 콘솔의 보안그룹(클라우드 레벨)과 서버 안의 ufw.
+둘 다 열려야 밖에서 닿는다. 한쪽만 열고 "왜 타임아웃이지"가 되기 쉬운 자리다.
+
+- **보안그룹**: 가비아 콘솔에서 인바운드 22·80·443을 허용한다. 서버 안에서는 못 한다.
+- **ufw**: Ubuntu는 설치돼 있지만 **기본으로 꺼져 있다.** 보안그룹이 있어도 설정 실수에
+  대비해 한 겹 더 켜 둔다. **순서가 중요하다 — OpenSSH를 허용하기 전에 enable하면
+  지금 붙어 있는 SSH가 끊길 수 있다.**
+
+  ```bash
+  sudo ufw allow OpenSSH
+  sudo ufw allow 'Nginx Full'   # 80 + 443. nginx 패키지가 등록한 프로필이다
+  sudo ufw enable
+  sudo ufw status               # 22, 80, 443이 ALLOW로 보여야 한다
+  ```
+
+8080(API)·3306(MySQL)은 어느 쪽에서도 열지 않는다. 밖으로 여는 것은 nginx의 80·443뿐이다(§7).
+
+### 1-3. Rocky Linux를 이미 골랐다면
+
+서버를 다시 만들 수 없을 때만 이 표를 쓴다. 명령이 갈리는 자리는 이것이 전부다.
+
+| 자리 | Ubuntu (이 문서 기준) | Rocky 8.10 |
+|---|---|---|
+| 패키지 설치 | `apt install ...` (§1-1) | `dnf install java-21-openjdk-headless mysql-server nginx` + certbot은 `dnf install epel-release` 후 |
+| 기본 java | 다른 java 없음 | **11이 기본** — 21 설치 후 `alternatives --config java` |
+| MySQL 서비스 | `mysql` | `mysqld` |
+| MySQL 설정 경로 | `/etc/mysql/conf.d/` | `/etc/my.cnf.d/` |
+| MySQL root 첫 접속 | `sudo mysql` (auth_socket) | `mysql -u root` (빈 비밀번호 — 바로 정한다) |
+| nginx 설정 | `sites-available` + 심링크 | `/etc/nginx/conf.d/morak.conf` (sites-* 구조 없음) |
+| 방화벽 | ufw (기본 꺼짐) | firewalld (기본 켜짐): `firewall-cmd --permanent --add-service=http --add-service=https && firewall-cmd --reload` |
+| SELinux | 없음 (AppArmor, 기본으로 안 막힘) | **enforcing.** `setsebool -P httpd_can_network_connect 1` 없으면 전 API 502. `/opt/morak-web`에 `httpd_sys_content_t` 라벨(`semanage fcontext` + `restorecon`) 없으면 정적 파일 403 — 프론트를 새로 올릴 때마다 `restorecon -R /opt/morak-web` |
+| 인증서 갱신 | `certbot.timer` (설치 때 자동) | `certbot-renew.timer` (직접 `systemctl enable --now`) |
+| 유닛 `After=` | `mysql.service` | `mysqld.service` |
+| journald | 기본 persistent | 기본 휘발성 — `Storage=persistent` + `mkdir /var/log/journal` (§8) |
+| cron | 기본 있음 | 최소 설치엔 없을 수 있음 — `dnf install cronie` |
 
 ---
 
@@ -152,7 +222,10 @@ MySQL의 174MB는 **테이블만 있고 데이터가 없을 때**의 값이다. 
 
 ### 4-1. MySQL 설정
 
-기본 설정 그대로 두면 454MB를 쓴다. 아래를 `/etc/mysql/conf.d/morak.cnf`에 넣으면 **174MB로 내려간다**(실측). 버퍼 풀을 오히려 128M에서 256M으로 늘리고도 그렇다 — 줄어든 대부분은 `performance_schema`다.
+기본 설정 그대로 두면 454MB를 쓴다. 아래를 `/etc/mysql/conf.d/morak.cnf`에 넣고
+`sudo systemctl restart mysql` 하면 **174MB로 내려간다**(실측). 버퍼 풀을 오히려 128M에서
+256M으로 늘리고도 그렇다 — 줄어든 대부분은 `performance_schema`다.
+(경로와 서비스 이름은 Ubuntu 기준이다. Rocky는 `/etc/my.cnf.d/morak.cnf`에 넣고 `mysqld`를 재시작한다.)
 
 ```ini
 [mysqld]
@@ -303,7 +376,9 @@ MORAK_PG_SECRET_KEY=...
 ```ini
 [Unit]
 Description=MoLock API server
-After=network.target mysql.service
+# MySQL 서비스 이름이 배포판마다 다르다(Ubuntu mysql, Rocky mysqld).
+# After=는 없는 유닛을 무시하므로 둘 다 적어 어느 쪽에서도 DB 뒤에 뜨게 한다.
+After=network.target mysql.service mysqld.service
 
 [Service]
 User=morak
@@ -341,6 +416,15 @@ MoLock은 웹캠 서비스다. 브라우저는 **보안 컨텍스트(HTTPS 또�
 
 따라서 프론트를 `https://도메인`으로, API를 `https://도메인:8080`으로 따로 노출하면 **포트가 달라 오리진이 갈리고 모든 API 호출이 브라우저에서 막힌다.** 서버 코드를 고치지 않고 해결하는 방법이 리버스 프록시다 — 프론트와 API를 같은 오리진에 두면 CORS 자체가 발생하지 않는다.
 
+설정은 `/etc/nginx/sites-available/morak`에 두고 심링크로 켠다. nginx 기본 페이지를 보여 주는
+`default` 사이트는 지운다 — 남겨 두면 도메인이 아닌 IP로 접속했을 때 환영 페이지가 떠서 헷갈린다.
+
+```bash
+sudo ln -s /etc/nginx/sites-available/morak /etc/nginx/sites-enabled/morak
+sudo rm /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
 ```nginx
 server {
     listen 443 ssl;
@@ -372,7 +456,52 @@ server {
 }
 ```
 
-API 서버(8080)는 방화벽에서 외부에 열지 않는다. 밖으로 여는 것은 80·443뿐이다.
+API 서버(8080)는 방화벽에서 외부에 열지 않는다. 밖으로 여는 것은 80·443뿐이다(§1-2 — 보안그룹과 ufw 양쪽).
+
+### 인증서 발급 순서
+
+위 443 설정은 인증서 파일이 이미 있어야 `nginx -t`를 통과한다. 순서는 이렇다.
+
+1. 80만 듣는 server 블록(정적 + `/api` 프록시)으로 먼저 띄운다.
+2. 발급 — 설정은 우리가 직접 쓰므로 `certonly`로 받기만 한다.
+
+   ```bash
+   sudo certbot certonly --nginx -d <도메인> -m <이메일> --agree-tos
+   ```
+
+3. 위 443 설정으로 바꾸고 `sudo nginx -t && sudo systemctl reload nginx`.
+4. 자동 갱신 — Ubuntu의 certbot은 설치 때 `certbot.timer`가 이미 걸린다.
+   `systemctl is-active certbot.timer`로 확인만 한다. (Rocky는 `certbot-renew.timer`를 직접 켠다 — §1-3.)
+
+발급이 실패하면 대부분 A 레코드가 이 서버 IP를 가리키지 않거나(전파 대기), 80이 밖에서 닿지 않는 경우다(§1-2).
+
+### 프론트 빌드를 만들어 올리는 절차
+
+위 nginx가 서빙하는 `/opt/morak-web`을 채우는 단계다. **빌드는 로컬에서 한다** — jar를
+로컬에서 빌드해 올리는 §5와 같은 원칙이고, 서버에 node를 설치하지 않는다.
+
+```bash
+# 로컬에서. 감지 모듈의 vendor를 먼저 한다 — 모델·wasm은 저장소에 없고 이 스크립트가 받아 온다.
+# 건너뛰면 빌드는 되지만 감지가 돌지 않는다.
+cd frontend/ai-detection
+npm install && npm run vendor
+
+# 프론트 빌드. build 스크립트가 감지 모듈 동기화(sync:ai) → 타입 검사 → vite build 순으로 돈다.
+cd ..
+npm install && npm run build
+```
+
+`dist/`는 **약 41MB**다. vite가 `public/`을 복사하므로 `dist/ai/`에 감지 자산
+(`face_landmarker.task`·wasm·`worker-classic.js`)이 함께 들어간다 — dist만 올리면 감지까지 동작한다.
+jar에는 프론트가 들어 있지 않으므로 이 업로드를 빼면 API만 살고 화면이 없다.
+
+```bash
+# 로컬에서 서버로. --delete가 이전 배포의 옛 js 청크를 지워 준다.
+rsync -az --delete dist/ root@<서버IP>:/opt/morak-web/
+```
+
+올린 뒤 `https://<도메인>`을 새로고침해 확인한다. 화면은 뜨는데 감지가 안 돌면
+`dist/ai/`가 비어 있는 것이다 — vendor부터 다시 한다.
 
 ### LiveKit·PG 웹훅
 
@@ -462,6 +591,7 @@ MySQL은 처음 읽은 스냅샷을 계속 보여 준다. 네 여정을 MySQL에
 
 ```bash
 # /etc/systemd/journald.conf
+[Journal]
 SystemMaxUse=500M
 ```
 
@@ -469,6 +599,10 @@ SystemMaxUse=500M
 sudo systemctl restart systemd-journald
 journalctl --disk-usage          # 현재 사용량 확인
 ```
+
+Ubuntu는 저널이 기본으로 디스크에 남으므로(persistent) 상한만 걸면 된다. Rocky를 골랐다면
+기본이 휘발성이라 **재부팅하면 로그가 사라진다** — `Storage=persistent`와
+`mkdir /var/log/journal`을 함께 넣는다(§1-3).
 
 ### 정렬 규칙이 대소문자를 구분하지 않는다
 
@@ -900,7 +1034,9 @@ docker stats --no-stream --format "{{.Name}} mem={{.MemUsage}} cpu={{.CPUPerc}}"
 
 확인하지 못한 것:
 
-- **가비아 클라우드 실기기.** OS 이미지·디스크 성능·방화벽 기본값을 모른다. 8/18에 서버를 받으면 §10을 그대로 한 번 돌려 본다.
+- **가비아 클라우드 실기기.** OS는 생성 시 Ubuntu를 선택하는 것으로 정했고(§0) 명령도 그에 맞췄지만,
+  디스크 성능과 보안그룹 기본값은 실기기에서 본 적이 없다. 서버를 받으면 §10을 그대로 한 번 돌려 본다.
+  리허설은 전부 컨테이너에서 했으므로 보안그룹·ufw(§1-2)가 실제로 걸리는 것은 실기기가 처음이다.
 - OS가 실제로 쓰는 메모리(§13의 한계).
 - 외부 연동 3종(카카오·LiveKit·토스)의 실제 동작. 키가 없어 거절 경로만 확인했다.
 - HTTPS·도메인·nginx 구성. 도메인이 없어 문서상 구성만 적었다.
