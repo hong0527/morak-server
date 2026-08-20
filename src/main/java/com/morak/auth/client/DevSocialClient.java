@@ -14,11 +14,15 @@ import org.springframework.stereotype.Component;
  * <p>실제 카카오·구글 구현은 앱 키 발급 후 12단계에서 추가한다. 그때까지 dev가 아닌
  * 프로필은 모든 코드를 거절하는 {@link RejectingSocialClient}를 쓴다.
  *
- * <p>{@code @Profile("dev")}와 {@code morak.dev.enabled} 이중 스위치다. 프로필 실수 하나로
+ * <p>{@code @Profile}과 {@code morak.dev.enabled} 이중 스위치다. 프로필 실수 하나로
  * 운영에서 인증 우회 로그인이 열리는 사고를 막는다.
+ *
+ * <p>demo 프로필을 함께 받는 이유: 카카오 키·구현이 없는 상태로 실서버 시연을 해야 해서,
+ * 운영 프로필(prod,demo)에서도 이 문을 열 수 있어야 한다. 데모 서버가 코드 입력식 로그인을
+ * 받는다는 사실은 팀이 알고 여는 것이고, 이중 스위치(프로필 + 플래그)는 그대로 유지된다.
  */
 @Component
-@Profile("dev")
+@Profile("dev | demo")
 @ConditionalOnProperty(name = "morak.dev.enabled", havingValue = "true")
 public class DevSocialClient implements SocialClient {
 

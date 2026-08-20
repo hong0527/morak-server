@@ -136,15 +136,13 @@ export function useSessionRoom(sessionId: number | null): SessionRoom {
           fallbackStreamRef.current = stream;
           attachLocal(stream);
           setPhase("CAMERA_ONLY");
-          setError(
-            `LiveKit 에 붙지 못했다(${e instanceof Error ? e.message : String(e)}). ` +
-              `카메라만 열어 감지를 돌린다 — 남의 캠은 보이지 않는다`,
-          );
+          // raw error.message 는 사용자에게 보여줄 문구가 아니다. 원문은 콘솔로 남긴다.
+          console.warn("LiveKit connect failed:", e);
+          setError("실시간 연결에 붙지 못했다. 내 카메라만 열어 감지를 돌린다 — 남의 캠은 보이지 않는다");
         } catch (camError) {
           setPhase("FAILED");
-          setError(
-            `카메라를 열지 못했다: ${camError instanceof Error ? camError.message : String(camError)}`,
-          );
+          console.warn("camera open failed:", camError);
+          setError("카메라를 열 수 없습니다. 브라우저의 카메라 권한을 확인해 주세요.");
         }
       }
     })();

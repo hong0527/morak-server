@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api/client";
 import { ApiError } from "../api/http";
@@ -119,7 +119,7 @@ export default function SessionScreen() {
 
   if (!session) {
     return (
-      <div className="screen">
+      <div className="screen wide">
         <p className="muted">세션을 불러오는 중...</p>
         {entryError && <p className="error">{entryError}</p>}
       </div>
@@ -129,7 +129,8 @@ export default function SessionScreen() {
   const paused = me?.paused ?? false;
 
   return (
-    <div className="screen">
+    // 캠 6개가 들어가는 화면이라 이 화면만 wide 로 넓힌다
+    <div className="screen wide">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h1>세션 #{session.sessionId}</h1>
         <Remaining endsAt={session.endsAt} />
@@ -164,6 +165,7 @@ export default function SessionScreen() {
           .map((p) => (
             <ParticipantCam
               key={p.memberId}
+              sessionId={sessionId}
               participant={p}
               track={room.remoteCams.find((c) => c.identity === String(p.memberId))?.track}
             />
@@ -223,9 +225,11 @@ export default function SessionScreen() {
 }
 
 function ParticipantCam({
+  sessionId,
   participant,
   track,
 }: {
+  sessionId: number;
   participant: SessionParticipant;
   track?: { attach: (el: HTMLVideoElement) => void; detach: () => void } | undefined;
 }) {
@@ -256,6 +260,16 @@ function ParticipantCam({
           <div className="muted" style={{ fontSize: 11 }}>
             {participant.goalText}
           </div>
+        )}
+        {/* 신고 화면이 쿼리로 세션·대상을 받으므로 여기서 채워 보낸다 */}
+        {!gone && (
+          <Link
+            to={`/report?sessionId=${sessionId}&memberId=${participant.memberId}`}
+            className="muted"
+            style={{ fontSize: 11 }}
+          >
+            신고
+          </Link>
         )}
       </div>
     </div>

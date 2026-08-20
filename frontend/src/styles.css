@@ -1,8 +1,23 @@
-/* 디자인은 정해지지 않았다. 화면 구조가 보일 만큼만 두고 CSS 프레임워크는 넣지 않았다 */
+/* prototype/styles.css 를 원형으로 가져온 것이다. 어두운 캔버스 위 크림색 화면,
+   주황 그라데이션 CTA, 따뜻한 선의 카드. 클래스 이름도 프로토타입 것을 그대로 쓴다.
+   프로토타입의 h2(제목)·h3(섹션)는 이 앱에서 h1·h2/h3 로 대응한다. */
 :root {
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif;
+  --canvas: #2f343a;
+  --surface: #fff8f4;
+  --ink: #171717;
+  --muted: #766a62;
+  --soft: #f0ded6;
+  --orange: #ff532f;
+  --orange-soft: #fff0eb;
+  --yellow: #ffc928;
+  --line: #e3c8bb;
+  --tab: #fff5ef;
+  --charcoal: #2f3033;
+
+  color-scheme: light;
+  font-family: Arial, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
   line-height: 1.5;
+  font-weight: 500;
 }
 
 * {
@@ -11,40 +26,230 @@
 
 body {
   margin: 0;
-  background: #14151a;
-  color: #e8e8ea;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 20% 12%, rgba(255, 201, 40, 0.2), transparent 28%),
+    radial-gradient(circle at 82% 84%, rgba(255, 83, 47, 0.18), transparent 26%),
+    linear-gradient(135deg, #30343a 0%, #23272d 100%);
+  background-attachment: fixed;
 }
 
+/* 화면 하나 = 프로토타입의 폰 프레임. 모바일에서는 꽉 차고 데스크톱에서는 가운데 뜬다 */
 .screen {
-  max-width: 960px;
+  width: 100%;
+  max-width: 430px;
+  min-height: 100vh;
   margin: 0 auto;
-  padding: 24px 16px 64px;
+  padding: 22px 18px 64px;
+  background: linear-gradient(180deg, #fffdfb 0%, #fff8f4 100%);
+}
+
+/* 세션 캠 그리드는 폭이 필요해서 이 화면만 넓힌다 */
+.screen.wide {
+  max-width: 760px;
+}
+
+/* 하단 탭이 sticky 로 붙는 화면. 탭이 자체 여백을 만든다 */
+.screen.with-tab {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+
+@media (min-width: 480px) {
+  .screen {
+    min-height: calc(100vh - 56px);
+    margin: 28px auto;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 26px;
+    box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+  }
 }
 
 h1 {
-  font-size: 20px;
-  margin: 0 0 16px;
+  font-size: 24px;
+  margin: 0 0 14px;
+  color: var(--ink);
+  font-weight: 900;
+  line-height: 1.25;
 }
 
-h2 {
-  font-size: 15px;
-  margin: 24px 0 8px;
-  color: #a9adb8;
-  font-weight: 600;
+h2,
+h3 {
+  font-size: 14px;
+  margin: 24px 0 10px;
+  color: var(--ink);
+  font-weight: 900;
 }
+
+.card h2,
+.card h3 {
+  margin-top: 0;
+}
+
+a {
+  color: var(--orange);
+  text-decoration: none;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+/* ── 상단 ─────────────────────────────────────────────────────────────────── */
+
+.topbar {
+  display: grid;
+  grid-template-columns: 34px 1fr 34px;
+  align-items: center;
+  margin-bottom: 26px;
+}
+
+.topbar button,
+.back {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.topbar b {
+  text-align: center;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.back {
+  margin: 0 0 8px;
+}
+
+/* 로그인 상단 브랜드. 프로토타입 랜딩의 감성을 얹는 자리다 */
+.brand {
+  text-align: center;
+}
+
+.brand h1 {
+  margin: 0;
+  color: var(--orange);
+  font-size: 46px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.brand span {
+  display: block;
+  margin-top: 12px;
+  color: #f0ad00;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.login {
+  padding-top: 64px;
+}
+
+.login-brand {
+  margin-bottom: 34px;
+}
+
+.wide-box {
+  display: grid;
+  place-items: center;
+  height: 128px;
+  margin-bottom: 34px;
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(255, 201, 40, 0.2), rgba(255, 83, 47, 0.13)),
+    var(--soft);
+  color: #8c4a34;
+  font-weight: 900;
+}
+
+.socials {
+  display: grid;
+  gap: 10px;
+  padding: 0 18px;
+}
+
+.socials button {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  align-items: center;
+  width: 100%;
+  height: 40px;
+  padding: 0;
+  border: 1.5px solid #2b2b2b;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  justify-self: center;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.kakao {
+  background: #ffd900 !important;
+  border-color: #ffd900 !important;
+}
+
+.kakao-dot::before {
+  content: "";
+  width: 10px;
+  height: 8px;
+  border-radius: 50%;
+  background: #000;
+}
+
+.caption {
+  margin: 22px 0 0;
+  color: #766a62;
+  font-size: 11px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.caption.left {
+  text-align: left;
+}
+
+/* ── 버튼·입력 ────────────────────────────────────────────────────────────── */
 
 button {
   font: inherit;
   padding: 10px 16px;
-  border: 1px solid #3a3d47;
+  border: 1px solid #e2c8bc;
   border-radius: 8px;
-  background: #22242c;
-  color: inherit;
+  background: #fff5ef;
+  color: #6e3b2d;
+  font-size: 13px;
+  font-weight: 800;
   cursor: pointer;
 }
 
 button:hover:not(:disabled) {
-  border-color: #5b6070;
+  border-color: #d9a892;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 button:disabled {
@@ -52,10 +257,54 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.cta,
 button.primary {
-  background: #3d5afe;
-  border-color: #3d5afe;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #ff6645, var(--orange));
   color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+/* 기존 화면들이 쓰던 primary 는 폭을 그대로 둔다 */
+button.primary {
+  width: auto;
+  min-height: 0;
+  padding: 10px 16px;
+  border-radius: 8px;
+}
+
+.ghost {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 8px;
+  border: 1px solid #e2c8bc;
+  border-radius: 6px;
+  background: #fff5ef;
+  color: #6e3b2d;
+}
+
+.black-cta,
+.black-button {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #3a3b3f, #1f2024);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.black-button {
+  margin-top: 8px;
+}
+
+.small {
+  min-height: 38px;
 }
 
 input,
@@ -63,12 +312,95 @@ textarea,
 select {
   font: inherit;
   padding: 9px 12px;
-  border: 1px solid #3a3d47;
-  border-radius: 8px;
-  background: #1b1d24;
-  color: inherit;
+  border: 1px solid #d8c5bc;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
   width: 100%;
 }
+
+input::placeholder,
+textarea::placeholder {
+  color: #9a9a9a;
+  opacity: 1;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: 2px solid rgba(255, 83, 47, 0.35);
+  outline-offset: 0;
+}
+
+label {
+  display: block;
+  margin-top: 16px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+label input,
+label select,
+label textarea {
+  margin-top: 8px;
+}
+
+.row label {
+  margin-top: 0;
+}
+
+.hint {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin: 24px 0 14px;
+  font-size: 13px;
+}
+
+.switch {
+  display: inline-block;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--orange);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.switch::after {
+  content: "";
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: 2px 2px 2px auto;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.switch.off {
+  background: #999;
+}
+
+.switch.off::after {
+  margin-left: 2px;
+}
+
+.link {
+  display: inline-block;
+  margin: 14px 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #777;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* ── 카드·목록 ────────────────────────────────────────────────────────────── */
 
 .row {
   display: flex;
@@ -78,43 +410,247 @@ select {
 }
 
 .card {
-  border: 1px solid #2c2f38;
-  border-radius: 10px;
-  padding: 12px;
-  background: #1a1c22;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 24px rgba(112, 67, 48, 0.08);
+}
+
+.card .row {
+  padding: 3px 0;
+}
+
+.stats {
+  display: grid;
+  gap: 8px;
+}
+
+.four {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.stats span {
+  color: #6b625c;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.stats b {
+  display: block;
+  color: #28211e;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.info p {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 6px;
+  color: #6b625c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.info b {
+  color: #28211e;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.small-text p {
+  margin-bottom: 0;
+  color: #555;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.form-card label {
+  margin-top: 12px;
+  color: #777;
+  font-size: 11px;
+}
+
+.settings p {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 8px;
+  color: #555;
+  font-size: 13px;
+}
+
+.settings b {
+  font-weight: 800;
+}
+
+.pill {
+  display: inline-block;
+  margin: 10px 6px 0 0;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: #f4dfd5;
+  color: #6e3b2d;
+  font-size: 12px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 20px;
+}
+
+.chips button {
+  width: auto;
+  min-height: 30px;
+  padding: 0 14px;
+  border: 1px solid #e2c8bc;
+  border-radius: 999px;
+  background: #fffaf7;
+  color: #57352b;
+  font-size: 12px;
+}
+
+.chips button.selected {
+  background: var(--orange-soft);
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.center-title h1,
+.center-title > p {
+  text-align: center;
+}
+
+.done {
+  padding-top: 52px;
+}
+
+.progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #f3ded4;
+}
+
+.progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--orange);
+  transition: width 450ms ease;
+}
+
+.history {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  font-size: 12px;
+}
+
+.error-text {
+  color: #d33;
+}
+
+.success-text {
+  color: #15803d;
 }
 
 .muted {
-  color: #8b8f9c;
+  color: var(--muted);
   font-size: 13px;
 }
 
 .error {
-  color: #ff8a8a;
+  color: #d33;
   font-size: 13px;
 }
 
 .notice {
-  border: 1px solid #4a4326;
-  background: #24210f;
-  color: #ecd98a;
+  border: 1px solid #f3c9b8;
+  background: var(--orange-soft);
+  color: #8c4a34;
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 13px;
   margin: 12px 0;
 }
 
+/* ── 하단 탭 ──────────────────────────────────────────────────────────────── */
+
+.tab {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  align-items: center;
+  height: 58px;
+  flex: none;
+  margin: auto -18px 0;
+  border-top: 1px solid #f1ddd3;
+  background: rgba(255, 245, 239, 0.98);
+  color: #8d7a70;
+  font-size: 11px;
+  text-align: center;
+}
+
+/* with-tab 은 flex column 이라 본문이 탭을 바닥까지 밀어낸다 */
+.with-tab > .tab {
+  margin-top: 28px;
+}
+
+.tab a {
+  display: grid;
+  gap: 3px;
+  place-items: center;
+  color: inherit;
+  font-size: 11px;
+}
+
+.tab a.active {
+  color: var(--orange);
+  font-weight: 800;
+}
+
+.tab svg {
+  width: 17px;
+  height: 17px;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+@media (min-width: 480px) {
+  .tab {
+    border-radius: 0 0 26px 26px;
+  }
+}
+
+/* ── 캠·세션 (프로토타입에 없는 실서비스 화면) ─────────────────────────────── */
+
 .cam-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 10px;
 }
 
 .cam {
   position: relative;
   aspect-ratio: 4 / 3;
-  background: #101116;
-  border: 1px solid #2c2f38;
+  background: var(--charcoal);
+  border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
 }
@@ -132,7 +668,16 @@ select {
   bottom: 0;
   padding: 6px 8px;
   font-size: 12px;
+  color: #fff;
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+}
+
+.cam .label .muted {
+  color: #d9cfc8;
+}
+
+.cam .label a {
+  color: #ffb8a3;
 }
 
 .cam.left,
@@ -146,36 +691,56 @@ select {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 50;
 }
 
 .prompt-overlay .box {
-  background: #1e2028;
-  border: 1px solid #3a3d47;
+  background: #fff;
+  border: 1px solid var(--line);
   border-radius: 14px;
   padding: 28px;
   text-align: center;
   max-width: 320px;
+  color: var(--ink);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
 }
 
 .todo {
-  border: 1px dashed #4a4d58;
+  border: 1px dashed #d8c5bc;
   border-radius: 10px;
   padding: 16px;
-  color: #9aa0ae;
-  font-size: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  background: #fffaf7;
 }
 
+/* collapse 는 border-radius 를 무시해서 separate 로 두고 spacing 만 없앤다 */
 table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 th,
 td {
   text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid #2c2f38;
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0e1d8;
+}
+
+th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  background: #fffaf7;
+}
+
+tr:last-child td {
+  border-bottom: 0;
 }

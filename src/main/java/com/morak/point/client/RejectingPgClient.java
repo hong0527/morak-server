@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
  * 다음 요청이 같은 자리를 다시 두드린다(PointChargeService#settle 주석).
  */
 @Component
-@Profile("!dev")
+@Profile("!dev & !demo")
 public class RejectingPgClient implements PgClient {
 
     private static final Logger log = LoggerFactory.getLogger(RejectingPgClient.class);

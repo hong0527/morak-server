@@ -28,7 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 데이터를 넣을 뿐이다.
  */
 @Component
-@Profile("dev")
+@Profile("dev | demo")
 @RequiredArgsConstructor
 public class ProductSeeder implements ApplicationRunner {
 
