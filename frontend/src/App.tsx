@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./auth/useAuth";
@@ -22,6 +23,20 @@ import AdminReportsScreen from "./screens/AdminReportsScreen";
 import AdminAppealsScreen from "./screens/AdminAppealsScreen";
 import AdminSessionsScreen from "./screens/AdminSessionsScreen";
 import AdminWithdrawalsScreen from "./screens/AdminWithdrawalsScreen";
+import SplashScreen from "./screens/SplashScreen";
+
+const SPLASH_KEY = "morak.splashSeen";
+
+function shouldShowSplash(): boolean {
+  if (authStoreHasToken()) return false;
+  try { return window.sessionStorage.getItem(SPLASH_KEY) !== "1"; }
+  catch { return true; }
+}
+
+function authStoreHasToken(): boolean {
+  try { return window.localStorage.getItem("molock.accessToken") !== null; }
+  catch { return false; }
+}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
@@ -31,6 +46,14 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const [showSplash, setShowSplash] = useState(shouldShowSplash);
+  const finishSplash = useCallback(() => {
+    try { window.sessionStorage.setItem(SPLASH_KEY, "1"); } catch { /* 탭 동안만 상태로 유지 */ }
+    setShowSplash(false);
+  }, []);
+
+  if (showSplash) return <SplashScreen onDone={finishSplash} />;
+
   return (
     <Routes>
       <Route path="/login" element={<LoginScreen />} />

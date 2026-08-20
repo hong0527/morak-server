@@ -27,6 +27,8 @@ export default function ResultScreen() {
   const [result, setResult] = useState<SessionResult | null>(null);
   const [settling, setSettling] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,7 +83,35 @@ export default function ResultScreen() {
     );
   }
 
-  const my = result.my;
+  const report = result;
+  const my = report.my;
+
+  async function shareReport() {
+    setSharing(true);
+    setShareMessage(null);
+    try {
+      const blob = await createReportCard(report);
+      const file = new File([blob], `morak-session-${report.sessionId}.png`, { type: "image/png" });
+      const shareData = {
+        title: "모락 완주 리포트",
+        text: `${report.targetMinutes / 60}시간 목표 ${my.completed ? "완주" : "도전"} 기록`,
+        files: [file],
+      };
+
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share(shareData);
+        setShareMessage("공유 화면을 열었습니다.");
+      } else {
+        downloadBlob(blob, file.name);
+        setShareMessage("공유 카드를 저장했습니다. 인스타그램 스토리 등에 올려보세요.");
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setShareMessage("공유 카드를 만들지 못했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setSharing(false);
+    }
+  }
 
   return (
     <div className="screen">
@@ -125,6 +155,17 @@ export default function ResultScreen() {
           </div>
         )}
       </div>
+
+      <section className="result-share">
+        <div>
+          <h2>오늘의 기록 공유</h2>
+          <p>완주 리포트를 이미지로 만들어 인스타그램 스토리 등에 공유할 수 있어요.</p>
+        </div>
+        <button className="cta" disabled={sharing} onClick={shareReport}>
+          {sharing ? "카드 만드는 중..." : "완주 리포트 공유"}
+        </button>
+        {shareMessage && <p className="share-message" role="status">{shareMessage}</p>}
+      </section>
 
       {/* 영상을 저장하지 않으므로 본인이 다툴 수 있는 유일한 근거가 이 시각 기록이다.
           반드시 보여준다. */}
@@ -178,4 +219,88 @@ export default function ResultScreen() {
       </div>
     </div>
   );
+}
+
+async function createReportCard(result: SessionResult): Promise<Blob> {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1920;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas is unavailable");
+
+  const my = result.my;
+  const gradient = ctx.createLinearGradient(0, 0, 1080, 1920);
+  gradient.addColorStop(0, "#fffdfb");
+  gradient.addColorStop(1, "#fff0e9");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 1080, 1920);
+
+  ctx.fillStyle = "#ff532f";
+  ctx.fillRect(0, 0, 1080, 28);
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#ff532f";
+  ctx.font = '900 92px Arial, "Noto Sans KR", sans-serif';
+  ctx.fillText("모락", 540, 190);
+  ctx.fillStyle = "#8c4a34";
+  ctx.font = '700 32px Arial, "Noto Sans KR", sans-serif';
+  ctx.fillText("함께 시작하는 목표 달성", 540, 250);
+
+  roundedRect(ctx, 90, 360, 900, 920, 40, "#ffffff");
+  ctx.fillStyle = my.completed ? "#ff532f" : "#766a62";
+  ctx.font = '900 52px Arial, "Noto Sans KR", sans-serif';
+  ctx.fillText(my.completed ? "오늘도 완주했어요" : "오늘의 도전을 기록했어요", 540, 485);
+  ctx.fillStyle = "#171717";
+  ctx.font = '900 170px Arial, "Noto Sans KR", sans-serif';
+  ctx.fillText(`${result.targetMinutes / 60}`, 540, 720);
+  ctx.font = '800 42px Arial, "Noto Sans KR", sans-serif';
+  ctx.fillText("시간 몰입", 540, 790);
+
+  const stats: Array<[string, string]> = [
+    ["연속 완주", `${my.streak.after}일`],
+    ["받은 포인트", `${my.pointAwarded >= 0 ? "+" : ""}${my.pointAwarded}P`],
+    ["함께한 인원", `${result.participants.length}명`],
+  ];
+  stats.forEach(([label, value], index) => {
+    const x = 130 + index * 285;
+    roundedRect(ctx, x, 890, 250, 230, 24, "#fff5ef");
+    ctx.fillStyle = "#766a62";
+    ctx.font = '700 28px Arial, "Noto Sans KR", sans-serif';
+    ctx.fillText(label, x + 125, 960);
+    ctx.fillStyle = "#171717";
+    ctx.font = '900 46px Arial, "Noto Sans KR", sans-serif';
+    ctx.fillText(value, x + 125, 1045);
+  });
+
+  if (my.goalAchieved) {
+    roundedRect(ctx, 190, 1170, 700, 74, 37, "#ffc928");
+    ctx.fillStyle = "#6e3b2d";
+    ctx.font = '900 28px Arial, "Noto Sans KR", sans-serif';
+    ctx.fillText("개인 목표 달성", 540, 1218);
+  }
+
+  ctx.fillStyle = "#171717";
+  ctx.font = '900 42px Arial, "Noto Sans KR", sans-serif';
+  ctx.fillText("작은 몰입이 모여 오늘을 만들었어요", 540, 1450);
+  ctx.fillStyle = "#766a62";
+  ctx.font = '600 28px Arial, "Noto Sans KR", sans-serif';
+  ctx.fillText(new Intl.DateTimeFormat("ko-KR", { dateStyle: "long" }).format(new Date(result.endedAt)), 540, 1510);
+  ctx.fillText("morak.duckdns.org", 540, 1780);
+
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("PNG encoding failed")), "image/png"));
+}
+
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number, fill: string) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, radius);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
