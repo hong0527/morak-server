@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  * "항상 401"이 정상 동작이다.
  */
 @Component
-@Profile("!dev")
+@Profile("!dev & !demo")
 public class RejectingSocialClient implements SocialClient {
 
     private static final Logger log = LoggerFactory.getLogger(RejectingSocialClient.class);
