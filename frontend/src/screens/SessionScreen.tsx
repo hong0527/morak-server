@@ -86,7 +86,8 @@ export default function SessionScreen() {
   useEffect(() => {
     if (!(pollError instanceof ApiError)) return;
     if (pollError.code === "CONSENT_REQUIRED") navigate("/media-consent", { replace: true });
-    else if (pollError.code === "NOT_SESSION_PARTICIPANT") navigate("/", { replace: true });
+    else if (pollError.code === "NOT_SESSION_PARTICIPANT" || pollError.code === "SESSION_NOT_FOUND")
+      navigate("/", { replace: true });
     else if (pollError.code === "SESSION_ENDED") goToResult();
     else setEntryError(pollError.message);
   }, [pollError, navigate, goToResult]);
@@ -217,7 +218,13 @@ export default function SessionScreen() {
     return (
       <div className="screen wide">
         <p className="muted loading">세션을 불러오는 중이에요</p>
-        {entryError && <p className="error">{entryError}</p>}
+        {entryError && (
+          <>
+            {/* 여기서 막히면 이 화면에는 다른 어떤 조작 수단도 없다. 나갈 문을 꼭 둔다 */}
+            <p className="error">{entryError}</p>
+            <button onClick={() => navigate("/", { replace: true })}>홈으로</button>
+          </>
+        )}
       </div>
     );
   }
