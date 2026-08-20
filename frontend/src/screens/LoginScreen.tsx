@@ -21,7 +21,8 @@ import { authStore } from "../auth/session";
  */
 export default function LoginScreen() {
   const navigate = useNavigate();
-  const [code, setCode] = useState("tester-1");
+  // 미리 채워 두지 않는다. 프리필이면 심사위원 여럿이 같은 계정에 겹쳐 들어간다.
+  const [code, setCode] = useState("");
   const [marketing, setMarketing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
